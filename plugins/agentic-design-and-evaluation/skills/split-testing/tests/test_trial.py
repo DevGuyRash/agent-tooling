@@ -3026,16 +3026,18 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
         self.assertEqual(current(), (["alpha__beta"], []))
         # what it judged changing withdraws it from the summary and the report until it is redone: an output it compared,
-        # the evidence the scenario's judge_context gives (its code unchanged), or more runs to compare
+        # the evidence the scenario's judge_context gives (its code unchanged; reports run no extractor, so the evidence is
+        # as the runs' last scoring extracted it), or more runs to compare
         alpha_events = self.out / "runs" / "make-file__alpha__r1" / "events.jsonl"
         for change in (lambda: alpha_events.write_text("ALPHA_OUTPUT, edited afterwards\n"),
-                       lambda: write(s / "notes.txt", "other notes\n"),
+                       lambda: (write(s / "notes.txt", "other notes\n"), self.run_cli("recheck", str(self.out), "--rejudge")),
                        lambda: self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "4")):
             change()
             self.assertNotIn("pairwise", json.loads(self.run_cli("summarize", str(self.out), "--json").stdout))
             self.assertIn("withheld", self.run_cli("summarize", str(self.out)).stdout)
             self.assertEqual(current(), ([], ["alpha__beta"]))
-            self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta").returncode, 0)
+            r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertEqual(current(), (["alpha__beta"], []))
         # so does a changed judge question
         write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["printed"],
@@ -3457,6 +3459,33 @@ class TrialRunnerTest(unittest.TestCase):
         r = self.run_cli("run", str(derived), "--out", str(self.tmp / "out2"), "--sandbox", self.default_sandbox)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertTrue((self.tmp / "out2" / "runs" / f"consume__{long}~r1__r1" / "result.json").is_file())
+
+    def test_the_evidence_a_judge_is_given_is_extracted_once_and_reports_extract_none(self):
+        # judge_context returns another value on each call, so evidence that is admitted for an unreadable output and
+        # then extracted again for the prompt would differ from what was admitted
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "write report.bin", "artifact": "report.bin",
+                                               "judge": {"question": "is it sound?", "pass_when": "it is"}}))
+        write(s / "check.py", "import os\ndef check(run):\n    return {}\n"
+                              "def judge_context(run):\n"
+                              "    log = os.path.join(os.path.dirname(__file__), 'calls.txt')\n"
+                              "    with open(log, 'a') as f:\n        f.write('call\\n')\n"
+                              "    return f'EVIDENCE-{len(open(log).readlines())}'\n")
+        calls = lambda: len((s / "calls.txt").read_text().splitlines()) if (s / "calls.txt").exists() else 0
+        judge = launcher_judge(self.judges, "m", "case \"$prompt\" in *'<response_1>'*) echo '{\"winner\": \"tie\", \"reason\": \"even\"}' ;;"
+                                                 " *) echo '{\"verdict\": \"pass\", \"reason\": \"ok\"}' ;; esac\n")
+        binary = {"executor": "command", "command": "printf 'PK\\003\\004\\000' > report.bin"}
+        plan = self._plan({"a": binary, "b": binary}, judge)
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        self.assertEqual(calls(), 2)  # once for each run
+        prompts = [(self.out / "judges" / ".cells" / v["judge_cell"] / "judge" / "prompt.md").read_text() for v in self.results().values()]
+        self.assertEqual(sorted(p.count("EVIDENCE-") for p in prompts), [1, 1])
+        self.assertEqual({v["passed"] for v in self.results().values()}, {True})
+        self.assertEqual(self.run_cli("pairwise", str(self.out), "--arms", "a,b").returncode, 0)
+        self.assertEqual(calls(), 4)  # once for each side of the one pair
+        for args in (("summarize", str(self.out)), ("summarize", str(self.out), "--json"), ("report", str(self.out))):
+            self.assertEqual(self.run_cli(*args).returncode, 0)
+        self.assertEqual(calls(), 4)  # reporting runs no extractor
 
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.

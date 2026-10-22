@@ -2610,18 +2610,23 @@ def _checks_for(spec, run):
     return mod, checks
 
 
-def _judge_evidence(spec: dict, run: "Run") -> tuple[str, str | None]:
-    """A scenario's check.py-supplied judge_context for one run - the same evidence a per-run judge sees -
-    and, when it could not be produced, why: "" and no error when the scenario has no check.py or no
-    judge_context at all, "" and the exception's text when one is defined but raises (an evidence failure
-    should not block pairwise judging the way it makes a per-run judge_run call an error, since pairwise
-    is comparing existing finished runs, not scoring a fresh one - but the caller uses the error to keep
-    the comparison symmetric rather than silently giving only one side evidence)."""
+def _evidence(checks_mod, run: "Run") -> tuple[str, str | None] | None:
+    """The evidence a scenario's judge_context gives about one run, extracted once: what admits an output a judge cannot
+    read (see _unassessed) is the very value the judge is given (see _run_judge_prompt). None when the scenario defines
+    no judge_context; ("", why) when it raises; (text, None) otherwise, "" for anything but a string."""
+    if not (checks_mod and hasattr(checks_mod, "judge_context")):
+        return None
     try:
-        mod = _load_checks(spec)
-        return (mod.judge_context(run) if mod and hasattr(mod, "judge_context") else ""), None
+        text = checks_mod.judge_context(run)
     except Exception as exc:
-        return "", f"{type(exc).__name__}: {exc}"
+        return "", f"judge_context: {type(exc).__name__}: {exc}"
+    return (text if isinstance(text, str) else ""), None
+
+
+def _evidence_digest(evidence) -> str:
+    """A digest of a run's extracted evidence (see _evidence), which a result records, so a pairwise aggregate's
+    freshness is checked without running any extractor (see _load_pairwise)."""
+    return hashlib.sha256(json.dumps(evidence).encode()).hexdigest()
 
 
 JUDGE_SCHEMA = {"type": "object", "additionalProperties": False,
@@ -2820,7 +2825,7 @@ def _judge_prompt(spec: dict, final_message: str, evidence: str, j: dict) -> str
     )
 
 
-def judge_run(judge, spec, run: Run, checks_mod, job_id: str, out: Path, name="judge") -> tuple[dict | None, str | None]:
+def judge_run(judge, spec, run: Run, evidence, job_id: str, out: Path, name="judge") -> tuple[dict | None, str | None]:
     """Blind verdict on one run, kept under an opaque out/judges/.cells/<cell> directory (see
     _judge_cell_dir) that reveals neither the arm nor the scenario the way job_id itself would: the judge
     sees the task and evidence, never the arm. The actual work happens one level below the cell itself
@@ -2845,7 +2850,7 @@ def judge_run(judge, spec, run: Run, checks_mod, job_id: str, out: Path, name="j
         (jd / "work").mkdir()
         (jd / "harness").mkdir()
         env = isolated_env(jd, out, spec, judge)
-    prompt, reason = _run_judge_prompt(spec, run, checks_mod)
+    prompt, reason = _run_judge_prompt(spec, run, evidence)
     if prompt is None:
         ((_fresh_dir(jd) if host else jd) / "stderr.log").write_text(reason + "\n")
         return {"verdict": "error", "reason": reason}, cell.name
@@ -2864,14 +2869,13 @@ def judge_run(judge, spec, run: Run, checks_mod, job_id: str, out: Path, name="j
     return dict(verdict, **answered), cell.name
 
 
-def _run_judge_prompt(spec: dict, run: "Run", checks_mod) -> tuple[str | None, str | None]:
-    """The prompt a judge is asked about one run - the task, the run's output, the evidence its scenario's
-    judge_context gives, and the question - blinded (see _blind), or None and why judge_context failed."""
-    try:
-        evidence = checks_mod.judge_context(run) if checks_mod and hasattr(checks_mod, "judge_context") else ""
-    except Exception as exc:
-        return None, f"judge_context: {type(exc).__name__}: {exc}"
-    return _judge_prompt(spec, _blind(run.final_message, run), _blind(evidence, run) if evidence else "", spec["judge"]), None
+def _run_judge_prompt(spec: dict, run: "Run", evidence) -> tuple[str | None, str | None]:
+    """The prompt a judge is asked about one run - the task, the run's output, the evidence extracted for it (see
+    _evidence), and the question - blinded (see _blind), or None and why judge_context failed."""
+    if evidence and evidence[1]:
+        return None, evidence[1]
+    text = evidence[0] if evidence else ""
+    return _judge_prompt(spec, _blind(run.final_message, run), _blind(text, run) if text else "", spec["judge"]), None
 
 
 _LEDGER_LOCK = threading.Lock()
@@ -3046,29 +3050,40 @@ def _judge_pair(plan_judge: dict, spec: dict, out: Path, cell_dir: Path, arm_a: 
     return result, []
 
 
-def _pair_payload(spec: dict, out: Path, ra: dict, rb: dict) -> tuple[tuple[str, str] | None, dict, str]:
+def _pair_payload(spec: dict, out: Path, ra: dict, rb: dict, extract: bool = True) -> tuple[tuple[str, str] | None, dict, str]:
     """What a pair's judge is shown, read from the two runs as they now stand: the blinded prompts of both orders (each
-    run's output and the evidence its scenario's judge_context gives, with the task and question), or, when it cannot
-    be shown whole, the problems that make the pair invalid ({"evidence_errors": ..., "unassessed": ...}); and a digest
-    of that payload, which an aggregate's freshness rests on (see _pairwise_inputs)."""
+    run's output and the evidence its scenario's judge_context gives, extracted once a side, with the task and
+    question), or, when it cannot be shown whole, the problems that make the pair invalid ({"evidence_errors": ...,
+    "unassessed": ...}); and a digest of that payload, which an aggregate's freshness rests on (see _pairwise_inputs):
+    the task and question, both blinded outputs, and both evidence digests. Without `extract` (reporting, which runs no
+    extractor), only the digest, from the evidence digests each run's scoring recorded (see _evidence_digest)."""
     unconfined, stored = _unconfined(spec), _stored_plan(out)
-    run_a = _stored_run(out / "runs" / ra["job"], ra, spec, stored, unconfined)
-    run_b = _stored_run(out / "runs" / rb["job"], rb, spec, stored, unconfined)
-    (ev_a, err_a), (ev_b, err_b) = _judge_evidence(spec, run_a), _judge_evidence(spec, run_b)
-    try:
-        mod = _load_checks(spec)
-    except Exception:  # its failure is already each side's evidence error
-        mod = None
-    unread = {k: why for k, run in (("a", run_a), ("b", run_b)) if (why := _unassessed(run, mod))}
-    problems = {**({"evidence_errors": {k: v for k, v in {"a": err_a, "b": err_b}.items() if v}} if err_a or err_b else {}),
-                **({"unassessed": unread} if unread else {})}
+    runs = {k: _stored_run(out / "runs" / r["job"], r, spec, stored, unconfined) for k, r in (("a", ra), ("b", rb))}
+    msgs = {k: _blind(run.final_message, run) for k, run in runs.items()}
+    if extract:
+        try:
+            mod = _load_checks(spec)
+        except Exception as exc:
+            evidence = {k: ("", f"loading check.py: {type(exc).__name__}: {exc}") for k in runs}
+        else:
+            evidence = {k: _evidence(mod, run) for k, run in runs.items()}
+        digests = {k: _evidence_digest(ev) for k, ev in evidence.items()}
+    else:
+        digests = {"a": ra.get("evidence_sha256"), "b": rb.get("evidence_sha256")}
+    payload = hashlib.sha256(json.dumps([spec.get("prompt"), spec.get("followups", []), spec["judge"], spec.get("judge_role"),
+                                         msgs["a"], msgs["b"], digests["a"], digests["b"]], sort_keys=True).encode()).hexdigest()
+    if not extract:
+        return None, {}, payload
+    errors = {k: ev[1] for k, ev in evidence.items() if ev and ev[1]}
+    unread = {k: why for k, run in runs.items() if (why := _unassessed(run, evidence[k]))}
+    problems = {**({"evidence_errors": errors} if errors else {}), **({"unassessed": unread} if unread else {})}
     if problems:
-        return None, problems, hashlib.sha256(json.dumps(problems, sort_keys=True).encode()).hexdigest()
+        return None, problems, payload
+    text = {k: _blind(ev[0], runs[k]) if ev else "" for k, ev in evidence.items()}
     j = spec["judge"]
-    msg_a, msg_b = _blind(run_a.final_message, run_a), _blind(run_b.final_message, run_b)
-    blind_a, blind_b = _blind(ev_a, run_a), _blind(ev_b, run_b)
-    prompts = (_pairwise_prompt(spec, j, msg_a, msg_b, blind_a, blind_b), _pairwise_prompt(spec, j, msg_b, msg_a, blind_b, blind_a))
-    return prompts, {}, hashlib.sha256("\0".join(prompts).encode()).hexdigest()
+    prompts = (_pairwise_prompt(spec, j, msgs["a"], msgs["b"], text["a"], text["b"]),
+               _pairwise_prompt(spec, j, msgs["b"], msgs["a"], text["b"], text["a"]))
+    return prompts, {}, payload
 
 
 def _pairwise_inputs(eligible: str, left_out: int, judge: dict, pairs: list[tuple[str, int, str, str, str]]) -> str:
@@ -3208,7 +3223,7 @@ def _load_pairwise(out: Path) -> tuple[dict, list[str]]:
         try:
             pairs, left_out = _pair_jobs(out, plan, *data["arms"], passed_only=data.get("eligible") == "passed")
             now = _pairwise_inputs(data.get("eligible", "valid"), left_out, data.get("judge") or {},
-                                   [(spec["name"], ra["repeat"], ra["job"], rb["job"], _pair_payload(spec, out, ra, rb)[2])
+                                   [(spec["name"], ra["repeat"], ra["job"], rb["job"], _pair_payload(spec, out, ra, rb, extract=False)[2])
                                     for spec, ra, rb in pairs])
         except TrialError:
             now = None
@@ -3838,17 +3853,19 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     judge = _judge_for(plan, arm_name)
     host_judge = (judge or {}).get("executor") == "host"
     judge_started = dt.datetime.now(dt.timezone.utc)
-    unassessed = _unassessed(run, checks_mod)
+    # The evidence a judge (and a pairwise judge) is given, extracted once, for a run of a judged scenario whose checks ran.
+    evidence = _evidence(checks_mod, run) if spec.get("judge") and status == "ok" and "check_error" not in checks else None
+    unassessed = _unassessed(run, evidence)
     # No judge is asked of a run its verdict cannot decide (its executor did not finish, its checks did not run, or its
     # artifact is missing, which fails it), or whose output it cannot read.
     if "check_error" in checks or status != "ok" or run.artifact_missing or unassessed:
         verdict, judge_cell = None, None
         if marker and marker["awaiting"] == "judge":  # asked before, no longer: its prompt and any reply go
             _remove(out / "judges" / ".cells" / marker["dispatch"]["cell"])
-    elif rescore and _answers_now(previous, judge, spec, run, checks_mod):  # a verdict on the question of now is kept
+    elif rescore and _answers_now(previous, judge, spec, run, evidence):  # a verdict on the question of now is kept
         verdict, judge_cell = previous["judge"], previous.get("judge_cell")
     else:
-        verdict, judge_cell = judge_run(judge, spec, run, checks_mod, job_id, out, judge_name)
+        verdict, judge_cell = judge_run(judge, spec, run, evidence, job_id, out, judge_name)
     judge_seconds = round((dt.datetime.now(dt.timezone.utc) - judge_started).total_seconds(), 1)
     result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep, "status": status,
               "passed": None, "checks": checks, "judge": None, "usage": run.usage,
@@ -3861,6 +3878,8 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         result["checks_sandbox"] = spec.get("sandbox", "confined")
     if conditions is not None:
         result["conditions"] = conditions
+    if spec.get("judge") and status == "ok" and "check_error" not in checks:
+        result["evidence_sha256"] = _evidence_digest(evidence)
     if exit_code is not None:
         result["exit_code"] = exit_code
     if attempts:
@@ -3953,20 +3972,16 @@ def _decide(spec: dict, status: str, checks: dict, verdict: dict | None, judge: 
     return None, {}
 
 
-def _unassessed(run: "Run", checks_mod) -> str | None:
-    """Why a judge cannot assess this run, or None: its judged output is not text a judge can read, and the scenario's
-    check.py gives the judge no evidence in its place (it defines no judge_context, or one that returns nothing). A
-    judge_context that fails is the judge's error to report (see judge_run)."""
+def _unassessed(run: "Run", evidence) -> str | None:
+    """Why a judge cannot assess this run, or None: its judged output is not text a judge can read, and the evidence
+    extracted for it (see _evidence) gives none in its place (the scenario defines no judge_context, or one that
+    returned nothing). A judge_context that failed is the judge's error to report (see judge_run)."""
     if not run.unreadable:
         return None
-    if not (checks_mod and hasattr(checks_mod, "judge_context")):
+    if evidence is None:
         return run.unreadable
-    try:
-        evidence = checks_mod.judge_context(run)
-    except Exception:
-        return None
-    return None if isinstance(evidence, str) and evidence.strip() else \
-        f"{run.unreadable}, and the scenario's judge_context gives no evidence in its place"
+    text, error = evidence
+    return None if error or text.strip() else f"{run.unreadable}, and the scenario's judge_context gives no evidence in its place"
 
 
 def _owned(directory: Path, make: bool = True) -> Path:
@@ -4035,13 +4050,13 @@ def _stored_record(result: dict, job_dir: Path) -> dict | None:
     return _record_of(result, job_dir)
 
 
-def _answers_now(previous: dict, judge: dict | None, spec: dict, run: "Run", checks_mod) -> bool:
+def _answers_now(previous: dict, judge: dict | None, spec: dict, run: "Run", evidence) -> bool:
     """Whether a stored result's verdict (pass, fail, or unclear) is its arm's judge's answer to the judge prompt the
     run would be given now, so scoring it again keeps that verdict instead of asking again."""
     verdict = previous.get("judge") or {}
     if not judge or not spec.get("judge") or verdict.get("verdict") not in ("pass", "fail", "unclear"):
         return False
-    prompt = _run_judge_prompt(spec, run, checks_mod)[0]
+    prompt = _run_judge_prompt(spec, run, evidence)[0]
     return prompt is not None and _judged_by(previous, judge, hashlib.sha256(prompt.encode()).hexdigest())
 
 
@@ -4202,10 +4217,17 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             if exposure is not None:  # read from the stored record by the current rule, as the checks are
                 result["exposure"], result["exposure_evidence"] = exposure
             mod, checks = _checks_for(eff, run)
-            info = {"artifact_missing": run.artifact_missing, "unassessed": _unassessed(run, mod), "prompt_sha256": None}
-            if eff.get("judge") and result.get("judge") and "check_error" not in checks:
-                prompt = _run_judge_prompt(eff, run, mod)[0]  # the question and evidence of now
-                info["prompt_sha256"] = hashlib.sha256(prompt.encode()).hexdigest() if prompt is not None else None
+            judged_scenario = eff.get("judge") and result["status"] == "ok" and "check_error" not in checks
+            evidence = _evidence(mod, run) if judged_scenario else None  # extracted once, and given as extracted
+            info = {"artifact_missing": run.artifact_missing, "unassessed": _unassessed(run, evidence),
+                    "prompt_sha256": None, "evidence": evidence}
+            if judged_scenario:
+                result["evidence_sha256"] = _evidence_digest(evidence)
+                if result.get("judge"):
+                    prompt = _run_judge_prompt(eff, run, evidence)[0]  # the question and evidence of now
+                    info["prompt_sha256"] = hashlib.sha256(prompt.encode()).hexdigest() if prompt is not None else None
+            else:
+                result.pop("evidence_sha256", None)
             return path, result, eff, checks, info
 
         with cf.ThreadPoolExecutor(jobs) as pool:
@@ -4254,7 +4276,7 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
                 return None
             _own(path.parent)
             run = _stored_run(path.parent, result, spec, plan, _unconfined(spec))
-            return judge_run(arm_judge, spec, run, _load_checks(spec), result["job"], out, _next_name(result))
+            return judge_run(arm_judge, spec, run, info["evidence"], result["job"], out, _next_name(result))
 
         hosted = lambda item: (_judge_for(plan, item[1].get("arm")) or {}).get("executor") == "host"
         try:
