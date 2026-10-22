@@ -3165,11 +3165,24 @@ MIN_FREE_BYTES = int(os.environ.get("TRIAL_MIN_FREE_GB", "5")) * 1024 ** 3
 PRUNE = ("harness/home/.cache",)
 
 
-def _prune(job_dir: Path, rels=PRUNE):
+def _kept(job_dir: Path, keep=()) -> list[Path]:
+    """What pruning never removes from a run (or judge cell) directory: `keep`, and the transcripts its record (a
+    launcher's record.json, or a host's host.json) names, wherever they sit."""
+    kept = [Path(os.path.normpath(k)) for k in keep]
+    for name in ("record.json", "host.json"):
+        record = _try_json(_read(job_dir / name, follow=False))
+        if isinstance(record, dict) and isinstance(record.get("transcripts"), list):
+            kept += [Path(os.path.normpath(job_dir / t)) for t in record["transcripts"] if isinstance(t, str)]
+    return kept
+
+
+def _prune(job_dir: Path, rels=PRUNE, keep=()):
     """Remove per-run caches that hold no evidence, and give the owner back write access to the directories of the
     private home, where resources and stub skills were copied read-only for the agent's sake (see _copy_readonly), so
-    a finished run directory deletes with a plain `rm -rf`. A path through a link an agent planted is skipped, and a
-    link in a cache's place is removed, never its target. A judge's opaque cell directory is pruned the same way."""
+    a finished run directory deletes with a plain `rm -rf`. A cache holding anything _kept names stays whole. A path
+    through a link an agent planted is skipped, and a link in a cache's place is removed, never its target. A judge's
+    opaque cell directory is pruned the same way."""
+    kept = _kept(job_dir, keep)
     home = job_dir
     for part in ("harness", "home"):
         home = home / part
@@ -3187,7 +3200,8 @@ def _prune(job_dir: Path, rels=PRUNE):
             name = Path(rel).name
             with contextlib.suppress(OSError):  # pruning only saves space
                 for match in (target.glob(name) if "*" in name else [target / name]):
-                    _remove(match)
+                    if not any(k == match or k.is_relative_to(match) for k in kept):
+                        _remove(match)
 
 
 def _is_cargo_target(path: Path) -> bool:
@@ -3652,6 +3666,9 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
     return _finish_job(plan, spec, job_dir, result, verdict, judge_cell, unassessed)
 
 
+# What scores a run, kept on its result's "history" when a recheck replaces it (see recheck).
+SCORING_RECORD = ("passed", "checks", "judge", "judge_identity", "judge_cell", "not_exposed", "exposure_unknown",
+                  "judge_missing", "judge_stale", "checks_missing", "judge_unassessed", "artifact_missing")
 # What _decide records on a result about why it is not a valid observation (see _invalid_reason).
 DECISION_FLAGS = ("not_exposed", "exposure_unknown", "judge_missing", "judge_stale", "checks_missing", "judge_unassessed")
 
@@ -3721,14 +3738,18 @@ def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, j
         result["judge_cell"] = judge_cell
     # Found now, before result.json is written, so a missing artifact a later `recheck` cannot explain from
     # the run's own files alone is still explained by what this result recorded; removed only after - see
-    # _prune_build_output_enabled and _build_output_under.
-    build_output = _build_output_under(job_dir) if _prune_build_output_enabled(plan) else []
+    # _prune_build_output_enabled and _build_output_under. What the run is judged on (its scenario's artifact) and the
+    # native records it names are evidence, never build output, wherever they sit.
+    keep = [job_dir / "work" / spec["artifact"]] if spec.get("artifact") else []
+    kept = _kept(job_dir, keep)
+    build_output = [c for c in (_build_output_under(job_dir) if _prune_build_output_enabled(plan) else [])
+                    if not any(k == c or k.is_relative_to(c) or c.is_relative_to(k) for k in kept)]
     if build_output:
         result["pruned_build_output"] = sorted(str(p.relative_to(job_dir)) for p in build_output)
     _write_json(job_dir / "result.json", result)
     _remove(job_dir.parent / f"{job_dir.name}.awaiting")  # before .pending, so no marker outlives the result it awaited
     (job_dir.parent / f"{job_dir.name}.pending").unlink()
-    _prune(job_dir)
+    _prune(job_dir, keep=keep)
     _prune_build_output(job_dir, build_output)
     return result
 
@@ -3944,11 +3965,10 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             path, result, spec, checks, info = item
             arm_judge = _judge_for(plan, result.get("arm"))
             verdict, cell = verdict_cell if verdict_cell else (None, None)
+            # The scoring this recheck replaces, kept on the result, with the cell its verdict was given in, when the
+            # new one differs: an amendment stays visible beside what it amends.
+            earlier = {k: result.get(k) for k in SCORING_RECORD}
             if verdict is not None:
-                old_cell = result.get("judge_cell")
-                if old_cell and old_cell != cell:
-                    with contextlib.suppress(OSError):
-                        _remove(out / "judges" / ".cells" / old_cell)
                 result["judge"] = dict(verdict, judge_model=arm_judge.get("model", arm_judge["executor"]))
                 result["judge_identity"] = _identity(arm_judge, JUDGE_FIELDS)
                 result["judge_cell"] = cell
@@ -3970,6 +3990,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
             # The confinement checks and the judge actually used for THIS recheck, so a directory rechecked
             # with a different --sandbox does not keep showing the sandbox its original run recorded.
             result["sandbox"] = spec.get("sandbox", "confined")
+            if any(result.get(k) != earlier[k] for k in SCORING_RECORD):
+                result.setdefault("history", []).append(dict(earlier, rechecked_at=_iso_utc(dt.datetime.now(dt.timezone.utc).timestamp())))
             _write_json(path, result)
             if verdict is not None:
                 _prune(out / "judges" / ".cells" / cell)

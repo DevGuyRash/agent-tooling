@@ -2926,6 +2926,23 @@ class TrialRunnerTest(unittest.TestCase):
                                                "judge": {"question": "which output is shorter?", "pass_when": "it is"}}))
         self.assertEqual(trial.report(self.out)["pairwise_withheld"], ["alpha__beta"])
 
+    def test_pruning_keeps_the_transcripts_a_record_names_and_the_deliverable_a_scenario_judges(self):
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "build the report", "required": ["report"],
+                                               "artifact": "target/release/report.txt"}))
+        write(s / "check.py", "def check(run):\n    return {'report': run.final_message.strip() == 'the report'}\n")
+        record = {"finished": True, "transcripts": ["harness/home/.cache/agent/session.jsonl"], "limits": []}
+        command = ("mkdir -p target/release \"$HOME/.cache/agent\" && printf 'Signature: 8a477f597d28d172789f06886806bc55\\n' > target/CACHEDIR.TAG"
+                   " && echo 'the report' > target/release/report.txt && echo '{}' > \"$HOME/.cache/agent/session.jsonl\""
+                   f" && printf '%s' '{json.dumps(record)}' > \"$TRIAL_RECORD\"")
+        self.assertEqual(self.run_cli("run", self._plan({"a": {"executor": "command", "command": command}}), "--out", str(self.out)).returncode, 0)
+        job = self.out / "runs" / "make-file__a__r1"
+        self.assertTrue((job / "harness" / "home" / ".cache" / "agent" / "session.jsonl").is_file())  # the native record it names
+        self.assertTrue((job / "work" / "target" / "release" / "report.txt").is_file())  # the deliverable it was judged on
+        self.assertEqual(self.run_cli("recheck", str(self.out)).returncode, 0)
+        result = self.results()["make-file__a__r1"]
+        self.assertEqual((result["passed"], result.get("artifact_missing", False)), (True, False))
+
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.
         plan = {"arms": {"low": {"executor": "launcher", "model": "m", "effort": "low", "script_sha256": "s"},
@@ -3129,7 +3146,12 @@ class ArmJudgeTest(unittest.TestCase):
             self.assertNotEqual(v["judge_cell"], before[job]["judge_cell"], job)  # asked again, in a cell of its own
             self.assertTrue((self.cell(v) / "harness" / "home" / "who.txt").read_text().startswith(f"name={model} "), job)
             self.assertIs(v["passed"], True, job)  # beta's judge now passes what it failed
-        self.assertEqual(len(self.footprints()), 4)  # the cells of the earlier verdicts are gone
+            # the earlier scoring stays on record, its verdict and the cell it was given in included
+            earlier = v["history"][-1]
+            self.assertEqual((earlier["judge"], earlier["judge_cell"], earlier["passed"]),
+                             (before[job]["judge"], before[job]["judge_cell"], before[job]["passed"]), job)
+            self.assertTrue(self.cell(earlier).is_dir(), job)
+        self.assertEqual(len(self.footprints()), 8)  # every verdict's cell, the earlier ones kept
         plan_after = json.loads((self.out / "plan.json").read_text())
         self.assertEqual({n: a["judge"]["model"] for n, a in plan_after["arms"].items()}, {"alpha": "judge-a", "beta": "judge-b"})
 
@@ -3173,7 +3195,11 @@ class ArmJudgeTest(unittest.TestCase):
         self.judge("judge-c", "fail", "c now says fail")
         self.assertEqual(self.run_cli("recheck", str(self.out), "--rejudge").returncode, 0)  # every run goes to the one judge
         self.assertEqual({(v["judge"]["reason"], v["judge_identity"]["model"]) for v in self.results().values()}, {("c now says fail", "judge-c")})
-        self.assertEqual({text.split()[0] for _, text in self.footprints()}, {"name=judge-c"})
+        current = {v["judge_cell"] for v in self.results().values()}
+        self.assertEqual({text.split()[0] for cell, text in self.footprints() if cell in current}, {"name=judge-c"})
+        for v in self.results().values():  # each earlier verdict kept, in order: its arm's own judge's, then the first of c's
+            self.assertEqual([h["judge_identity"]["model"] for h in v["history"]],
+                             ["judge-a" if v["arm"] == "alpha" else "judge-b", "judge-c"], v["job"])
 
     def test_a_host_judge_on_an_arm_is_asked_of_that_arms_runs_only(self):
         beta = self.judge("judge-b", "fail", "b dislikes it")
@@ -3231,7 +3257,12 @@ class ArmJudgeTest(unittest.TestCase):
         for job, v in self.results().items():
             reason, passed = ("a is not thorough", False) if v["arm"] == "alpha" else ("b re-judged", True)
             self.assertEqual((v["judge"]["reason"], v["passed"]), (reason, passed), job)
-        self.assertEqual([text.split()[0] for _, text in self.footprints()], ["name=judge-b"] * 2)  # called once per run, now
+        # beta's judge was called once per run for this re-judge, in new cells; its earlier cells stay with its earlier
+        # verdicts, which each run keeps in its history
+        current = {v["judge_cell"] for v in self.results().values()}
+        self.assertEqual([text.split()[0] for cell, text in self.footprints() if cell in current], ["name=judge-b"] * 2)
+        self.assertEqual(sorted(cell for cell, _ in self.footprints() if cell not in current), sorted(c for c, _ in footprints))
+        self.assertEqual({v["history"][-1]["judge"]["reason"] for v in self.results().values() if v["arm"] == "beta"}, {"b dislikes it"})
 
     def test_the_runtime_shows_each_arms_judge_when_arms_differ(self):
         alpha, beta = self.judge("judge-a"), self.judge("judge-b")
