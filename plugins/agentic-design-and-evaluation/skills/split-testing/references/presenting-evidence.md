@@ -12,4 +12,6 @@ A view is faithful when it keeps failures, missingness, ties, vetoes, and invali
 
 Choose views from the evidence: requirement coverage, paired observations, distributions and tails, changes across rounds, trade-offs, qualitative excerpts, objections, provenance, and cost are common, and none is mandatory.
 
+Several reports that belong together, such as the trials behind one revision or one question asked of two model families, can travel as one collection: `assets/visuals/report.py --collection collection.json --output collection.html`, where `collection.json` names each report's data and narrative files with themes and pairs worth comparing; the page shows every decision at a glance, opens any report in full, and sets any two side by side ([collections](../assets/visuals/catalog.md#collections-of-reports)).
+
 A standalone HTML report is one self-contained file with its styles, scripts, data, fonts, and images embedded, so it opens offline without a server or build step; the working files and native evidence stay in the run or context directory. Before delivering it, run `report.py --check` on its inputs, then open it from an unrelated location without network access and check values, missingness, layout, keyboard access, and safe display of untrusted evidence text. A report that renders correctly says nothing about whether its analysis is valid.

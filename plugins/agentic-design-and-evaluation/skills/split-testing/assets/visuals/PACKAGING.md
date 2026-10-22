@@ -4,7 +4,7 @@ A report is one HTML file that carries its styles, scripts and data and renders 
 
 | Shipped file | Role |
 | --- | --- |
-| `report.py` | Writes a report from trial data, a comparison of any alternatives (JSON, a CSV table or both), a narrative or a specification; checks them first on request. |
+| `report.py` | Writes a report from trial data, a comparison of any alternatives (JSON, a CSV table or both), a narrative, a specification or a collection of many reports; checks them first on request. |
 | `assemble.py` | Packages any HTML body, styles, scripts, JSON and local assets into one offline file; `report.py` uses it. |
 | `dist/agentic-visuals.js` | The library, exposed as the browser global `AgenticVisuals`. |
 | `dist/agentic-startup.js` | A prelude that applies a stored theme before first paint. |
@@ -29,9 +29,13 @@ python3 <skills-file-root>/assets/visuals/report.py --csv table.csv --output rep
 
 # A trial drawn through the comparison views instead of the trial composition
 python3 <skills-file-root>/assets/visuals/report.py --trial trial.json --general [--narrative narrative.json] --output report.html
+
+# Many reports in one page: members name their trial or comparison file and narrative file
+python3 <skills-file-root>/assets/visuals/report.py --check --collection collection.json
+python3 <skills-file-root>/assets/visuals/report.py --collection collection.json [--spec spec.json] --output collection.html
 ```
 
-Fill in the skeleton, check it, then write the report; `--check` also takes `--spec SPEC [--trial FILE] [--data FILE] [--csv FILE]`. The comparison data, the CSV columns and the comparison narrative are described in the [catalog](catalog.md#comparisons-of-any-alternatives).
+Fill in the skeleton, check it, then write the report; `--check` also takes `--spec SPEC [--trial FILE] [--data FILE] [--csv FILE] [--collection FILE]` and `--collection FILE`. A collection is written from reports already narrated: write and check each member's narrative first, then list the members, themes and pairs ([collection data](catalog.md#collection-data)). The comparison data, the CSV columns and the comparison narrative are described in the [catalog](catalog.md#comparisons-of-any-alternatives).
 
 | Option | Meaning |
 | --- | --- |
@@ -40,14 +44,15 @@ Fill in the skeleton, check it, then write the report; `--check` also takes `--s
 | `--csv FILE` | A long table, one observation per row ([columns](catalog.md#csv)), read as a comparison; merged into `--data` when both are given, `--data` defining what the table cannot. The merged comparison is what `#av-comparison` carries. |
 | `--general` | With `--trial` only (not with `--data`, `--csv`, `--spec` or `--skeleton`): draw the trial through the comparison views ([`fromTrial`](catalog.md#from-a-trial)), embedding `#av-general`; a `--narrative` is then a comparison narrative, which the page checks against the derived comparison. |
 | `--narrative FILE` | Decision, labels and extra sections for the trial or comparison composition; needs `--trial`, `--data` or `--csv`, excludes `--spec`; embedded as `#av-narrative`. |
-| `--spec FILE` | A complete specification instead of the composition; embedded as `#av-spec`. With `--trial`, `--data` or `--csv` too, they fill the specification's `trial` or `comparison` field when it has none. |
+| `--spec FILE` | A complete specification instead of the composition; embedded as `#av-spec`. With `--trial`, `--data`, `--csv` or `--collection` too, they fill the specification's `trial`, `comparison` or `collection` field when it has none. |
+| `--collection FILE` | A [collection of reports](catalog.md#collections-of-reports); each member's `trial`, `comparison` and `narrative` given as a file name is read relative to `FILE`. Embedded, files read in, as `#av-collection`; the page composes it with `collectionReport` unless a `--spec` uses it. Excludes `--trial`, `--data`, `--csv`, `--narrative` and `--general`. |
 | `--output FILE` | The HTML file to write (required unless `--check` or `--skeleton`). |
-| `--title TEXT` | Document title; default the narrative's `title` or `question`, else the specification's `title`, the comparison's `title` or `question`, or the trial's `name`, else "Comparison" or "Trial report". |
+| `--title TEXT` | Document title; default the narrative's `title` or `question`, else the specification's `title`, the collection's or comparison's `title` (a comparison's `question`), or the trial's `name`, else "Comparison", "Report collection" or "Trial report". |
 | `--replace` | Replace an existing output (or, with `--skeleton FILE`, an existing file) that differs. |
 | `--check` | Write nothing; read the inputs as the page will and print every problem. |
 | `--skeleton [FILE]` | Print a starter narrative for `--trial`, or for `--data` and `--csv`, or write it to `FILE`; takes no other option but `--replace`. |
 
-**Writing.** `report.py` checks before writing that each input is JSON, that trial data has a `runs` list, that comparison data is an object with an `alternatives` list, that a CSV table reads (see [CSV](catalog.md#csv); a table it cannot read is refused with `error:` and `hint:` lines) and that a specification has a `title` and `sections`. It embeds Mermaid when the narrative or specification contains a `diagram` block, and prints `assembled PATH (N bytes)`, or `unchanged PATH (N bytes)` when an identical file is already there. An error prints one `error:` line and a `hint:` line, exits 1, and leaves any existing output untouched; correct the named input and rerun the same command. When the inputs have problems of the kind `--check` lists, the report is still written, a `warning:` line on stderr counts them, and the page lists them in an input-check panel at its top.
+**Writing.** `report.py` checks before writing that each input is JSON, that trial data has a `runs` list, that comparison data is an object with an `alternatives` list, that a CSV table reads (see [CSV](catalog.md#csv); a table it cannot read is refused with `error:` and `hint:` lines) and that a specification has a `title` and `sections`. A collection's member files must exist (a missing one is an `error:` naming the member's place) and the collection must have a `members` list. It embeds Mermaid when the narrative, specification or any member's narrative contains a `diagram` block, and prints `assembled PATH (N bytes)`, or `unchanged PATH (N bytes)` when an identical file is already there. An error prints one `error:` line and a `hint:` line, exits 1, and leaves any existing output untouched; correct the named input and rerun the same command. When the inputs have problems of the kind `--check` lists, the report is still written, a `warning:` line on stderr counts them, and the page lists them in an input-check panel at its top.
 
 **Checking.** `--check` applies the rules of `validateSpec`, `validateNarrative` and `validateComparison` (the catalog's [input checks](catalog.md#input-checks)) without a browser; with `--trial --general` it only confirms the narrative is a JSON object, since the page checks it against the derived comparison. It prints each problem to stderr as `error: WHERE: MESSAGE` or `warning: WHERE: MESSAGE` followed by a `hint:` line (often "did you mean …"), then `checked INPUTS: N errors and M warnings` (or `no problems`) to stdout, and exits 1 when any problem is an error. An error is input that would break a view or make it misread, such as a misspelled verdict, arm, case, alternative or metric, an unknown block type, more passes than valid runs, a value that does not fit its metric's kind, or arms called `identical` whose recorded settings differ; a warning is input the report does not use as written. JSON is read strictly (duplicate keys and non-JSON numbers are refused). Arm and case ids are checked against those in the trial's plan or runs, so an id naming a planned arm that never ran passes although the report ignores it; alternative, metric and case ids are checked against the comparison's.
 
@@ -55,7 +60,7 @@ Fill in the skeleton, check it, then write the report; `--check` also takes `--s
 
 ## Custom compositions
 
-Use `assemble.py` directly when a report needs something `report.py` does not pass, such as a [registered block type](catalog.md#new-block-types), an extra stylesheet or a local image. The library renders automatically: when the page has finished parsing, it finds the first element marked `data-av-mount` and renders `#av-spec` there (borrowing the `#av-trial` or `#av-comparison` beside it when it has none of its own), else `#av-comparison` with `#av-narrative` through the comparison composition, else `#av-trial` with `#av-narrative` through the trial composition, or through the comparison views when `#av-general` holds `true`. Scripts placed after the library run first, so a block registered there is available to that render.
+Use `assemble.py` directly when a report needs something `report.py` does not pass, such as a [registered block type](catalog.md#new-block-types), an extra stylesheet or a local image. The library renders automatically: when the page has finished parsing, it finds the first element marked `data-av-mount` and renders `#av-spec` there (borrowing the `#av-trial`, `#av-comparison` or `#av-collection` beside it when it has none of its own), else `#av-collection` through the collection composition, else `#av-comparison` with `#av-narrative` through the comparison composition, else `#av-trial` with `#av-narrative` through the trial composition, or through the comparison views when `#av-general` holds `true`. Scripts placed after the library run first, so a block registered there is available to that render.
 
 ```sh
 python3 <skills-file-root>/assets/visuals/assemble.py \
@@ -74,11 +79,12 @@ Here `body.html` is `<main data-av-mount></main>` and `verbatim.js` registers th
 
 | `AgenticVisuals` member | Purpose |
 | --- | --- |
-| `mount(element, spec)` | Render a specification into an element and add browser behavior; returns `{cleanup(), diagrams?}`. |
+| `mount(element, spec)` | Render a specification into an element and add browser behavior, with the [collection reader](catalog.md#the-reader) when it has a collection; returns `{cleanup(), diagrams?}`. |
 | `renderReport(spec)` | The report as an HTML string, with no DOM access; it also runs under Node. |
-| `enhance(element, ctx?)` | Add browser behavior to rendered markup; pass `createContext(spec, spec.cases)` for the run drawer. |
+| `enhance(element, ctx?, {hashBase?})` | Add browser behavior to rendered markup; pass `createContext(spec, spec.cases)` for the run drawer, and `hashBase` (such as `#report/ID`) to keep the report's links, run links and ledger views under that address. |
 | `trialReport(trial, narrative?)`, `SECTION_IDS` | The default trial composition as a specification (it carries the narrative's problems in `problems`), and the default section ids in order. |
 | `validateSpec(spec, {trial?, comparison?})`, `validateNarrative(narrative, trial?)`, `validateComparison(comparison, narrative?)` | Input problems as `[{level, where, message, hint?}]`: the rules `report.py --check` applies. |
+| `collectionReport(collection)`, `memberReport(collection, id)`, `compareReport(collection, a, b)`, `COLLECTION_SECTION_IDS`, `collectionModel(collection)`, `readerRoute(hash)`, `validateCollection(collection)` | The collection composition, a member's full report and two members side by side as specifications; the section ids in order; the per-member summaries the views share; a reader address as `{kind, id | a and b, base}` or null; the collection's input problems. |
 | `comparisonReport(comparison, narrative?)`, `fromTrial(trial)`, `COMPARISON_SECTION_IDS` | The comparison composition as a specification (it carries the narrative's problems in `problems`); a trial as a comparison; the default section ids in order. |
 | `summarize(comparison, metric, filter?)`, `difference(comparison, metric, a, b, filter?)` | One metric's summary per alternative, and the difference of two on it with its `method` in words ([metric kinds](catalog.md#metric-kinds)); `filter` is `{cases?, groups?, alternatives?, caseGroups?}`. |
 | `summarizeGroups(comparison, metric, depth?, filter?)`, `groupComparison(comparison, depth?, filter?)`, `groupPath(group)` | Summaries pooled by group at a depth; a comparison whose alternatives are those groups; a group as a path array. |
@@ -140,5 +146,6 @@ The build needs Node.js 18 or newer and exactly the TypeScript version pinned in
 5. Open a run from a case dossier, the failures view and the ledger, move with the arrow keys, filter the ledger, follow a `#run-1` link and a `#runs?outcome=fail` link, switch themes, and narrow the window to phone width (the ledger then shows its first 20 runs until "Show all").
 6. Check that untrusted text from runs or observations (excerpts, judge reasons, instruction texts, notes, sources) shows as text.
 7. For a comparison, filter the observations table and follow an `#observations?outcome=invalid` link, and read a decision matrix's arithmetic against its weights.
+8. For a collection, compare its figures and each card's counts with its members' data, filter the index and switch its designs, open a member and one of its runs (`#report/ID/run-1`), return with Back and with Escape, open two members side by side from the picker and from a pair, and repeat at phone width in both themes. A collection carries every member's data, with every path and text in it: read them before sending the file on.
 
 [Qualifying visuals](../../references/qualifying-visuals.md) covers what such checks establish. A report that renders correctly says nothing about whether its analysis is valid.
