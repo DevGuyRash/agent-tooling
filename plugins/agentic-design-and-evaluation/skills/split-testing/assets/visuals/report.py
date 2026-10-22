@@ -829,7 +829,8 @@ def pointed_rule(c, narrative: dict, recorded, whose: str) -> None:
     c.add("error", "narrative.story.rule", f'{whose} decision rule points the reader at "{clip(file)}", which this report does not include, so the narrative states the rule', "write the rule in story.rule, in plain words; the verdict shows it in place of the recorded pointer")
 
 
-ARM_FIELDS, CASE_FIELDS = ("arm", "arm-ref"), ("case", "case-ref")
+# Only ids a block brings itself: a filter ("arm", "case") selects among the trial's own, which are already required.
+ARM_FIELDS, CASE_FIELDS = ("arm-ref",), ("case-ref",)
 
 
 def named_ids(value, field, out: dict) -> None:
@@ -974,9 +975,10 @@ def story_checks(c, owner: dict, at: str, needs: dict) -> None:
     # A part given but saying nothing (empty, blank, or not words at all, such as a number) tells the reader as little
     # as one left out. A rule the report does not require is checked the same way when given.
     for k in ("background", "intent", "questions", "covers", "notCovered", *(() if needs["rule"] else ("rule",))):
-        if k not in story:
+        v = story.get(k)
+        # A missing or blank required part is already reported by the shape check.
+        if v is None or (k != "rule" and isinstance(v, str) and not v.strip()):
             continue
-        v = story[k]
         if k == "questions":
             for i, q in enumerate(v if isinstance(v, list) else []):
                 if not isinstance(q, str) or not q.strip():

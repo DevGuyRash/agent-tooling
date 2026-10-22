@@ -706,7 +706,8 @@ function storyChecks(c: Checker, owner: Obj, at: string, needs: StoryNeeds): voi
   // A rule the report does not require is checked the same way when given; a required one is checked above.
   for (const k of ["background", "intent", "questions", "covers", "notCovered", ...(needs.rule ? [] : ["rule"])]) {
     const v = story[k];
-    if (v === undefined) continue;
+    // A missing or blank required part is already reported by the shape check.
+    if (v === undefined || v === null || (k !== "rule" && typeof v === "string" && !v.trim())) continue;
     if (k === "questions") { if (Array.isArray(v)) v.forEach((q, i) => { if (typeof q !== "string" || !q.trim()) c.add("error", c.join(c.join(where, k), i), "is blank", "write the question in plain words, or remove it"); }); }
     else if (!said(v)) c.add("error", c.join(where, k), "says nothing", "write it in plain words for a reader new to this work");
   }
@@ -863,9 +864,10 @@ function appendReadings(c: Checker, append: unknown, at: string): void {
 }
 const hasVerdict = (spec: Obj) => Array.isArray(spec.sections) && spec.sections.some(s => isObj(s) && Array.isArray(s.blocks) && s.blocks.some(b => isObj(b) && b.type === "verdict"));
 /** The arms a trial ran, or a comparison's alternatives, and its cases, for the story's descriptions. */
-/** The ids a value names where its field holds an arm or a case (rows, series, items and filters written by hand), and
- * an object flagged as an arm (a matrix column with arm: true) by its id. */
-const ARM_FIELDS = ["arm", "arm-ref"], CASE_FIELDS = ["case", "case-ref"];
+/** The ids a value names where its field labels an arm or a case of its own (rows, series and items written by hand),
+ * and an object flagged as an arm (a matrix column with arm: true) by its id. */
+// Only ids a block brings itself: a filter ("arm", "case") selects among the trial's own, which are already required.
+const ARM_FIELDS = ["arm-ref"], CASE_FIELDS = ["case-ref"];
 function namedIds(value: unknown, field: Field | undefined, out: { arms: string[]; cases: string[] }): void {
   if (field === undefined || value === undefined || value === null) return;
   const take = (list: string[], v: unknown) => { if (typeof v === "string" && v && !list.includes(v)) list.push(v); };

@@ -329,6 +329,26 @@ class BrowserRenderTest(unittest.TestCase):
         for width in (1440, 1024):
             with self.subTest(ledger=width):
                 self.assertEqual(self.drive(ledger, width=width, script=CRAMPED)["result"], [], "a ledger cell crushed into a column under 200 px")
+        # Six arms with long names in the checks table: the check-name column once kept 44% of the width however many
+        # arms shared the rest, so at 1440 px each arm's name wrapped to five lines in a 71 px column. (At 1024 px the
+        # six names and the check names share under 900 px, and a name of four short lines is the table fitting.)
+        names = ["No instructions (GPT)", "Policy line naming over-engineering (GPT)", "Both directions at equal standing (GPT)",
+                 "No instructions (Claude)", "Policy line naming over-engineering (Claude)", "Both directions at equal standing (Claude)"]
+        arms = [f"arm{i}" for i in range(len(names))]
+        runs = [{"job": f"{case}__{arm}__r{r}", "scenario": case, "arm": arm, "repeat": r, "status": "ok", "passed": (i + r) % 3 != 0, "valid": True,
+                 "checks": {"reply_written": True, "cites_the_source": (i + r) % 3 != 0}}
+                for case in ("first", "second") for i, arm in enumerate(arms) for r in (1, 2)]
+        wide = {"name": "wide", "plan": {"arms": {a: {"executor": "command", "model": "m"} for a in arms},
+                                         "scenarios": [{"name": c, "prompt": "Reply.", "required": ["reply_written", "cites_the_source"]} for c in ("first", "second")]}, "runs": runs}
+        (self.dir / "wide.json").write_text(json.dumps(wide), encoding="utf-8")
+        (self.dir / "wide-narrative.json").write_text(json.dumps({"arms": [{"id": a, "label": n} for a, n in zip(arms, names)]}), encoding="utf-8")
+        checks = self.build("--trial", self.dir / "wide.json", "--narrative", self.dir / "wide-narrative.json")
+        for width in (1440, 1280):
+            with self.subTest(checks=width):
+                self.assertEqual(self.drive(checks, width=width, script=CRAMPED)["result"], [], "an arm's name crushed into a column under 200 px")
+        # The glyphs stay drawn above the names.
+        glyphs = self.drive(checks, width=1440, script='return [...document.querySelectorAll(".av-heatmap thead .av-glyph")].map(g => Math.round(g.getBoundingClientRect().width));')["result"]
+        self.assertTrue(glyphs and all(w >= 10 for w in glyphs), f"each arm's glyph in the table head is drawn: {glyphs}")
 
     def test_phone_width_never_scrolls_the_page_sideways(self) -> None:
         reports = {

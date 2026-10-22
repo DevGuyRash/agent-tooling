@@ -400,8 +400,10 @@ function measuresByCase(input: ChecksInput, ctx: RenderContext, data: TrialRepor
   return frame("checks", input, `${legend}<div class="av-ck-cases" style="--arms:${arms.length}">${panels}</div>`, { "data-by": "measures" });
 }
 
+/** The name column gives way as arms are added, so each arm's column keeps room for its name. */
 function colgroup(arms: string[]): string {
-  return `<colgroup><col class="av-ck-col-name">${arms.map(() => '<col class="av-ck-col-arm">').join("")}</colgroup>`;
+  const name = Math.max(18, 44 - Math.max(0, arms.length - 2) * 6.5);
+  return `<colgroup><col class="av-ck-col-name" style="width:${name}%">${arms.map(() => '<col class="av-ck-col-arm">').join("")}</colgroup>`;
 }
 
 function checksByCheck(input: ChecksInput, ctx: RenderContext, data: TrialReport, arms: string[], only?: string[]): string {

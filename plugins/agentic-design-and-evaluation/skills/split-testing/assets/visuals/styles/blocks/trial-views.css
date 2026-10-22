@@ -67,15 +67,15 @@
 .av-legend-tap b { position: absolute; top: 50%; left: 58%; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: var(--av-pass); }
 
 /* ----------------------------------------------------------------- checks */
-.av-heatmap { table-layout: fixed; min-width: calc(15rem + var(--arms, 1) * 5.4rem); }
+/* Each arm's column keeps room for its name; past the box, the table scrolls with its check names held. */
+.av-heatmap { table-layout: fixed; min-width: calc(12rem + var(--arms, 1) * 7rem); }
 .av-heatmap--case, .av-heatmap--measures, .av-ck-head { max-width: calc(24rem + var(--arms, 1) * 11rem); }
-.av-ck-col-name { width: 44%; }
 .av-heatmap tbody th { white-space: normal; overflow-wrap: anywhere; }
 .av-heatmap thead th .av-arm-label { overflow-wrap: break-word; word-break: normal; }
 /* Arm names wrap inside their own column instead of running into the next one. */
 .av-heatmap thead th:not(:first-child) { white-space: normal; vertical-align: bottom; }
-.av-heatmap thead th .av-arm { align-items: baseline; }
-.av-heatmap thead th .av-arm .av-glyph { transform: translateY(1px); }
+/* An arm's glyph sits above its name, so the name has the column's whole width. */
+.av-heatmap thead th .av-arm { flex-direction: column; align-items: flex-start; gap: 5px; }
 .av-heatmap tbody th, .av-heatmap thead th:first-child { position: sticky; left: 0; z-index: 1; background: var(--av-raised); }
 .av-heatmap .av-heat-group th, .av-ck-fold td { position: static; }
 .av-ck-fold td { padding: 8px 10px !important; background: var(--av-surface); }

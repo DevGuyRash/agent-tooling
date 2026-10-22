@@ -2903,8 +2903,10 @@ define("blocks/trial", ["require", "exports", "core", "failure", "trial-model", 
         const legend = `<p class="av-legend"><span>True or false: runs where it was true / valid runs, shaded by share, not by merit.</span><span>Numbers: the median, with the range beneath.</span></p>`;
         return (0, frame_1.frame)("checks", input, `${legend}<div class="av-ck-cases" style="--arms:${arms.length}">${panels}</div>`, { "data-by": "measures" });
     }
+    /** The name column gives way as arms are added, so each arm's column keeps room for its name. */
     function colgroup(arms) {
-        return `<colgroup><col class="av-ck-col-name">${arms.map(() => '<col class="av-ck-col-arm">').join("")}</colgroup>`;
+        const name = Math.max(18, 44 - Math.max(0, arms.length - 2) * 6.5);
+        return `<colgroup><col class="av-ck-col-name" style="width:${name}%">${arms.map(() => '<col class="av-ck-col-arm">').join("")}</colgroup>`;
     }
     function checksByCheck(input, ctx, data, arms, only) {
         let rows = (0, trial_model_3.checkTable)(data, arms);
@@ -9917,7 +9919,8 @@ define("validate", ["require", "exports", "core", "report", "trial-model"], func
         // A rule the report does not require is checked the same way when given; a required one is checked above.
         for (const k of ["background", "intent", "questions", "covers", "notCovered", ...(needs.rule ? [] : ["rule"])]) {
             const v = story[k];
-            if (v === undefined)
+            // A missing or blank required part is already reported by the shape check.
+            if (v === undefined || v === null || (k !== "rule" && typeof v === "string" && !v.trim()))
                 continue;
             if (k === "questions") {
                 if (Array.isArray(v))
@@ -10123,9 +10126,10 @@ define("validate", ["require", "exports", "core", "report", "trial-model"], func
     }
     const hasVerdict = (spec) => Array.isArray(spec.sections) && spec.sections.some(s => isObj(s) && Array.isArray(s.blocks) && s.blocks.some(b => isObj(b) && b.type === "verdict"));
     /** The arms a trial ran, or a comparison's alternatives, and its cases, for the story's descriptions. */
-    /** The ids a value names where its field holds an arm or a case (rows, series, items and filters written by hand), and
-     * an object flagged as an arm (a matrix column with arm: true) by its id. */
-    const ARM_FIELDS = ["arm", "arm-ref"], CASE_FIELDS = ["case", "case-ref"];
+    /** The ids a value names where its field labels an arm or a case of its own (rows, series and items written by hand),
+     * and an object flagged as an arm (a matrix column with arm: true) by its id. */
+    // Only ids a block brings itself: a filter ("arm", "case") selects among the trial's own, which are already required.
+    const ARM_FIELDS = ["arm-ref"], CASE_FIELDS = ["case-ref"];
     function namedIds(value, field, out) {
         if (field === undefined || value === undefined || value === null)
             return;
