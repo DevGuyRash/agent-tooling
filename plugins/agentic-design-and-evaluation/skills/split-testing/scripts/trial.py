@@ -1021,11 +1021,13 @@ def _merge_stored_plan(out: Path, plan: dict) -> dict:
                         stored.get("arms", {}).get(name), out, "restore them or use a new --out")
     # A scenario the directory's plan.json does not list may be judged; a verdict there counts.
     judged_scenario = lambda r: (specs.get(r.get("scenario")) or {"judge": "unknown"}).get("judge")
-    judged = [r for r in results if r.get("status") == "ok" and r.get("judge") and judged_scenario(r)]
+    # A run is held to the judge it records: the one that gave its verdict, or, for a run its judge was rightly not
+    # asked about (its artifact missing, or its output unreadable), the one that would have been asked.
+    judged = [r for r in results if r.get("status") == "ok" and (r.get("judge") or r.get("judge_identity")) and judged_scenario(r)]
     asked = [r for r in waiting if r.get("judge_identity")]  # put to a host judge that has not answered yet
     answer = "answer them (judge-dispatch.json) and run again with that judge, or use a new --out"
-    unjudged = [r for r in results if r.get("status") == "ok" and not r.get("judge") and judged_scenario(r)
-                and "check_error" not in (r.get("checks") or {})]
+    unjudged = [r for r in results if r.get("status") == "ok" and not r.get("judge") and not r.get("judge_identity")
+                and judged_scenario(r) and "check_error" not in (r.get("checks") or {})]
     rejudge = f"re-judge every stored run with `trial.py recheck {out} --judge JSON`, or use a new --out"
     # A run is judged by the judge its arm names for itself, else by the plan's, and the directory keeps one judge for
     # each: an arm that names a judge (now, or in the stored plan) is held to it on its own runs, every other run to the plan's.
@@ -3892,8 +3894,9 @@ def _finish_job(plan, spec, job_dir: Path, result: dict, verdict: dict | None, j
                             exposure=result.get("exposure"))
     result = dict({k: v for k, v in result.items() if k not in DECISION_FLAGS}, passed=passed, judge=verdict, **flags)
     if verdict is not None:
-        result["judge_identity"] = _identity(judge, JUDGE_FIELDS)
         result["judge_cell"] = judge_cell
+    if verdict is not None or (judge and spec.get("judge") and result["status"] == "ok"):  # the judge it is held to
+        result["judge_identity"] = _identity(judge, JUDGE_FIELDS)
     if earlier is not None and any(result.get(k) != earlier.get(k) for k in SCORING_RECORD):
         result["history"] = [*result.get("history", []), dict(earlier, rescored_at=_iso_utc(dt.datetime.now(dt.timezone.utc).timestamp()))]
     # Found now, before result.json is written, so a missing artifact a later `recheck` cannot explain from
@@ -4146,6 +4149,8 @@ def recheck(out: Path, rejudge=False, jobs=6, judge=None, only=None, sandbox=Non
                                     artifact_missing=info["artifact_missing"], unassessed=info["unassessed"], stale=stale,
                                     exposure=result.get("exposure"))
             result.update(flags)
+            if arm_judge and spec.get("judge") and result["status"] == "ok" and not result.get("judge"):
+                result["judge_identity"] = _identity(arm_judge, JUDGE_FIELDS)  # not asked: held to the judge of now
             result.update(checks=checks, passed=passed, rechecked=True, rejudged=bool(rejudge))
             if isinstance(result.get("conditions"), dict):  # scored now by the scenario's current checks and question
                 result["conditions"]["scoring_sha256"] = _scoring_digest(spec)

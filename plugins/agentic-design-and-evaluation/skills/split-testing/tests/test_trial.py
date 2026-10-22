@@ -3177,6 +3177,27 @@ class TrialRunnerTest(unittest.TestCase):
             self.assertEqual(v["history"][-1]["judge"]["verdict"], "error", job)  # the scoring it replaced, kept
             self.assertTrue((self.out / "judges" / ".cells" / first[job]["judge_cell"]).is_dir(), job)
 
+    def test_runs_their_judge_was_rightly_not_asked_about_resume_like_any_other(self):
+        # A missing deliverable fails without the judge, and output the judge cannot read is not put to it; neither is a
+        # run "scored without a judge", so neither stops the unchanged plan from going on or retrying.
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "write report.md", "artifact": "report.md", "judge": {"question": "is it sound?", "pass_when": "it is"}}))
+        write(self.tmp / "scenarios" / "make-file" / "check.py", "def check(run):\n    return {}\n")
+        judge = launcher_judge(self.judges, "m", "echo '{\"verdict\": \"pass\", \"reason\": \"ok\"}'\n")
+        plan = self._plan({"missing": {"executor": "command", "command": "true"},
+                           "binary": {"executor": "command", "command": "printf 'PK\\003\\004\\000' > report.md"}}, judge)
+        self.assertEqual(self.run_cli("run", plan, "--out", str(self.out)).returncode, 0)
+        reasons = {run["arm"]: (run["passed"], run["invalid_reason"]) for run in trial.report(self.out)["runs"]}
+        self.assertEqual(reasons, {"missing": (False, None), "binary": (None, "judge-unassessed")})
+        for args in (("--repeats", "2"), ("--retry-invalid",)):
+            r = self.run_cli("run", plan, "--out", str(self.out), *args)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(len(self.results()), 4)
+        # a judge changed under them still needs the directory re-judged, as for any judged run
+        r = self.run_cli("run", self._plan(json.loads(Path(plan).read_text())["arms"], dict(judge, model="m2")), "--out", str(self.out))
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("model m2 (was m)", r.stderr)
+
     def test_executor_failures_at_one_effort_never_skip_the_runs_of_another(self):
         # The breaker stops an executor family that keeps failing; one model at two efforts is two families.
         plan = {"arms": {"low": {"executor": "launcher", "model": "m", "effort": "low", "script_sha256": "s"},
