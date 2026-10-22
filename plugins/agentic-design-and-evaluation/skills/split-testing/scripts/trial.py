@@ -37,8 +37,9 @@ not compare, so one comparison has one judge (or panel) for every arm it compare
 
 Settings fields (model, effort, base_url, binary, env_file, api_key_var) expand ${VAR} and
 ${VAR:-default}. Every run records its arm's settings and the digests of its instructions,
-resources, and launcher (executors read copies kept in the run directory), and the judge that
-scored it, and a rerun that would mix them in one directory is refused. "sandbox" (plan level,
+resources, and launcher (executors read copies kept in the run directory), the judge that scored
+it, and the conditions it ran under (what its scenario gave it and scored it by, its sandbox, a
+launcher's binary), and a rerun that would mix them in one directory is refused. "sandbox" (plan level,
 or --sandbox) sets the default confinement for every scenario that does not name its own;
 "baseline" (or --baseline on summarize) names the arm other arms' cost and timing are compared
 against as a percentage.
@@ -2204,8 +2205,8 @@ class Run:
                     found.append(f"command {a['command'][:80]}")
                 elif shown:
                     found.append(f"command output shows {shown}")
-                elif named and output is None:
-                    open_.append(f"the record holds a command naming it with no output: {a['command'][:80]}")
+                elif named and (output is None or (outcome is None and not output)):
+                    open_.append(f"the record holds a command naming it with no output or no outcome: {a['command'][:80]}")
                 elif content:
                     open_.append(f"a command's output shows a line of it without naming it: {a['command'][:80]}")
             elif shown:
@@ -2400,7 +2401,7 @@ def _result_problem(r, job: str, timeout_fails: set) -> str | None:
     if type(r.get("repeat")) is not int or r["repeat"] < 1:
         return 'has no "repeat" that is a whole number from 1'
     passed = r.get("passed", "missing")
-    if passed not in (True, False, None) or isinstance(passed, int) and not isinstance(passed, bool):
+    if not (passed is True or passed is False or passed is None):
         return 'gives "passed" a value other than true, false, or null'
     if passed is not None and r["status"] != "ok" and not (
             passed is False and r["status"] in ("timeout", "unfinished") and r["scenario"] in timeout_fails):

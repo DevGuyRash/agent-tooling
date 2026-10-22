@@ -570,9 +570,10 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(exposed("stat ~/skills/coder/SKILL.md", f"  File: {home}/skills/coder/SKILL.md\n  Size: 214  Blocks: 8  "
                                  "IO Block: 4096  regular file\nAccess: (0444/-r--r--r--)  Uid: (1000/user)\n"), [])
         # A command that names it with no output recorded, or no outcome, cannot show either way.
-        with self.assertRaisesRegex(trial.RecordUnavailable, "cannot show"):
-            trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [
-                {"kind": "command", "command": "cat ~/skills/coder/SKILL.md", "ok": True}]}).exposed("skills/coder")
+        for action in ({"ok": True}, {"ok": None, "output": ""}):
+            with self.assertRaisesRegex(trial.RecordUnavailable, "cannot show"):
+                trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [
+                    dict({"kind": "command", "command": "cat ~/skills/coder/SKILL.md"}, **action)]}).exposed("skills/coder")
         self.assertEqual(exposed("cat ~/skills/coder/SKILL.md", "cat: Permission denied, and a long message here\n", ok=False), [])
         for listing in ("ls ~/skills", "ls ~/skills/coder", "ls -d ~/skills/coder/*", "cat src/main.py; ls ~/skills 2>&1 | head"):
             root = trial.Run(job, "ok", record={"finished": True, "covers": complete, "actions": [

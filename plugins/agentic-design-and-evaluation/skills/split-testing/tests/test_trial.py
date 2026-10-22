@@ -3040,6 +3040,7 @@ class TrialRunnerTest(unittest.TestCase):
         cases = {
             "timeout counted as a failure": {"status": "timeout", "passed": False},
             "a pass that is not true or false": {"status": "ok", "passed": "yes"},
+            "a pass given as a number": {"status": "ok", "passed": 1.0},
             "an arm missing": {"status": "ok", "passed": True, "arm": None},
             "a job naming another directory": {"status": "ok", "passed": True, "job": "s__b__r9"},
             "a repeat that is no number": {"status": "ok", "passed": True, "repeat": "two"},
@@ -3052,9 +3053,9 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual({k: v for k, v in json.loads(r.stdout)["scenarios"]["s|a"].items() if k in ("passed", "valid", "runs")},
                          {"passed": 1, "valid": 1, "runs": 1})
-        self.assertIn("skipped 5 result files", r.stderr)
+        self.assertIn("skipped 6 result files", r.stderr)
         self.assertIn("passed", r.stderr)  # the first problem is named
-        self.assertEqual(len(trial.report(self.out)["skipped_results"]), 5)
+        self.assertEqual(len(trial.report(self.out)["skipped_results"]), 6)
         # a scenario that fixes timeout_fails beforehand counts a timeout as the failure it is
         plan = json.loads((self.out / "plan.json").read_text())
         (self.out / "plan.json").write_text(json.dumps(dict(plan, scenarios=[{"name": "s", "timeout_fails": True}])))
