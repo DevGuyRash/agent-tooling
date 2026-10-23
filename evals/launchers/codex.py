@@ -30,16 +30,20 @@ TRANSIENT = ("502 Bad Gateway", "503 Service", "failed to connect", "Connection 
              "timed out", "Too Many Requests", "429", "overloaded", "error sending request")
 
 
-# Features a signed-in ChatGPT account would bring into a run, all turned off whatever login the run holds, as
-# Codex's own feature table names them (codex-rs/features/src/lib.rs at rust-v0.163.0; this machine runs 0.162):
-#   apps            "Enable apps." (the account's apps and connectors; on by default)
-#   plugins         "Enable plugins." (on by default)
-#   remote_plugin   "Enable the PS-backed remote plugin catalog." (on by default)
-#   plugin_sharing  "Enable remote plugin sharing flows." (on by default)
-#   tool_suggest    "Enable discoverable tool suggestions for apps." (on by default)
-#   memories        "Enable startup memory extraction and file-backed memory consolidation." (off by default)
-# Codex offers no control for the account's identity, which a run with that login holds.
-ACCOUNT_FEATURES_OFF = ("apps", "plugins", "remote_plugin", "plugin_sharing", "tool_suggest", "memories")
+# Every feature that brings what a signed-in ChatGPT account holds into a run, all turned off whatever login the run
+# holds, as Codex's own feature table names them (codex-rs/features/src/lib.rs at rust-v0.163.0; `codex features list`
+# in codex-cli 0.162 knows each):
+#   apps                 "Enable apps." (the account's apps and connectors; on by default)
+#   plugins              "Enable plugins." (on by default)
+#   remote_plugin        "Enable the PS-backed remote plugin catalog." (on by default)
+#   plugin_sharing       "Enable remote plugin sharing flows." (on by default)
+#   recommended_plugins  "Include recommended plugins in model-visible context." (off by default)
+#   tool_suggest         "Enable discoverable tool suggestions for apps." (on by default)
+#   memories             "Enable startup memory extraction and file-backed memory consolidation." (off by default)
+# No control covers the account's identity, which a run with that login holds, or the policies its workspace delivers
+# to business, education and enterprise plans (codex-rs/cloud-config, "workspace-managed policies").
+ACCOUNT_FEATURES_OFF = ("apps", "plugins", "remote_plugin", "plugin_sharing", "recommended_plugins", "tool_suggest",
+                        "memories")
 
 
 def provider_config(model: str, effort: str, host_config: str) -> str:

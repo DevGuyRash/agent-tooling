@@ -140,11 +140,17 @@ class ClaudeInvocationTest(LauncherCase):
         second = launched.calls[1]["cmd"]
         self.assertEqual(second[second.index("--resume"):second.index("--resume") + 2], ["--resume", "S7"])
 
-    def test_a_signed_in_run_turns_off_the_accounts_synced_skills_and_connectors_and_a_bare_run_is_unchanged(self):
-        # A signed-in login (not bare) would bring the claude.ai account's synced skills and connectors into every run:
-        # the command's own settings turn both off, layered over the arm's user settings, which it may place read-only
-        # (skillOverrides, say) and which stay as placed, and ENABLE_CLAUDEAI_MCP_SERVERS=false stops connectors being
-        # fetched. A bare run reads no account and is left as it was.
+    def test_a_signed_in_run_turns_off_everything_its_account_brings_that_claude_code_can_and_a_bare_run_is_unchanged(self):
+        # A signed-in login (not bare) would bring its claude.ai account into every run. Every control Claude Code 2.1.299
+        # offers for that (code.claude.com/docs/en/settings-reference, docs/en/tools-reference and docs/en/permissions,
+        # and the binary's settings schema) goes on the command's own settings: the account's synced skills and
+        # plugins, its connectors, the Artifact tool that publishes to it, memory (its organization's memory stores
+        # load only with auto memory on), Remote Control, messages to and from its sessions elsewhere, mirroring the
+        # session to claude.ai, and the tools that write to the account (its cloud scheduled tasks, its claude.ai/design
+        # projects, a shared onboarding guide), removed by bare-name deny rules. They layer over the arm's user
+        # settings, which it may place read-only (skillOverrides, say) and which stay as placed, and
+        # ENABLE_CLAUDEAI_MCP_SERVERS=false stops connectors being fetched. A bare run reads no account and is left as
+        # it was.
         import stat
         init = {"type": "system", "subtype": "init", "session_id": "S1", "model": "model-a"}
         result = {"type": "result", "subtype": "success", "is_error": False, "result": "done", "session_id": "S1", "usage": {}}
@@ -177,7 +183,12 @@ class ClaudeInvocationTest(LauncherCase):
                 else:
                     self.assertNotIn("--bare", cmd)
                     self.assertEqual(json.loads(cmd[cmd.index("--settings") + 1]),
-                                     {"syncClaudeAiSkills": False, "disableClaudeAiConnectors": True})
+                                     {"syncClaudeAiSkills": False, "syncClaudeAiPlugins": False,
+                                      "disableClaudeAiConnectors": True, "enableArtifact": False,
+                                      "autoMemoryEnabled": False, "disableRemoteControl": True,
+                                      "crossSessionInbound": "refuse", "isolatePeerMachines": True,
+                                      "autoUploadSessions": False,
+                                      "permissions": {"deny": ["RemoteTrigger", "DesignSync", "ShareOnboardingGuide"]}})
                     self.assertEqual(env["ENABLE_CLAUDEAI_MCP_SERVERS"], "false")
 
     def test_an_unconfined_run_accepts_edits_and_a_judge_has_no_tools(self):
