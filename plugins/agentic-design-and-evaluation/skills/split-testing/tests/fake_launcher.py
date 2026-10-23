@@ -47,8 +47,9 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
                         standard error, an arm's on standard output too, caches them in ~/.tool-cache as a tool keeps
                         its sign-in, refreshes ~/.fake-sign-in by replacing it, names a transcript reached through a
                         link, and writes what it can see of FAKE_COPIES_ROOT and FAKE_SIBLING into
-                        $TRIAL_HARNESS/visible-<turn>.json; with FAKE_SLOW set, a scenario's first turn waits a
-                        minute ($TRIAL_HARNESS/started marks it)
+                        $TRIAL_HARNESS/visible-<turn>.json; while the file FAKE_SLOW_FLAG names exists, a scenario's
+                        first turn waits a minute, and while FAKE_JUDGE_SLOW_FLAG's does, a judge's call on a scenario's
+                        run does ($TRIAL_HARNESS/started marks either)
     signed-in-slow      as signed-in, and a scenario's first turn waits a minute ($TRIAL_HARNESS/started marks it)
     signed-in-slow-probe  as signed-in, and the probe's first turn waits a minute
 """
@@ -142,7 +143,9 @@ def main():
             sibling = False
         harness = Path(os.environ["TRIAL_HARNESS"])
         (harness / f"visible-{TURN}.json").write_text(json.dumps({"root": listing, "sibling": sibling}))
-        if os.environ.get("FAKE_SLOW") and TURN == 1 and not judging and "create out.txt" in Path(os.environ["TRIAL_PROMPT_FILE"]).read_text():
+        prompt = Path(os.environ["TRIAL_PROMPT_FILE"]).read_text() if TURN else ""
+        flag = os.environ.get("FAKE_JUDGE_SLOW_FLAG" if judging else "FAKE_SLOW_FLAG")
+        if flag and Path(flag).exists() and TURN == 1 and ("out.txt written" if judging else "create out.txt") in prompt:
             (harness / "started").write_text("")
             time.sleep(60)
     if MODE == "show-env":  # what an executor it started would see: its environment and working directory

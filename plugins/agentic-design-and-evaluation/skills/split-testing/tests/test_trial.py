@@ -433,12 +433,13 @@ class TrialRunnerTest(unittest.TestCase):
     def test_only_the_provider_key_leaves_the_credential_file(self):
         env_file = self.tmp / "keys.env"
         env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\nOTHER_SECRET=nope\nexport EXPORTED_SECRET=nope\n")
-        prefix = trial._key_prefix(env_file, "TRIAL_TEST_KEY", "ANTHROPIC_API_KEY")
-        out = subprocess.run(prefix + ["sh", "-c", 'printf "%s|%s|%s" "$ANTHROPIC_API_KEY" "${OTHER_SECRET-unset}" "${EXPORTED_SECRET-unset}"'],
-                             capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}).stdout
-        self.assertEqual(out, "not-a-real-key|unset|unset")
-        with self.assertRaises(trial.TrialError):
-            trial._key_prefix(env_file, "BAD; rm -rf /", None)
+        arm = {"env_file": str(env_file), "api_key_var": "TRIAL_TEST_KEY"}
+        self.assertEqual(trial._resolve_key(arm, "TRIAL_TEST_KEY", "arm"), "not-a-real-key")  # that one value, read once
+        self.assertNotIn("OTHER_SECRET", os.environ)  # and nothing else of the file reaches this process
+        self.assertNotIn("EXPORTED_SECRET", os.environ)
+        for bad in ("BAD; rm -rf /", "OTHER_MISSING"):
+            with self.subTest(var=bad), self.assertRaises(trial.TrialError):
+                trial._resolve_key(arm, bad, "arm")
 
     def test_links_an_agent_plants_never_lead_the_runner_outside_the_run(self):
         victims = self.tmp / "victims"
