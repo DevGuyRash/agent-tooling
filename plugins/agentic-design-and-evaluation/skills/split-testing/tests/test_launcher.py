@@ -3,6 +3,7 @@ import contextlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -21,9 +22,14 @@ CONFINED = bool(shutil.which("bwrap"))
 
 def copies_container() -> Path:
     """Where this user's copied credentials are kept, worked out apart from the runtime: trial-copies-<uid> under
-    /run/user/<uid> when that is the user's own directory, else under /tmp."""
+    /run/user/<uid> when that is a real directory of the user's own with no link on the way to it, else under /tmp."""
     uid, run = os.getuid(), Path(f"/run/user/{os.getuid()}")
-    return (run if run.is_dir() and run.stat().st_uid == uid else Path("/tmp")) / f"trial-copies-{uid}"
+    try:
+        st = os.lstat(run)  # the directory itself, never where a link leads
+        ours = stat.S_ISDIR(st.st_mode) and st.st_uid == uid and os.path.realpath(run) == str(run)
+    except OSError:
+        ours = False
+    return (run if ours else Path("/tmp")) / f"trial-copies-{uid}"
 
 
 def write(path: Path, text: str, mode=None):
@@ -1036,12 +1042,13 @@ class LauncherTest(unittest.TestCase):
         write(self.tmp / "sign-in", "".join(["sess", "-", os.urandom(16).hex()]))
         arm = {"copy": {".fake-sign-in": str(self.tmp / "sign-in")}}
         with mock.patch.object(trial.random.SystemRandom, "choices", side_effect=[list(taken), list(fresh)]):
-            with contextlib.suppress(FileExistsError):
-                entry, _ = trial._start_copies(out, job, arm)
-                self.addCleanup(shutil.rmtree, entry["private"], True)
-                self.assertEqual(entry["private"], str(self.root / fresh))
-        for note in (out / ".copies").glob("*.json"):
-            self.assertNotEqual(json.loads(note.read_text())["private"], str(first))
+            entry, marker = trial._start_copies(out, job, arm)  # allocated all the same, under the fresh name
+        self.addCleanup(shutil.rmtree, entry["private"], True)
+        self.assertEqual(entry["private"], str(self.root / fresh))
+        self.assertTrue((self.root / fresh).is_dir())
+        self.assertEqual([json.loads(n.read_text())["private"] for n in (out / ".copies").glob("*.json")],
+                         [str(self.root / fresh)])  # and the one note it wrote names that, never the first run's
+        self.assertEqual(json.loads(marker.read_text())["private"], str(self.root / fresh))
         trial._sweep_copies(out, "recheck")
         self.assertTrue((first / "0").is_file())  # the first run's copies stand
 
