@@ -889,9 +889,53 @@ def check_trial_data(c, trial, where: str) -> bool:
         c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE")
         return False
     for i, r in enumerate(trial["runs"]):
-        if isinstance(r, dict) and (r.get("scenario") is None or (isinstance(r.get("scenario"), str) and not r["scenario"].strip())):
-            c.add("error", f"{where}.runs[{i}].scenario", "a trial run must name its scenario", "write the trial with trial.py report RUN_DIR --out FILE, which names each run's scenario")
+        if isinstance(r, dict) and (not isinstance(r.get("scenario"), str) or not r["scenario"].strip()):
+            c.add("error", f"{where}.runs[{i}].scenario", "a trial run must name its scenario", "write the trial with trial.py report RUN_DIR --out FILE, which names each run's scenario as text")
     return True
+
+
+def placed(problems: list, frm: str, at: str) -> list:
+    """A check's problems, moved from the place it names its input (`frm`, such as "comparison") to where the input
+    entered (`at`), as src/validate.ts placed."""
+    out = []
+    for p in problems:
+        w = p["where"]
+        moved = at if w == frm else at + w[len(frm):] if w.startswith(frm + ".") or w.startswith(frm + "[") else f"{at}.{w}"
+        out.append({**p, "where": moved})
+    return out
+
+
+def check_comparison_data(c, data, where: str) -> bool:
+    """The one check of comparison data, however it enters (as src/validate.ts checkComparison). False when it is not comparison data."""
+    if not is_comparison(data):
+        c.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md')
+        return False
+    c.problems.extend(placed(validate_comparison(data), "comparison", where))
+    return True
+
+
+def check_collection_data(c, data, where: str) -> None:
+    """The one check of a collection, however it enters (as src/validate.ts checkCollection)."""
+    c.problems.extend(placed(validate_collection(data), "collection", where))
+
+
+def view_data(c, owner: dict, at: str) -> None:
+    """Comparison data each view of a specification or a narrative carries as its own, checked where it sits (as src/validate.ts viewData)."""
+    def each(b, where: str) -> None:
+        if not isinstance(b, dict) or not isinstance(b.get("type"), str) or b.get("data") is None:
+            return
+        schema = BLOCKS.get(b["type"])
+        if schema and "data" in schema.get("fields", {}):
+            check_comparison_data(c, b["data"], c.join(where, "data"))
+    for i, sec in enumerate(owner.get("sections") if isinstance(owner.get("sections"), list) else []):
+        if isinstance(sec, dict) and isinstance(sec.get("blocks"), list):
+            for j, b in enumerate(sec["blocks"]):
+                each(b, f"{c.join(c.join(at, 'sections'), i)}.blocks[{j}]")
+    if isinstance(owner.get("append"), dict):
+        for k in keys_of(owner["append"]):
+            if isinstance(owner["append"][k], list):
+                for j, b in enumerate(owner["append"][k]):
+                    each(b, c.join(c.join(c.join(at, "append"), k), j))
 
 
 def comparison_cases(data: dict) -> list:
@@ -1354,6 +1398,7 @@ def validate_spec(spec, trial=None, comparison=None, collection=None) -> list[di
     # A specification read from a file is checked as written: a "problems" field of its own proves nothing.
     # As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
     own, gathered = spec.get("comparison"), spec.get("collection")
+    beside = {"trial": trial, "comparison": comparison, "collection": collection}
     trial, comparison = spec.get("trial") or trial, own if own not in (None, False, 0, "") else comparison
     c = Checker(known_from(trial, comparison, gathered if gathered not in (None, False, 0, "") else collection), "spec")
 
@@ -1361,10 +1406,7 @@ def validate_spec(spec, trial=None, comparison=None, collection=None) -> list[di
         check_trial_data(c, value, where)
 
     def check_comparison(value, where: str) -> None:
-        if not is_comparison(value):
-            c.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md')
-        else:
-            c.problems.extend(validate_comparison(value))
+        check_comparison_data(c, value, where)
 
     def check_sections(value, where: str) -> None:
         if not isinstance(value, list):
@@ -1378,12 +1420,17 @@ def validate_spec(spec, trial=None, comparison=None, collection=None) -> list[di
             ids.append(s["id"])
 
     def check_collection(value, where: str) -> None:
-        c.problems.extend(validate_collection(value))
+        check_collection_data(c, value, where)
 
     c.shape(spec, SPEC, "", {"trial": check_trial, "comparison": check_comparison, "collection": check_collection, "sections": check_sections})
-    # A trial supplied beside the specification is the one its views read: checked as its own would be.
-    if not spec.get("trial") and trial is not None:
-        check_trial_data(c, trial, "trial")
+    # Data supplied beside the specification is what its views read: checked as its own would be, by the same check.
+    if spec.get("trial") in (None, False, 0, "") and beside["trial"] is not None:
+        check_trial_data(c, beside["trial"], "trial")
+    if spec.get("comparison") in (None, False, 0, "") and beside["comparison"] is not None:
+        check_comparison_data(c, beside["comparison"], "comparison")
+    if spec.get("collection") in (None, False, 0, "") and beside["collection"] is not None:
+        check_collection_data(c, beside["collection"], "collection")
+    view_data(c, spec, "")
     story_checks(c, spec, "", story_obligations(c.known, trial, comparison, blocks_of(spec), spec, has_verdict(spec)))
     section_readings(c, spec.get("sections"), "")
     return ordered(c.problems)
@@ -1443,9 +1490,7 @@ def validate_collection(collection) -> list[dict]:
             if check_trial_data(c, m["trial"], f"{at}.trial"):
                 found_problems = validate_narrative(m["narrative"] if narrated else {}, m["trial"])
         if has_comparison and sources == 1:
-            if not is_comparison(m["comparison"]):
-                c.add("error", f"{at}.comparison", "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md')
-            else:
+            if check_comparison_data(c, m["comparison"], f"{at}.comparison"):
                 found_problems = validate_comparison(m["comparison"], m["narrative"] if narrated else {})
         for problem in found_problems:
             c.problems.append({**problem, "where": f"{at}.{problem['where']}"})
@@ -1766,6 +1811,7 @@ def comparison_narrative(narrative, known: dict, data: dict) -> list[dict]:
     c.shape(narrative, COMPARISON_NARRATIVE, "narrative", {
         "decision": decision, "alternatives": alternatives, "identical": identical, "criteria": criteria, "include": section_ids, "exclude": section_ids, "sections": sections, "append": append,
     })
+    view_data(c, narrative, "narrative")
     story_checks(c, narrative, "narrative", story_obligations(known, None, data, blocks_of(narrative), {}, True))
     pointed_rule(c, narrative, data.get("decision_rule"), "the comparison's")
     readings_checks(c, narrative, "narrative", comparison_sections_shown(data, narrative, kept), COMPARISON_NAMES, comparison_key)
@@ -1897,6 +1943,7 @@ def validate_narrative(narrative, trial=None) -> list[dict]:
     c.shape(narrative, NARRATIVE, "narrative", {
         "decision": decision, "arms": arms, "identical": identical, "pairs": pairs, "threshold": threshold, "include": section_ids, "exclude": section_ids, "sections": sections, "append": append,
     })
+    view_data(c, narrative, "narrative")
     story_checks(c, narrative, "narrative", story_obligations(c.known, trial, None, blocks_of(narrative), {}, True))
     pointed_rule(c, narrative, trial["plan"].get("decision_rule") if isinstance(trial, dict) and isinstance(trial.get("plan"), dict) else None, "the plan's")
     readings_checks(c, narrative, "narrative", trial_sections_shown(trial, narrative, kept), SECTION_NAMES, section_key)

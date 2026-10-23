@@ -8033,7 +8033,10 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
         const baseline = [narrative.baseline, dataIn.baseline].find((b) => typeof b === "string" && ids.includes(b));
         const identical = (Array.isArray(narrative.identical) ? narrative.identical : Array.isArray(dataIn.identical) ? dataIn.identical : [])
             .map(g => [...new Set(strings(g).filter(a => ids.includes(a)))]).filter(g => g.length > 1);
-        const data = { ...dataIn, alternatives, metrics, ...(baseline ? { baseline } : {}), identical };
+        // The report carries its metrics as given: the sections are composed from those of a known kind, and a metric of no
+        // known kind stays in the data, so checking the report finds what checking its input finds, and nothing the
+        // composition made.
+        const data = { ...dataIn, alternatives, ...(baseline ? { baseline } : {}), identical };
         const observations = objects(dataIn.observations);
         const preferences = objects(dataIn.preferences);
         const rankings = objects(dataIn.rankings).filter(r => Array.isArray(r.order));
@@ -10712,10 +10715,45 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
             return false;
         }
         trial.runs.forEach((r, i) => {
-            if (isObj(r) && (0, stats_14.caseKey)(r.scenario) === stats_14.NO_CASE)
-                c.add("error", `${where}.runs[${i}].scenario`, "a trial run must name its scenario", "write the trial with trial.py report RUN_DIR --out FILE, which names each run's scenario");
+            if (isObj(r) && (typeof r.scenario !== "string" || (0, stats_14.caseKey)(r.scenario) === stats_14.NO_CASE))
+                c.add("error", `${where}.runs[${i}].scenario`, "a trial run must name its scenario", "write the trial with trial.py report RUN_DIR --out FILE, which names each run's scenario as text");
         });
         return true;
+    }
+    /** A check's problems, moved from the place it names its input (`from`, such as "comparison") to where the input
+     * entered (`at`, such as "sections[0].blocks[1].data"). */
+    function placed(problems, from, at) {
+        return problems.map(p => ({ ...p, where: p.where === from ? at : p.where.startsWith(`${from}.`) || p.where.startsWith(`${from}[`) ? `${at}${p.where.slice(from.length)}` : `${at}.${p.where}` }));
+    }
+    /** The one check of comparison data, however it enters: a specification's own `comparison`, one supplied beside it, a
+     * view's own `data` (in a specification or a narrative), and a collection member's. False when it is not comparison data. */
+    function checkComparison(c, data, where) {
+        if (!isComparison(data)) {
+            c.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');
+            return false;
+        }
+        c.problems.push(...placed(validateComparison(data), "comparison", where));
+        return true;
+    }
+    /** The one check of a collection, however it enters: a specification's own `collection`, or one supplied beside it. */
+    function checkCollection(c, data, where) {
+        c.problems.push(...placed(validateCollection(data), "collection", where));
+    }
+    /** Comparison data each view of a specification or a narrative carries as its own (`data`), checked where it sits. */
+    function viewData(c, owner, at) {
+        const each = (b, where) => {
+            if (!isObj(b) || typeof b.type !== "string" || b.data === undefined || b.data === null)
+                return;
+            const schema = Object.prototype.hasOwnProperty.call(BLOCKS, b.type) ? BLOCKS[b.type] : undefined;
+            if (schema && Object.prototype.hasOwnProperty.call(schema.fields, "data"))
+                checkComparison(c, b.data, c.join(where, "data"));
+        };
+        (Array.isArray(owner.sections) ? owner.sections : []).forEach((s, i) => { if (isObj(s) && Array.isArray(s.blocks))
+            s.blocks.forEach((b, j) => each(b, `${c.join(c.join(at, "sections"), i)}.blocks[${j}]`)); });
+        if (isObj(owner.append))
+            for (const k of keysOf(owner.append))
+                if (Array.isArray(owner.append[k]))
+                    owner.append[k].forEach((b, j) => each(b, c.join(c.join(c.join(at, "append"), k), j)));
     }
     /** Every block of a specification's or a narrative's own sections, and of its appended blocks. */
     function blocksOf(owner) {
@@ -10761,13 +10799,8 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
         const c = new Checker(knownFrom(trial, comparison, collection), registered(), "spec");
         c.shape(spec, SPEC, "", {
             trial: (value, where) => { checkTrial(c, value, where); },
-            comparison: (value, where) => {
-                if (!isComparison(value))
-                    c.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');
-                else
-                    c.problems.push(...validateComparison(value));
-            },
-            collection: value => { c.problems.push(...validateCollection(value)); },
+            comparison: (value, where) => { checkComparison(c, value, where); },
+            collection: (value, where) => { checkCollection(c, value, where); },
             sections: value => {
                 if (!Array.isArray(value))
                     return;
@@ -10781,9 +10814,14 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
                 });
             },
         });
-        // A trial supplied beside the specification is the one its views read: checked as its own would be.
+        // Data supplied beside the specification is what its views read: checked as its own would be, by the same check.
         if (!spec.trial && options.trial !== undefined && options.trial !== null)
             checkTrial(c, options.trial, "trial");
+        if (!spec.comparison && options.comparison !== undefined && options.comparison !== null)
+            checkComparison(c, options.comparison, "comparison");
+        if (!spec.collection && options.collection !== undefined && options.collection !== null)
+            checkCollection(c, options.collection, "collection");
+        viewData(c, spec, "");
         storyChecks(c, spec, "", specNeeds(spec, c.known, trial, comparison));
         sectionReadings(c, spec.sections, "", own?.sections);
         // A composition copies its inputs into the specification (a narrative's story, its verdict), so the check can find an
@@ -10920,6 +10958,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
                 }
             },
         });
+        viewData(c, narrative, "narrative");
         storyChecks(c, narrative, "narrative", storyObligations(c.known, trial, undefined, blocksOf(narrative), {}, true));
         pointedRule(c, narrative, isObj(trial) && isObj(trial.plan) ? trial.plan.decision_rule : undefined, "the plan's");
         readingsChecks(c, narrative, "narrative", trialSectionsShown(trial, narrative, kept), SECTION_NAMES, sectionKey);
@@ -11175,6 +11214,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
                 }
             },
         });
+        viewData(c, narrative, "narrative");
         storyChecks(c, narrative, "narrative", storyObligations(known, undefined, data, blocksOf(narrative), {}, true));
         pointedRule(c, narrative, data.decision_rule, "the comparison's");
         readingsChecks(c, narrative, "narrative", comparisonSectionsShown(data, narrative, kept), COMPARISON_NAMES, comparisonKey);
@@ -11249,9 +11289,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
                     under(validateNarrative(narrated ? m.narrative : {}, m.trial));
             }
             if (hasComparison && sources === 1) {
-                if (!isComparison(m.comparison))
-                    c.add("error", `${at}.comparison`, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');
-                else
+                if (checkComparison(c, m.comparison, `${at}.comparison`))
                     under(validateComparison(m.comparison, narrated ? m.narrative : {}));
             }
         });

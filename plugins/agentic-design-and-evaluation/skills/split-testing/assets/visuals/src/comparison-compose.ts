@@ -91,7 +91,10 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
   const baseline = [narrative.baseline, dataIn.baseline].find((b): b is string => typeof b === "string" && ids.includes(b));
   const identical = (Array.isArray(narrative.identical) ? narrative.identical : Array.isArray(dataIn.identical) ? dataIn.identical : [])
     .map(g => [...new Set(strings(g).filter(a => ids.includes(a)))]).filter(g => g.length > 1);
-  const data: Comparison = { ...dataIn, alternatives, metrics, ...(baseline ? { baseline } : {}), identical };
+  // The report carries its metrics as given: the sections are composed from those of a known kind, and a metric of no
+  // known kind stays in the data, so checking the report finds what checking its input finds, and nothing the
+  // composition made.
+  const data: Comparison = { ...dataIn, alternatives, ...(baseline ? { baseline } : {}), identical };
 
   const observations = objects<Observation>(dataIn.observations);
   const preferences = objects<Preference>(dataIn.preferences);

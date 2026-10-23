@@ -272,4 +272,71 @@ test("sweep (a selected matrix): every filter form selects the one group of evid
   }
 });
 
+// ------------------------------------------------------------------ data kind × entry path
+
+/** Bad inputs of each kind a report reads, and every way each enters a check: the problems found in the input, under its
+ * place on each path, must be the same set whichever way it enters. */
+const ENTRY_MATRIX = (() => {
+  const badTrial = () => { const t = F.gridTrial({ a: { c1: "PPP" } }); t.runs[1].scenario = ""; t.runs[2].scenario = 0; return t; };
+  const goodTrial = () => F.gridTrial({ a: { c1: "PP" }, b: { c1: "PF" } });
+  const badComparison = () => ({ alternatives: [{ id: "x" }], metrics: [{ id: "m", kind: "weird" }], observations: [{ alternative: "zz", metric: "m", value: 1, case: 3 }] });
+  const goodComparison = () => ({ alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "m", kind: "binary" }], observations: [{ alternative: "x", metric: "m", value: true }] });
+  const badCollection = () => ({ members: [{ id: "one", trial: { runs: [{ arm: "a", scenario: "c1", passed: true }] } }] });
+  const badNarrative = () => ({ titel: "x", decision: { verdict: "adpot", headline: "H." } });
+  const bare = (extra = {}) => ({ title: "T", sections: [], ...extra });
+  const view = data => ({ title: "T", sections: [{ title: "S", reading: "r", blocks: [{ type: "metric", metric: "m", data }] }] });
+  return {
+    "trial": [
+      ["a specification's own", () => V.validateSpec(bare({ trial: badTrial() })), "trial"],
+      ["supplied beside a specification", () => V.validateSpec(bare(), { trial: badTrial() }), "trial"],
+      ["a narrative's", () => V.validateNarrative({}, badTrial()), "trial"],
+      ["the composed report", () => V.validateSpec(V.trialReport(badTrial(), {})), "trial"],
+      ["a collection member's", () => V.validateCollection({ members: [{ id: "m", trial: badTrial() }] }), "collection.members[0].trial"],
+      ["a collection specification member's", () => V.validateCollection({ members: [{ id: "m", spec: bare({ trial: badTrial() }) }] }), "collection.members[0].spec.trial"],
+      ["a member of a collection a specification carries", () => V.validateSpec(bare({ collection: { members: [{ id: "m", trial: badTrial() }] } })), "collection.members[0].trial"],
+      ["a member of a collection supplied beside a specification", () => V.validateSpec(bare(), { collection: { members: [{ id: "m", trial: badTrial() }] } }), "collection.members[0].trial"],
+    ],
+    "comparison": [
+      ["a specification's own", () => V.validateSpec(bare({ comparison: badComparison() })), "comparison"],
+      ["supplied beside a specification", () => V.validateSpec(bare(), { comparison: badComparison() }), "comparison"],
+      ["a view's own data", () => V.validateSpec(view(badComparison())), "sections[0].blocks[0].data"],
+      ["checked alone", () => V.validateComparison(badComparison()), "comparison"],
+      ["the composed report", () => V.validateSpec(V.comparisonReport(badComparison(), {})), "comparison"],
+      ["a collection member's", () => V.validateCollection({ members: [{ id: "m", comparison: badComparison() }] }), "collection.members[0].comparison"],
+      ["a collection specification member's", () => V.validateCollection({ members: [{ id: "m", spec: bare({ comparison: badComparison() }) }] }), "collection.members[0].spec.comparison"],
+      ["a view a trial narrative adds", () => V.validateNarrative({ sections: [{ title: "More", blocks: [{ type: "metric", metric: "m", data: badComparison() }] }] }, goodTrial()), "narrative.sections[0].blocks[0].data"],
+      ["a view a comparison narrative adds", () => V.validateComparison(goodComparison(), { sections: [{ title: "More", blocks: [{ type: "metric", metric: "m", data: badComparison() }] }] }), "narrative.sections[0].blocks[0].data"],
+    ],
+    "collection": [
+      ["a specification's own", () => V.validateSpec(bare({ collection: badCollection() })), "collection"],
+      ["supplied beside a specification", () => V.validateSpec(bare(), { collection: badCollection() }), "collection"],
+      ["checked alone", () => V.validateCollection(badCollection()), "collection"],
+      ["the composed report", () => V.validateSpec(V.collectionReport(badCollection())), "collection"],
+    ],
+    "trial narrative": [
+      ["checked against its trial", () => V.validateNarrative(badNarrative(), goodTrial()), "narrative"],
+      ["the composed report", () => V.validateSpec(V.trialReport(goodTrial(), badNarrative())), "narrative"],
+      ["a collection member's", () => V.validateCollection({ members: [{ id: "m", trial: goodTrial(), narrative: badNarrative() }] }), "collection.members[0].narrative"],
+    ],
+    "comparison narrative": [
+      ["checked against its comparison", () => V.validateComparison(goodComparison(), badNarrative()), "narrative"],
+      ["the composed report", () => V.validateSpec(V.comparisonReport(goodComparison(), badNarrative())), "narrative"],
+      ["a collection member's", () => V.validateCollection({ members: [{ id: "m", comparison: goodComparison(), narrative: badNarrative() }] }), "collection.members[0].narrative"],
+    ],
+  };
+})();
+/** The problems found in the input entered at `at`, each placed within the input. */
+const within = (problems, at) => H.plain(problems).filter(p => p.where === at || p.where.startsWith(`${at}.`) || p.where.startsWith(`${at}[`)).map(p => `${p.level} ${p.where.slice(at.length).replace(/^\./, "") || "(the input)"}: ${p.message}`).sort();
+
+test("sweep (a selected matrix): each kind of data a report reads is checked alike on every path it enters by", () => {
+  for (const [kind, paths] of Object.entries(ENTRY_MATRIX)) {
+    const [first, ...rest] = paths.map(([name, run, at]) => [name, within(run(), at)]);
+    H.ok(first[1].length > 0, `${kind}: the bad input has problems (${first[0]})`);
+    for (const [name, found] of rest) H.equal(found, first[1], `${kind}: ${name} against ${first[0]}`);
+  }
+  // A scenario that is not text is refused as a missing one is.
+  H.equal(within(V.validateSpec({ title: "T", sections: [], trial: { runs: [{ arm: "a", scenario: 0 }, { arm: "a", scenario: false }, { arm: "a", scenario: {} }, { arm: "a", scenario: [] }, { arm: "a", scenario: "c1" }] } }), "trial"),
+    [0, 1, 2, 3].map(i => `error runs[${i}].scenario: a trial run must name its scenario`), "numbers, booleans, objects and lists");
+});
+
 H.report();

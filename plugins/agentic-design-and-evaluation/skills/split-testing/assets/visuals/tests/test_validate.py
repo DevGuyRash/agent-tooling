@@ -119,6 +119,8 @@ def written_corpus() -> list[dict]:
         n({}, "blank"),
         # The same trial borrowed beside a specification, and a filter on an empty or blank case.
         s([{"type": "ladder"}], "blank"),
+        # The bad trial of the entry-path matrix: embedded, supplied beside, and a narrative's.
+        s([], None, trial=BAD_TRIAL), s([], "bad"), n({}, "bad"),
         s([{"type": "text", "text": "x"}], None, arms=[{"id": "a"}, {"id": "a"}], meta=[{"label": "L"}], cases={"zz": "Z"}),
         {"kind": "spec", "input": {"title": "T", "sections": [{"id": "a", "title": "A", "blocks": []}, {"id": "a", "title": "B", "blocks": []}, {"id": "1", "title": "C", "blocks": []}, None, {"title": "D", "blocks": {}}]}, "trial": None},
         {"kind": "spec", "input": {"title": "T", "sections": [], "problems": [{"level": "error", "where": "narrative.x", "message": "m", "hint": "h"}, {"level": "fatal", "where": "w", "message": "m"}, {"where": 3}, None]}, "trial": None},
@@ -129,6 +131,11 @@ def written_corpus() -> list[dict]:
         {"kind": "narrative", "input": "not a narrative", "trial": trial},
     ]
 
+
+# The entry-path matrix's bad inputs: each has problems of its own, which must be found alike however it enters.
+BAD_TRIAL = {"runs": [{"job": "j1", "arm": "a", "scenario": "c1", "repeat": 1, "passed": True, "valid": True}, {"job": "j2", "arm": "a", "scenario": "", "repeat": 2, "passed": True, "valid": True}, {"job": "j3", "arm": "a", "scenario": 0, "repeat": 3, "passed": True, "valid": True}]}
+BAD_COMPARISON = {"alternatives": [{"id": "x"}], "metrics": [{"id": "m", "kind": "weird"}], "observations": [{"alternative": "zz", "metric": "m", "value": 1, "case": 3}]}
+BAD_COLLECTION = {"members": [{"id": "one", "trial": {"runs": [{"arm": "a", "scenario": "c1", "passed": True}]}}]}
 
 # A comparison with a metric of every kind, the context for comparison probes.
 BASE = {
@@ -141,6 +148,7 @@ BASE = {
     "observations": [{"alternative": "pb", "metric": "ate", "value": True}, {"alternative": "jelly", "metric": "minutes", "value": 3}, {"alternative": "pb", "metric": "taste", "value": "great"}, {"alternative": "pb", "metric": "bites", "value": 3, "n": 9}],
     "rankings": [{"order": ["pb", "jelly"]}],
 }
+COMPARISONS = {"base": BASE, "bad": BAD_COMPARISON}
 
 
 def comparison_corpus() -> list[dict]:
@@ -208,6 +216,16 @@ def comparison_corpus() -> list[dict]:
         {"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "blocks": [{"type": "metric", "metric": "own", "data": {"alternatives": [{"id": "x"}], "metrics": [{"id": "own", "kind": "numeric"}]}, "alternatives": ["x", "pb"]}, {"type": "scorecard", "data": {"rows": []}}, {"type": "difference", "pairs": "every", "identical": True, "threshold": None}]}]}, "comparison": None},
         {"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "blocks": [{"type": "metric", "metric": "own", "data": {"alternatives": [{"id": "x"}], "metrics": [{"id": "own", "kind": "numeric"}]}, "alternatives": ["x", "pb"]}]}]}, "comparison": "base"},
     ]
+    # The bad comparison of the entry-path matrix, on every path a specification or a narrative gives it.
+    view = lambda data: {"title": "T", "sections": [{"title": "S", "reading": "r", "blocks": [{"type": "metric", "metric": "m", "data": data}]}]}  # noqa: E731
+    corpus += [
+        {"kind": "spec", "input": {"title": "T", "sections": [], "comparison": BAD_COMPARISON}, "comparison": None},
+        {"kind": "spec", "input": {"title": "T", "sections": []}, "comparison": "bad"},
+        {"kind": "spec", "input": view(BAD_COMPARISON), "comparison": None},
+        {"kind": "spec", "input": {**view(BAD_COMPARISON), "sections": [{"title": "S", "reading": "r", "blocks": [{"type": "scorecard", "data": {"rows": []}}, {"type": "decision-matrix", "data": "none"}]}]}, "comparison": None},
+        {"kind": "comparison", "input": BAD_COMPARISON},
+        {"kind": "comparison", "input": BASE, "narrative": {"sections": [{"title": "More", "blocks": [{"type": "metric", "metric": "m", "data": BAD_COMPARISON}]}], "append": {"results": [{"type": "scorecard", "data": BAD_COMPARISON}]}}},
+    ]
     return corpus
 
 
@@ -219,7 +237,7 @@ class ComparisonAgreementTest(unittest.TestCase):
         self.assertGreater(len(corpus), 1500)
         with Scratch() as directory:
             path = directory / "corpus.json"
-            path.write_text(json.dumps({"comparisons": {"base": BASE}, "entries": corpus}), encoding="utf-8")
+            path.write_text(json.dumps({"comparisons": COMPARISONS, "entries": corpus}), encoding="utf-8")
             result = run_node(TESTS / "engine.cjs", "--corpus", path, "--out", directory / "page.json", timeout=300)
             self.assertEqual(result.returncode, 0, result.stderr[-3000:])
             page = json.loads((directory / "page.json").read_text(encoding="utf-8"))
@@ -229,7 +247,7 @@ class ComparisonAgreementTest(unittest.TestCase):
             if entry["kind"] == "comparison":
                 ours = R.validate_comparison(entry["input"], entry["narrative"]) if "narrative" in entry else R.validate_comparison(entry["input"])
             else:
-                ours = R.validate_spec(entry["input"], None, BASE if entry.get("comparison") else None)
+                ours = R.validate_spec(entry["input"], None, COMPARISONS[entry["comparison"]] if entry.get("comparison") else None)
             if ours != theirs:
                 differ.append(f"input {json.dumps(entry)[:400]}\n  report.py: {json.dumps(ours)[:900]}\n  page:      {json.dumps(theirs)[:900]}")
         self.assertFalse(differ, f"{len(differ)} of {len(corpus)} inputs differ; the first:\n" + "\n".join(differ[:4]))
@@ -280,6 +298,11 @@ def collection_corpus() -> list[dict]:
         s([{"type": "decisions"}, {"type": "report-compare"}], None),
         {"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "blocks": [{"type": "timeline", "members": ["m1"]}]}], "collection": COLLECTION}, "collection": None},
         {"kind": "spec", "input": {"title": "T", "sections": [], "collection": {"members": [member(), member()]}}, "collection": None},
+        # The bad collection of the entry-path matrix, carried and supplied beside; and its trial and comparison as members.
+        {"kind": "spec", "input": {"title": "T", "sections": [], "collection": BAD_COLLECTION}, "collection": None},
+        {"kind": "spec", "input": {"title": "T", "sections": []}, "collection": "bad"},
+        {"kind": "collection", "input": BAD_COLLECTION},
+        {"kind": "collection", "input": {"members": [{"id": "t", "trial": BAD_TRIAL}, {"id": "c", "comparison": BAD_COMPARISON}, {"id": "s", "spec": {"title": "T", "sections": [], "trial": BAD_TRIAL, "comparison": BAD_COMPARISON}}]}},
     ]
     return corpus
 
@@ -292,14 +315,14 @@ class CollectionAgreementTest(unittest.TestCase):
         self.assertGreater(len(corpus), 400)
         with Scratch() as directory:
             path = directory / "corpus.json"
-            path.write_text(json.dumps({"trials": {}, "collections": {"base": COLLECTION}, "entries": corpus}), encoding="utf-8")
+            path.write_text(json.dumps({"trials": {}, "collections": {"base": COLLECTION, "bad": BAD_COLLECTION}, "entries": corpus}), encoding="utf-8")
             result = run_node(TESTS / "validate.cjs", "--corpus", path, "--out", directory / "page.json", timeout=300)
             self.assertEqual(result.returncode, 0, result.stderr[-3000:])
             page = json.loads((directory / "page.json").read_text(encoding="utf-8"))
         self.assertEqual(len(page), len(corpus))
         differ = []
         for entry, theirs in zip(corpus, page):
-            ours = R.validate_collection(entry["input"]) if entry["kind"] == "collection" else R.validate_spec(entry["input"], None, None, COLLECTION if entry.get("collection") else None)
+            ours = R.validate_collection(entry["input"]) if entry["kind"] == "collection" else R.validate_spec(entry["input"], None, None, {"base": COLLECTION, "bad": BAD_COLLECTION}[entry["collection"]] if entry.get("collection") else None)
             if ours != theirs:
                 differ.append(f"input {json.dumps(entry)[:400]}\n  report.py: {json.dumps(ours)[:900]}\n  page:      {json.dumps(theirs)[:900]}")
         self.assertFalse(differ, f"{len(differ)} of {len(corpus)} inputs differ; the first:\n" + "\n".join(differ[:4]))
@@ -355,6 +378,86 @@ class FromTrialAgreementTest(unittest.TestCase):
                     self.assertEqual(R.from_trial(json.loads(path.read_text(encoding="utf-8"))), json.loads(result.stdout))
 
 
+def within(problems: list[dict], at: str) -> list[str]:
+    """The problems found in an input entered at `at`, each placed within the input (as validate.cjs within)."""
+    out = [f"{p['level']} {p['where'][len(at):].lstrip('.') or '(the input)'}: {p['message']}" for p in problems if p["where"] == at or p["where"].startswith(at + ".") or p["where"].startswith(at + "[")]
+    return sorted(out)
+
+
+class EntryPathMatrixTest(unittest.TestCase):
+    """Each kind of data is checked by one function on every path it enters by: report.py's API and its command line
+    find the same problems in the same bad input, wherever it enters, and the page's checker agrees (the corpora)."""
+
+    def cli(self, *files: tuple[str, object]) -> list[dict]:
+        with Scratch() as directory:
+            args: list[object] = ["--check"]
+            for flag, content in files:
+                path = directory / f"{flag.strip('-')}.json"
+                path.write_text(json.dumps(content), encoding="utf-8")
+                args += [flag, path]
+            result = run_python(REPORT, *args)
+        found = []
+        for line in result.stderr.splitlines():
+            level, _, rest = line.partition(": ")
+            if level in ("error", "warning"):
+                where, _, message = rest.partition(": ")
+                found.append({"level": level, "where": where, "message": message})
+        return found
+
+    def test_each_kind_is_checked_alike_on_every_path(self) -> None:
+        bare = {"title": "T", "sections": []}
+        view = {"title": "T", "sections": [{"title": "S", "reading": "r", "blocks": [{"type": "metric", "metric": "m", "data": BAD_COMPARISON}]}]}
+        good_trial = json.loads((EXAMPLES / "fictional-trial.json").read_text(encoding="utf-8"))
+        good_comparison = {"alternatives": [{"id": "x"}, {"id": "y"}], "metrics": [{"id": "m", "kind": "binary"}], "observations": [{"alternative": "x", "metric": "m", "value": True}]}
+        bad_narrative = {"titel": "x", "decision": {"verdict": "adpot", "headline": "H."}}
+        matrix = {
+            "trial": [
+                ("a specification's own", R.validate_spec({**bare, "trial": BAD_TRIAL}), "trial"),
+                ("supplied beside a specification", R.validate_spec(bare, BAD_TRIAL), "trial"),
+                ("a narrative's", R.validate_narrative({}, BAD_TRIAL), "trial"),
+                ("a collection member's", R.validate_collection({"members": [{"id": "m", "trial": BAD_TRIAL}]}), "collection.members[0].trial"),
+                ("a collection specification member's", R.validate_collection({"members": [{"id": "m", "spec": {**bare, "trial": BAD_TRIAL}}]}), "collection.members[0].spec.trial"),
+                ("a member of a collection supplied beside", R.validate_spec(bare, None, None, {"members": [{"id": "m", "trial": BAD_TRIAL}]}), "collection.members[0].trial"),
+                ("report.py --trial", self.cli(("--trial", BAD_TRIAL)), "trial"),
+                ("report.py --spec --trial", self.cli(("--spec", bare), ("--trial", BAD_TRIAL)), "trial"),
+            ],
+            "comparison": [
+                ("a specification's own", R.validate_spec({**bare, "comparison": BAD_COMPARISON}), "comparison"),
+                ("supplied beside a specification", R.validate_spec(bare, None, BAD_COMPARISON), "comparison"),
+                ("a view's own data", R.validate_spec(view), "sections[0].blocks[0].data"),
+                ("checked alone", R.validate_comparison(BAD_COMPARISON), "comparison"),
+                ("a collection member's", R.validate_collection({"members": [{"id": "m", "comparison": BAD_COMPARISON}]}), "collection.members[0].comparison"),
+                ("a view a trial narrative adds", R.validate_narrative({"sections": [{"title": "More", "blocks": [{"type": "metric", "metric": "m", "data": BAD_COMPARISON}]}]}, good_trial), "narrative.sections[0].blocks[0].data"),
+                ("report.py --data", self.cli(("--data", BAD_COMPARISON)), "comparison"),
+                ("report.py --spec --data", self.cli(("--spec", bare), ("--data", BAD_COMPARISON)), "comparison"),
+            ],
+            "collection": [
+                ("a specification's own", R.validate_spec({**bare, "collection": BAD_COLLECTION}), "collection"),
+                ("supplied beside a specification", R.validate_spec(bare, None, None, BAD_COLLECTION), "collection"),
+                ("checked alone", R.validate_collection(BAD_COLLECTION), "collection"),
+                ("report.py --collection", self.cli(("--collection", BAD_COLLECTION)), "collection"),
+                ("report.py --spec --collection", self.cli(("--spec", bare), ("--collection", BAD_COLLECTION)), "collection"),
+            ],
+            "trial narrative": [
+                ("checked against its trial", R.validate_narrative(bad_narrative, good_trial), "narrative"),
+                ("a collection member's", R.validate_collection({"members": [{"id": "m", "trial": good_trial, "narrative": bad_narrative}]}), "collection.members[0].narrative"),
+                ("report.py --trial --narrative", self.cli(("--trial", good_trial), ("--narrative", bad_narrative)), "narrative"),
+            ],
+            "comparison narrative": [
+                ("checked against its comparison", R.validate_comparison(good_comparison, bad_narrative), "narrative"),
+                ("a collection member's", R.validate_collection({"members": [{"id": "m", "comparison": good_comparison, "narrative": bad_narrative}]}), "collection.members[0].narrative"),
+                ("report.py --data --narrative", self.cli(("--data", good_comparison), ("--narrative", bad_narrative)), "narrative"),
+            ],
+        }
+        for kind, paths in matrix.items():
+            first_name, first_problems, first_at = paths[0]
+            reference = within(first_problems, first_at)
+            self.assertTrue(reference, f"{kind}: the bad input has problems")
+            for name, problems, at in paths[1:]:
+                with self.subTest(kind=kind, path=name):
+                    self.assertEqual(within(problems, at), reference, f"{kind}: {name} against {first_name}")
+
+
 class TrialEntryTest(unittest.TestCase):
     def test_report_check_refuses_a_borrowed_trial_run_naming_no_scenario(self) -> None:
         trial = {"runs": [{"job": "j1", "arm": "a", "scenario": "c1", "repeat": 1, "passed": True, "valid": True}, {"job": "j2", "arm": "a", "scenario": "", "repeat": 2, "passed": False, "valid": True}]}
@@ -408,6 +511,7 @@ class CheckerAgreementTest(unittest.TestCase):
         blank["runs"][0].pop("scenario", None)
         blank["runs"][1]["scenario"] = ""
         cls.trials["blank"] = blank
+        cls.trials["bad"] = BAD_TRIAL
 
     def test_block_types_match_the_registry(self) -> None:
         self.compare([{"kind": "types"}], {})
