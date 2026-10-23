@@ -324,6 +324,21 @@ class PluginPortTests(unittest.TestCase):
                     plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
                 self.assertFalse(output.exists())
 
+    def test_a_link_to_an_archived_agent_follows_it(self) -> None:
+        cases = {"codex": ('.claude-plugin/plugin.json', '.codex/agents/old.toml', 'name="retired"\ndescription="Old."\ndeveloper_instructions="Old."\n'),
+                 "claude": ('.codex-plugin/plugin.json', 'agents/old.md', '---\nname: retired\ndescription: Old.\n---\nOld.\n')}
+        for target, (manifest, agent, text) in cases.items():
+            with self.subTest(target=target):
+                source = self.root / f"archive-link-{target}"
+                write(source / manifest, '{"name":"kit","version":"1.0.0"}')
+                write(source / agent, text)
+                (source / "old-agent-copy").symlink_to(agent)
+                output = self.root / f"archived-{target}"
+                plugin_port.convert_plugin(source, target, output, mode="strict", overwrite=False)
+                self.assertEqual(text, (output / "old-agent-copy").read_text())
+                self.assertTrue((output / "old-agent-copy").resolve().is_relative_to((output / ".plugin-portability/original-agents").resolve()))
+                plugin_port.validate_symlink_tree(output)
+
     def test_marketplace_child_without_a_manifest_takes_the_catalogs_host(self) -> None:
         market = self.root / "codex-market-src"
         child = market / "plugins/kit"

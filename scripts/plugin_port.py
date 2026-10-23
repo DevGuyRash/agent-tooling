@@ -1545,6 +1545,23 @@ def mark_preserved_host_specific(root: Path, target: str, report: Report) -> Non
             report.add_preserved("codex-manifest", ".codex-plugin/plugin.json", "Codex manifest preserved for round-trip metadata")
 
 
+def archive_superseded_agents(out_root: Path, host: str, report: Report, kind: str, note: str) -> None:
+    """Move a host's superseded agent definitions out of discovery; a retained link to one follows it into the archive."""
+    moved: dict[Path, Path] = {}
+    for old_path in _agent_files(out_root, host):
+        archive = out_root / PORTABILITY_DIR / "original-agents" / old_path.relative_to(out_root)
+        archive.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(old_path), str(archive))
+        moved[old_path] = archive
+        report.add_preserved(kind, archive.relative_to(out_root).as_posix(), note)
+    if moved:
+        for link in [path for path in out_root.rglob("*") if path.is_symlink()]:
+            target = Path(os.path.normpath(link.parent / os.readlink(link)))
+            if target in moved:
+                link.unlink()
+                link.symlink_to(os.path.relpath(moved[target], link.parent))
+
+
 def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwrite: bool, explicit_host: str | None = None, model_map: dict[str, str] | None = None) -> Report:
     pkg = detect_plugin(source, explicit_host=explicit_host)
     agents = agent_documents(pkg.root, target, model_map, source_host=pkg.host)
@@ -1561,12 +1578,7 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
 
     if target == "codex":
         if pkg.host == "claude":  # Claude definitions are authoritative, so copied Codex ones are superseded
-            for old_path in _agent_files(out_root, "codex"):
-                relative = old_path.relative_to(out_root)
-                archive = out_root / PORTABILITY_DIR / "original-agents" / relative
-                archive.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(old_path), str(archive))
-                report.add_preserved("original-codex-agent", archive.relative_to(out_root).as_posix(), "Superseded agent source is inactive; the current Claude definition supplies the Codex agent")
+            archive_superseded_agents(out_root, "codex", report, "original-codex-agent", "Superseded agent source is inactive; the current Claude definition supplies the Codex agent")
         convert_commands_to_codex_skills(out_root, report, mode=mode)
         normalize_codex_skills(out_root, report, mode=mode)
         hooks = load_hooks_from_plugin(out_root, pkg.claude_manifest or pkg.codex_manifest)
@@ -1578,12 +1590,7 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
     elif target == "claude":
         from_native_codex = pkg.host == "codex"  # Codex definitions are authoritative, so copied Claude ones are superseded
         if from_native_codex:
-            for old_path in _agent_files(out_root, "claude"):
-                relative = old_path.relative_to(out_root)
-                archive = out_root / PORTABILITY_DIR / "original-agents" / relative
-                archive.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(old_path), str(archive))
-                report.add_preserved("original-claude-agent", archive.relative_to(out_root).as_posix(), "Superseded agent source is inactive; the current Codex definition supplies the Claude agent")
+            archive_superseded_agents(out_root, "claude", report, "original-claude-agent", "Superseded agent source is inactive; the current Codex definition supplies the Claude agent")
         quarantine_root_claude_context(out_root, report)
         normalize_claude_skills(out_root, report, mode=mode)
         normalize_claude_markdown_components(out_root, report, mode=mode)
