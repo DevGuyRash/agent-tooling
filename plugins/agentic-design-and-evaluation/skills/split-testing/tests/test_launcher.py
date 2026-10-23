@@ -84,6 +84,16 @@ class LauncherTest(unittest.TestCase):
     def result(self, arm="a", scenario="make-file"):
         return json.loads((self.out / "runs" / f"{scenario}__{arm}__r1" / "result.json").read_text())
 
+    def test_the_probe_names_the_listed_skills_the_arm_did_not_place(self):
+        # whatever a harness or a copied login adds to what the executor lists (an account's skills, say) shows in the
+        # probe, by name, whichever harness it is: the arm placed helper, and the executor listed one more
+        self.plan({"a": self.arm(resources={"skills/helper": "skills/helper"})})
+        r = self.run_plan("list-account-skill")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("the executor listed 1 skill the arm did not place: account-extra", r.stdout + r.stderr)
+        notes = [n for p in self.out.glob("probes/*/probe.json") for n in json.loads(p.read_text()).get("notes", [])]
+        self.assertIn("the executor listed 1 skill the arm did not place: account-extra", notes)
+
     def test_a_launcher_arm_runs_every_turn_confined_and_is_scored_from_its_record(self):
         self.plan({"a": self.arm(resources={"skills/helper": "skills/helper"}, watch=["~/.fake/settings.json"])})
         r = self.run_plan()

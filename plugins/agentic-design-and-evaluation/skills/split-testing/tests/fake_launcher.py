@@ -41,6 +41,7 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
                         permission bits of what it was copied into $TRIAL_HARNESS/sign-in-modes-<turn>.json, and
                         whether each is inside its run's directory into $TRIAL_HARNESS/sign-in-where-<turn>.json
     signed-in-stash     as signed-in, and a scenario's first turn copies its sign-in to ~/.config/stash/sign-in
+    list-account-skill  its record lists the skills in ~/skills and one more, "account-extra", that no arm placed
     leak                every call prints the key variable's value, FAKE_LAUNCHER_MARK, and ~/.fake-sign-in on
                         standard error, and an arm's on standard output too
     matrix              every call prints every credential it holds (its key, FAKE_SECRET, its copied files) on
@@ -277,6 +278,8 @@ def main():
             record["limits"] = ["a pretend agent whose home does not stay in its run"]
         elif MODE != "no-transcripts":
             record["transcripts"] = ["harness/home/.fake/state.json"]
+        if MODE == "list-account-skill":  # its skill listing: what its home holds, and one an account brought
+            record["listed"] = {**{p.parent.name: "" for p in HOME.glob("skills/*/SKILL.md")}, "account-extra": "from elsewhere"}
         if MODE.startswith("matrix"):  # a transcript named through a link to it, as a tool's "current session" link is,
             if not (STATE / "current").is_symlink():  # and one named through its home's cache directory
                 os.symlink("state.json", STATE / "current")
