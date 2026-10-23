@@ -146,7 +146,7 @@ def main():
         prompt = Path(os.environ["TRIAL_PROMPT_FILE"]).read_text() if TURN else ""
         flag = os.environ.get("FAKE_JUDGE_SLOW_FLAG" if judging else "FAKE_SLOW_FLAG")
         if flag and Path(flag).exists() and TURN == 1 and ("out.txt written" if judging else "create out.txt") in prompt:
-            (harness / "started").write_text("")
+            (harness / "started").write_text(os.environ.get("TRIAL_MODEL", ""))  # which holder it is
             time.sleep(60)
     if MODE == "show-env":  # what an executor it started would see: its environment and working directory
         (HOME / f"seen-env-{TURN}.json").write_text(json.dumps({"env": dict(os.environ), "cwd": os.getcwd(), "argv": sys.argv}))
@@ -277,10 +277,11 @@ def main():
             record["limits"] = ["a pretend agent whose home does not stay in its run"]
         elif MODE != "no-transcripts":
             record["transcripts"] = ["harness/home/.fake/state.json"]
-        if MODE.startswith("matrix"):  # a transcript named through a link to it, as a tool's "current session" link is
-            if not (STATE / "current").is_symlink():
+        if MODE.startswith("matrix"):  # a transcript named through a link to it, as a tool's "current session" link is,
+            if not (STATE / "current").is_symlink():  # and one named through its home's cache directory
                 os.symlink("state.json", STATE / "current")
-            record["transcripts"].append("harness/home/.fake/current")
+            (HOME / ".cache").mkdir(exist_ok=True)
+            record["transcripts"] += ["harness/home/.fake/current", "harness/home/.cache/../.fake/state.json"]
         Path(os.environ["TRIAL_RECORD"]).write_text(json.dumps(record))
     if MODE == "plant-links" and "create out.txt" in message:
         subprocess.run(["sh", "-c", 'rm -f out.txt && mkfifo out.txt && cd "$1" && rm -rf harness final-0.md && '

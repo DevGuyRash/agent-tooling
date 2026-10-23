@@ -45,8 +45,9 @@ class LauncherTest(unittest.TestCase):
               "---\nname: helper\ndescription: Helps with things.\n---\n"
               "This helper skill line is long enough to identify the skill by its content alone.\n")
         self.out = self.tmp / "out"
-        self.xdg = self.tmp / "xdg"  # where the runtime keeps its copies of credentials, outside every run directory
-        self.xdg.mkdir(mode=0o700)
+        # where the runtime keeps its copies of credentials, outside every run directory: under /tmp, as it does
+        self.xdg = Path(tempfile.mkdtemp(prefix="xdg-", dir="/tmp"))
+        self.addCleanup(shutil.rmtree, self.xdg, True)
 
     def tearDown(self):
         subprocess.run(["chmod", "-R", "u+rwx", str(self.tmp)], capture_output=True)
@@ -783,6 +784,17 @@ class LauncherTest(unittest.TestCase):
             trial._sweep_copies(out, "run")
         self.assertEqual(list((out / ".copies").iterdir()), [])
 
+    def test_reading_the_journal_during_a_run_never_removes_a_note_being_written(self):
+        # a run asks the journal what it holds while other runs write their notes (each through a temporary file): only
+        # the sweep, which holds the directory before anything else runs, removes a temporary file an interruption left
+        out = self.tmp / "out-unit"
+        writing = out / ".copies" / "0123456789abcdef.json.k3j2.tmp"
+        write(writing, '{"private"')
+        self.assertEqual(trial._held(out, out / "runs"), [])
+        self.assertTrue(writing.exists())
+        trial._sweep_copies(out, "run")
+        self.assertFalse(writing.exists())
+
     def test_a_home_whose_cleanup_fails_keeps_its_run_tracked_until_a_sweep_clears_it(self):
         # a run that signs in from its environment alone still has its home cleared, and one whose home cannot be
         # cleared stays tracked (so it is not run again, or set aside with a credential in it) until a sweep clears it
@@ -856,6 +868,71 @@ class LauncherTest(unittest.TestCase):
         self.assertIsNone(trial._transcripts_problem(record, job))
         self.assertEqual(list((home / ".tool" / "scratch").iterdir()), [])  # passed through, and emptied
 
+    def test_a_journal_entry_whose_copies_directory_was_replaced_stays_tracked_and_its_home_is_still_cleared(self):
+        # a link (or anything but the real directory) where a genuine entry's copies were is never followed or taken for
+        # the entry's own: the entry stays, its run held, while its home is cleared all the same
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        home.mkdir(parents=True)
+        write(self.tmp / "sign-in", "".join(["sess", "-", os.urandom(16).hex()]))
+        arm = {"copy": {".fake-sign-in": str(self.tmp / "sign-in")}}
+        decoy = self.tmp / "decoy"
+        write(decoy / "keep.txt", "not the runtime's\n")
+        with mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)):
+            entry, marker = trial._start_copies(out, job, arm)
+            trial._place_copies(arm, home, Path(entry["private"]))
+            write(home / ".tool" / "cache", "a tool's own sign-in cache\n")
+            shutil.rmtree(entry["private"])
+            os.symlink(decoy, entry["private"])  # what an unconfined agent could leave there
+            trial._sweep_copies(out, "recheck")
+        self.assertTrue(marker.exists() and trial._held(out, job))
+        log = [json.loads(l) for l in (out / "credentials.jsonl").read_text().splitlines()]
+        self.assertEqual(log[-1]["unremoved"], [entry["private"]])
+        self.assertNotIn("ignored", log[-1])
+        self.assertEqual((decoy / "keep.txt").read_text(), "not the runtime's\n")  # never followed
+        self.assertTrue(Path(entry["private"]).is_symlink())  # nor removed
+        self.assertFalse((home / ".tool").exists())  # its home cleared all the same
+
+    def test_nothing_a_run_is_given_may_expose_the_copies_container(self):
+        # what a run is given to read, start, or copy may neither be, hold, nor lie in the directory every run's copied
+        # credentials are kept in: refused as the plan loads, and as each run starts against its run directory's own
+        root = self.xdg / f"trial-copies-{os.getuid()}"
+        (root / "abcd1234").mkdir(parents=True)
+        for setting in ({"readable": [str(self.xdg)]}, {"readable": [str(root / "abcd1234")]},
+                        {"resources": {"skills/x": str(root)}}, {"copy": {".x": str(root / "abcd1234")}}):
+            with self.subTest(**{k: str(v) for k, v in setting.items()}):
+                self.plan({"a": dict(self.arm(), **setting)})
+                r = self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run")
+                self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+                self.assertIn("where the runtime keeps every run's copied credentials", r.stderr)
+        # a run directory that recorded another container than this invocation's is held to its own as each run starts
+        other = Path(tempfile.mkdtemp(prefix="xdg-", dir="/tmp"))
+        self.addCleanup(shutil.rmtree, other, True)
+        self.out.mkdir()
+        (self.out / ".copies-root").write_text(f"{other / f'trial-copies-{os.getuid()}'}\n")
+        self.plan({"a": dict(self.arm(), readable=[str(other)])})
+        r = self.run_plan()
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("where the runtime keeps every run's copied credentials", r.stderr)
+
+    def test_pruning_keeps_what_a_transcript_passes_through_as_cleanup_does(self):
+        # one keep-set: a transcript reached through the private home's cache directory stays reachable once the run's
+        # caches are pruned, as it did once its home was cleared
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        write(home / "sessions" / "s1.jsonl", "a session\n")
+        write(home / ".cache" / "big", "a cache\n")
+        record = {"finished": True, "transcripts": ["harness/home/.cache/../sessions/s1.jsonl"]}
+        write(job / "record.json", json.dumps(record))
+        self.assertIsNone(trial._transcripts_problem(record, job))
+        with mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)):
+            entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]})
+            self.assertTrue(trial._end_copies(out, entry, marker))
+        self.assertIsNone(trial._transcripts_problem(record, job))
+        trial._prune(job)
+        self.assertIsNone(trial._transcripts_problem(record, job))  # still reached as named
+        self.assertEqual((job / record["transcripts"][0]).read_text(), "a session\n")
+
     def test_a_key_is_read_once_and_the_value_the_run_is_given_is_the_one_replaced_in_what_it_prints(self):
         # an env_file whose value depends on where it is read: the runtime reads it once, gives the run that value, and
         # replaces that same value in what the run prints
@@ -905,9 +982,9 @@ class LauncherTest(unittest.TestCase):
     def test_a_run_directory_keeps_the_copies_container_it_first_used_in_a_place_every_sandbox_hides(self):
         secret = "".join(["sess", "-", os.urandom(16).hex()])
         self._signed_in(secret)
-        first, second = self.tmp / "xdg-a", self.tmp / "xdg-b"
+        first, second = (Path(tempfile.mkdtemp(prefix="xdg-", dir="/tmp")) for _ in range(2))
         for d in (first, second):
-            d.mkdir(mode=0o700)
+            self.addCleanup(shutil.rmtree, d, True)
         self.assertEqual(self.run_plan("signed-in", FAKE_LAUNCHER_MARK=secret, XDG_RUNTIME_DIR=str(first)).returncode, 0)
         recorded = (self.out / ".copies-root").read_text().strip()
         self.assertEqual(recorded, str(first / f"trial-copies-{os.getuid()}"))
@@ -926,7 +1003,13 @@ class LauncherTest(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
             self.assertEqual(list(exposed.iterdir()), [])
             where = Path((out / ".copies-root").read_text().strip())
-            self.assertTrue(any(where.is_relative_to(d) for d in (Path("/run"), Path("/tmp"), Path.home())), where)
+            self.assertTrue(any(where.is_relative_to(d) for d in (Path("/run"), Path("/tmp"))), where)
+        # nor under the home, which a run may be given to read in part
+        out = self.tmp / "out-home"
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(out), mode="signed-in",
+                         FAKE_LAUNCHER_MARK=secret, XDG_RUNTIME_DIR=str(self.tmp))
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertFalse(Path((out / ".copies-root").read_text().strip()).is_relative_to(Path.home()))
 
     def test_a_rejudge_whose_sign_in_fails_shows_none_of_what_the_launcher_said(self):
         secret = "".join(["sess", "-", os.urandom(16).hex()])
@@ -1082,16 +1165,21 @@ class LauncherTest(unittest.TestCase):
             for rep in range(1, repeats + 1):
                 result = json.loads((self.out / "runs" / f"make-file__{arm}__r{rep}" / "result.json").read_text())
                 self.assertEqual((result["status"], result["passed"]), ("ok", True), (arm, rep, result))
-                home = (self.out / "runs" / f"make-file__{arm}__r{rep}").resolve() / "harness" / "home"
-                if arm.startswith("L"):
+                job = (self.out / "runs" / f"make-file__{arm}__r{rep}").resolve()
+                home = job / "harness" / "home"
+                if arm.startswith("L"):  # every transcript still reached as named, once cleared and pruned
+                    record = json.loads((job / "record.json").read_text())
+                    self.assertIsNone(trial._transcripts_problem(record, job), (arm, rep))
                     self.assertTrue((home / ".fake" / "state.json").is_file() and (home / ".fake" / "current").is_file())
                 if arm == "H":
                     self.assertEqual((home / ".host" / "session.jsonl").read_text(), "session\n")
 
     def _interrupt(self, env, point):
-        """A run killed at `point`: in a launcher's turn (once the command arm's run, which is not slowed, has been
-        judged and stored), or in a judge's call, or, the host's own execution, once the host's executor has cached its
-        credential and stopped before answering. Whatever it ran is ended with it, as whoever killed it would."""
+        """A run killed at `point`: in a launcher's turn, once every launcher arm is in its turn and the command arm's
+        run, which is not slowed, has been judged and stored; or in a judge's call, once both judges (the plan's, with a
+        copy, and L3's own, from the environment alone) are in one; or, the host's own execution, once the host's executor
+        has cached its credential and stopped before answering. Whatever it ran is ended with it, as whoever killed it
+        would."""
         import signal
         if point == "the host's execution":
             r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), mode="matrix", **env)
@@ -1102,11 +1190,14 @@ class LauncherTest(unittest.TestCase):
         proc = subprocess.Popen([sys.executable, str(SCRIPT), "run", str(self.tmp / "plan.json"), "--out", str(self.out)],
                                 env=dict(os.environ, FAKE_LAUNCHER_MODE="matrix", **env),
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        where = "runs" if point == "a launcher's turn" else "judges"
         done_c = self.out / "runs" / "make-file__C__r1" / "result.json"
 
-        def reached():
-            return [p for p in self.out.rglob("started") if where in p.parts] and (where == "judges" or done_c.exists())
+        def reached():  # every holder interrupted is in its credential-bearing turn
+            if point == "a launcher's turn":
+                return done_c.exists() and all((self.out / "runs" / f"make-file__{arm}__r1" / "harness" / "started").exists()
+                                               for arm in ("L1", "L2", "L3"))
+            judges = {p.read_text() for p in (self.out / "judges").rglob("started")} if (self.out / "judges").exists() else set()
+            return {"pretend-judge", "pretend-judge-3"} <= judges
         try:
             for _ in range(600):
                 if reached():
@@ -1144,7 +1235,8 @@ class LauncherTest(unittest.TestCase):
                   for then in ("run", "recheck", "pairwise")]
         for sandbox, source, point, then in cases:
             with self.subTest(sandbox=sandbox, key=source, interrupted=point, recovered_by=then):
-                xdg = Path(tempfile.mkdtemp(prefix="xdg-", dir=self.tmp))
+                xdg = Path(tempfile.mkdtemp(prefix="xdg-", dir="/tmp"))
+                self.addCleanup(shutil.rmtree, xdg, True)
                 root = xdg / f"trial-copies-{os.getuid()}"
                 sibling_secret = "".join(["sess", "-", "sibling", "-", os.urandom(12).hex()])
                 sibling = root / "zzsiblng" / "0"  # another run's copy, in the same container
