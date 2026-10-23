@@ -339,6 +339,19 @@ class PluginPortTests(unittest.TestCase):
                 self.assertTrue((output / "old-agent-copy").resolve().is_relative_to((output / ".plugin-portability/original-agents").resolve()))
                 plugin_port.validate_symlink_tree(output)
 
+    def test_a_link_to_an_archived_agent_follows_it_through_a_folder_alias(self) -> None:
+        source = self.root / "archive-alias"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        text = 'name="retired"\ndescription="Old."\ndeveloper_instructions="Old."\n'
+        write(source / "definitions/old.toml", text)
+        (source / ".codex").mkdir()
+        (source / ".codex/agents").symlink_to("../definitions")
+        (source / "old-agent-copy").symlink_to(".codex/agents/old.toml")
+        output = self.root / "archived-alias"
+        plugin_port.convert_plugin(source, "codex", output, mode="strict", overwrite=False)
+        self.assertEqual(text, (output / "old-agent-copy").read_text())
+        plugin_port.validate_symlink_tree(output)
+
     def test_marketplace_child_without_a_manifest_takes_the_catalogs_host(self) -> None:
         market = self.root / "codex-market-src"
         child = market / "plugins/kit"

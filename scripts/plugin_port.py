@@ -1550,9 +1550,10 @@ def archive_superseded_agents(out_root: Path, host: str, report: Report, kind: s
     moved: dict[Path, Path] = {}
     for old_path in _agent_files(out_root, host):
         archive = out_root / PORTABILITY_DIR / "original-agents" / old_path.relative_to(out_root)
+        real_path = old_path.resolve()  # a retained link names the real path, which differs under a folder alias
         archive.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(old_path), str(archive))
-        moved[old_path] = archive
+        moved[old_path] = moved[real_path] = archive
         report.add_preserved(kind, archive.relative_to(out_root).as_posix(), note)
     if moved:
         for link in [path for path in out_root.rglob("*") if path.is_symlink()]:
