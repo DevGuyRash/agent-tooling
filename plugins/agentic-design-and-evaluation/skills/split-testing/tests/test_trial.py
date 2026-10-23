@@ -433,12 +433,13 @@ class TrialRunnerTest(unittest.TestCase):
     def test_only_the_provider_key_leaves_the_credential_file(self):
         env_file = self.tmp / "keys.env"
         env_file.write_text("TRIAL_TEST_KEY=not-a-real-key\nOTHER_SECRET=nope\nexport EXPORTED_SECRET=nope\n")
-        prefix = trial._key_prefix(env_file, "TRIAL_TEST_KEY", "ANTHROPIC_API_KEY")
-        out = subprocess.run(prefix + ["sh", "-c", 'printf "%s|%s|%s" "$ANTHROPIC_API_KEY" "${OTHER_SECRET-unset}" "${EXPORTED_SECRET-unset}"'],
-                             capture_output=True, text=True, env={"PATH": "/usr/bin:/bin"}).stdout
-        self.assertEqual(out, "not-a-real-key|unset|unset")
-        with self.assertRaises(trial.TrialError):
-            trial._key_prefix(env_file, "BAD; rm -rf /", None)
+        arm = {"env_file": str(env_file), "api_key_var": "TRIAL_TEST_KEY"}
+        self.assertEqual(trial._resolve_key(arm, "TRIAL_TEST_KEY", "arm"), "not-a-real-key")  # that one value, read once
+        self.assertNotIn("OTHER_SECRET", os.environ)  # and nothing else of the file reaches this process
+        self.assertNotIn("EXPORTED_SECRET", os.environ)
+        for bad in ("BAD; rm -rf /", "OTHER_MISSING"):
+            with self.subTest(var=bad), self.assertRaises(trial.TrialError):
+                trial._resolve_key(arm, bad, "arm")
 
     def test_links_an_agent_plants_never_lead_the_runner_outside_the_run(self):
         victims = self.tmp / "victims"
@@ -1777,6 +1778,33 @@ class TrialRunnerTest(unittest.TestCase):
         job3 = next(iter(res3))
         self.assertNotIn("pruned_build_output", res3[job3])
         self.assertTrue((out3 / "runs" / job3 / "work" / "target" / "CACHEDIR.TAG").exists())
+
+    def test_prune_build_output_keeps_an_artifact_and_a_keep_path_reached_through_links(self):
+        # A scenario's artifact and keep paths are kept where the filesystem takes them: an artifact named through a
+        # link into a Cargo target directory, and a keep path that is a link to a directory inside it, keep that
+        # directory, so a passing run keeps the artifact it was scored on (as origin/main does).
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt", "required": ["made_file", "tool_called"], "artifact": "reports/report.txt",
+            "keep": ["notes"]}))
+        command = ('echo hi > out.txt; faketool x; mkdir -p target/debug target/notes; '
+                   'printf "# This file is a cache directory tag created by cargo.\\n" > target/CACHEDIR.TAG; '
+                   'echo report > target/report.txt; echo note > target/notes/n.txt; echo built > target/debug/binary; '
+                   'ln -s target reports; ln -s target/notes notes')
+        write(self.tmp / "plan.json", json.dumps({
+            "name": "keep-links", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"good": {"executor": "command", "command": command}}, "scenarios": ["scenarios/make-file"]}))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        job, result = next(iter(self.results().items()))
+        self.assertIs(result["passed"], True, result)
+        self.assertNotIn("artifact_missing", result)
+        self.assertNotIn("pruned_build_output", result)
+        work = self.out / "runs" / job / "work"
+        self.assertEqual((work / "reports" / "report.txt").read_text(), "report\n")
+        self.assertEqual((work / "notes" / "n.txt").read_text(), "note\n")
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIs(self.results()[job]["passed"], True)
 
     def test_recheck_after_build_output_pruning_still_scores_the_run(self):
         build_command = ('echo hi > out.txt; faketool x; printf "%s" "$TRIAL_PROMPT" > prompt.txt; '
@@ -4077,12 +4105,13 @@ class ArmJudgeTest(unittest.TestCase):
 
     def footprints(self):
         """What every judge call left in its cell: (cell, who.txt) for each cell a pretend judge was called in."""
-        return sorted((c.parents[3].name, c.read_text().strip()) for c in (self.out / "judges" / ".cells").glob("*/judge/harness/home/who.txt"))
+        return sorted((c.parents[2].name, c.read_text().strip()) for c in (self.out / "judges" / ".cells").glob("*/judge/harness/who.txt"))
 
     def judge(self, name, verdict="pass", reason="fine", usage=(1, 1), reply=None, **settings):
         """A launcher judge on a pretend executable, model `name`, with an endpoint and a key of its own. It answers
         the probe's arithmetic correctly, a run with `verdict` and `reason` and `usage` input and output tokens (or with
-        `reply` as it stands), and a pair of responses with a tie, and writes who.txt in its home: its name, the model
+        `reply` as it stands), and a pair of responses with a tie, and writes who.txt beside its home (which, holding a
+        key, is cleared when it ends; see references/trials.md#keys): its name, the model
         it was asked for, and the endpoint and key it was given. Writing it again changes its answers, as a model behind
         its endpoint might, not the executable that is part of its identity: its answers sit beside it."""
         answer = reply if reply is not None else json.dumps({"verdict": verdict, "reason": reason})
@@ -4096,8 +4125,8 @@ class ArmJudgeTest(unittest.TestCase):
             "#!/bin/sh\n"
             "prompt=$(cat)\n"
             'eval "key=\\${$TRIAL_API_KEY_VAR}"\n'
-            f"printf 'name={name} model=%s base=%s key=%s\\n' \"$TRIAL_MODEL\" \"$TRIAL_BASE_URL\" \"$key\" > \"$HOME/who.txt\"\n"
-            'printf "%s" "$prompt" > "$HOME/prompt-seen.txt"\n'
+            f"printf 'name={name} model=%s base=%s key=%s\\n' \"$TRIAL_MODEL\" \"$TRIAL_BASE_URL\" \"$key\" > \"$TRIAL_HARNESS/who.txt\"\n"
+            'printf "%s" "$prompt" > "$TRIAL_HARNESS/prompt-seen.txt"\n'
             f"cat '{answers / name}.record' > \"$TRIAL_RECORD\"\n"
             'case "$prompt" in\n'
             "  *'sum of 2 and 3'*) case \"$prompt\" in *' is 5.'*) echo '{\"verdict\": \"pass\", \"reason\": \"5\"}' ;;"
@@ -4145,7 +4174,7 @@ class ArmJudgeTest(unittest.TestCase):
             self.assertEqual(v["judge_identity"], self.identity(model), job)
             self.assertIs(v["passed"], passed, job)
             # the judge was started as its arm's judge says: its binary, the model it names, its endpoint and its key
-            self.assertEqual((self.cell(v) / "harness" / "home" / "who.txt").read_text().strip(),
+            self.assertEqual((self.cell(v) / "harness" / "who.txt").read_text().strip(),
                              f"name={model} model={model} base=http://{model}.invalid key=key-of-{model}", job)
         self.assertEqual(len({v["judge_cell"] for v in res.values()}), 4)
         stored = json.loads((self.out / "plan.json").read_text())
@@ -4159,7 +4188,7 @@ class ArmJudgeTest(unittest.TestCase):
             model, verdict, reason = ("judge-a", "fail", "a says fail") if v["arm"] == "alpha" else ("judge-p", "pass", "p says pass")
             self.assertEqual((v["judge"]["verdict"], v["judge"]["reason"], v["judge_identity"]), (verdict, reason, self.identity(model)), job)
             self.assertEqual(v["passed"], verdict == "pass", job)
-            self.assertTrue((self.cell(v) / "harness" / "home" / "who.txt").read_text().startswith(f"name={model} "), job)
+            self.assertTrue((self.cell(v) / "harness" / "who.txt").read_text().startswith(f"name={model} "), job)
 
     def test_a_judged_scenario_with_no_judge_for_its_arm_is_judge_missing(self):
         plan = self.plan(self.arms(alpha=self.judge("judge-a")))  # beta names none, and the plan names none
@@ -4240,7 +4269,7 @@ class ArmJudgeTest(unittest.TestCase):
             self.assertEqual((v["judge"]["reason"], v["judge"]["usage"], v["judge"]["judge_model"]), (reason, usage, model), job)
             self.assertEqual(v["judge_identity"], self.identity(model), job)
             self.assertNotEqual(v["judge_cell"], before[job]["judge_cell"], job)  # asked again, in a cell of its own
-            self.assertTrue((self.cell(v) / "harness" / "home" / "who.txt").read_text().startswith(f"name={model} "), job)
+            self.assertTrue((self.cell(v) / "harness" / "who.txt").read_text().startswith(f"name={model} "), job)
             self.assertIs(v["passed"], True, job)  # beta's judge now passes what it failed
             # the earlier scoring stays on record, its verdict and the cell it was given in included
             earlier = v["history"][-1]
@@ -4427,12 +4456,12 @@ class ArmJudgeTest(unittest.TestCase):
     def test_an_arms_judge_gets_its_resources_read_only(self):
         write(self.tmp / "resources" / "rubric.md", "a rubric\n")
         judge = self.judge("judge-a")
-        write(self.bin / "judge-a", Path(judge["binary"]).read_text() + 'cat "$HOME/notes/rubric.md" > "$HOME/rubric-seen.txt" 2>/dev/null || :\n', 0o755)
+        write(self.bin / "judge-a", Path(judge["binary"]).read_text() + 'cat "$HOME/notes/rubric.md" > "$TRIAL_HARNESS/rubric-seen.txt" 2>/dev/null || :\n', 0o755)
         judge["resources"] = {"notes/rubric.md": "resources/rubric.md"}
         plan = self.plan(self.arms(alpha=judge))
         self.assertEqual(self.run_cli("run", plan, "--out", str(self.out), "--repeats", "1").returncode, 0)
         v = self.results()["make-file__alpha__r1"]
-        self.assertEqual((self.cell(v) / "harness" / "home" / "rubric-seen.txt").read_text(), "a rubric\n")
+        self.assertEqual((self.cell(v) / "harness" / "rubric-seen.txt").read_text(), "a rubric\n")
         copy = self.cell(v) / "harness" / "home" / "notes" / "rubric.md"
         self.assertEqual((copy.read_text(), copy.stat().st_mode & stat.S_IWUSR), ("a rubric\n", 0))  # read-only, as an arm's are
 
@@ -4491,7 +4520,7 @@ class ArmJudgeTest(unittest.TestCase):
         r = self.run_cli("pairwise", str(self.out), "--arms", "alpha,beta")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual(json.loads((self.out / "pairwise" / "alpha__beta.json").read_text())["judge"]["model"], "judge-p")
-        cells = list((self.out / "pairwise" / ".cells").glob("*/order-*/harness/home/who.txt"))
+        cells = list((self.out / "pairwise" / ".cells").glob("*/order-*/harness/who.txt"))
         self.assertEqual(len(cells), 4)  # both orders of two pairs
         self.assertEqual({c.read_text().split()[0] for c in cells}, {"name=judge-p"})
         # with no plan judge there is none for pairwise to use, whatever the arms name
