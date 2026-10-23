@@ -394,7 +394,7 @@ test("every status trial.py records is explained with its own remedy, and no fin
     "setup-failed": [["setup.sh", "300 seconds", "setup_error", "never started"], ["setup.sh"], "repair"],
     "session-changed": [["follow-up", "another session"], ["continue"], "repair"],
     "config-changed": [["watched configuration", "a later turn would load", "stopped before"], ["never its session records, locks or caches"], "repair"],
-    "model-changed": [["another model", "one model"], [], "retry"],
+    "model-changed": [["another model", "one model"], ["exact identifier", "one endpoint"], "repair"],
     "no-record": [["no record"], ["record_error"], "repair"],
     "record-invalid": [["record", "could not be used"], ["record_error", "launching.md"], "repair"],
     "unfinished": [["did not finish", "finished: false"], [], "retry"],
