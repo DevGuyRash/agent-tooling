@@ -63,7 +63,7 @@ class LauncherTest(unittest.TestCase):
 
     def run_cli(self, *args, mode="", **env):
         return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, timeout=600,
-                              env=dict(os.environ, FAKE_LAUNCHER_MODE=mode, XDG_RUNTIME_DIR=str(self.xdg), **env))
+                              env=dict(os.environ, FAKE_LAUNCHER_MODE=mode, **{"XDG_RUNTIME_DIR": str(self.xdg), **env}))
 
     def run_plan(self, mode="", **env):
         return self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), mode=mode, **env)
@@ -327,7 +327,7 @@ class LauncherTest(unittest.TestCase):
         for path in self.out.rglob("*"):
             if path.is_file() and not path.is_symlink():
                 self.assertNotIn(secret.encode(), path.read_bytes(), path)
-        self.assertEqual(list(self.xdg.iterdir()), [])  # the copy itself, outside the run, is gone
+        self.assertEqual(self._copies_left(), [])  # the copy itself, outside the run, is gone
         tracked = list((self.out / ".copies").iterdir())
         log = [json.loads(l) for l in (self.out / "credentials.jsonl").read_text().splitlines()]
         self.assertEqual(len(tracked), 1)
@@ -558,6 +558,10 @@ class LauncherTest(unittest.TestCase):
                               "    return {'made_file': run.file('out.txt').strip() == 'hi', 'sign_in_gone': not left}\n")
         self.plan({"a": arm}, judge=judge)
 
+    def _copies_left(self, xdg=None):
+        """The copies' directories the runtime's container under `xdg` (the test's $XDG_RUNTIME_DIR) still holds."""
+        return [d for c in (xdg or self.xdg).iterdir() if c.name.startswith("trial-copies-") for d in c.iterdir()]
+
     def _no_credential_left(self, secret, output=""):
         self.assertEqual([p for p in self.out.rglob("*") if p.name in (".fake-sign-in", ".fake-auth")], [])
         self.assertNotIn(secret, output)
@@ -565,7 +569,7 @@ class LauncherTest(unittest.TestCase):
             if path.is_file() and not path.is_symlink():
                 self.assertNotIn(secret.encode(), path.read_bytes(), path)
         self.assertEqual(list((self.out / ".copies").iterdir()) if (self.out / ".copies").exists() else [], [])
-        self.assertEqual(list(self.xdg.iterdir()), [])  # and no copy outside the run either
+        self.assertEqual(self._copies_left(), [])  # and no copy outside the run either
 
     def test_a_copied_credential_is_written_owner_only_before_any_byte_and_outside_the_run(self):
         # whatever the umask, the copies' own directory, a copied file, and a copied directory (before anything in it)
@@ -588,15 +592,17 @@ class LauncherTest(unittest.TestCase):
                 arm = {"copy": {rel: str(src)}}
                 with self.subTest(rel=rel), mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)), \
                         mock.patch.object(trial.shutil, "copyfileobj", stop):
-                    private, _ = trial._start_copies(out, home, arm)
+                    entry, _ = trial._start_copies(out, home.parent.parent, arm)
+                    private = Path(entry["private"])
                     self.assertEqual(oct(private.stat().st_mode & 0o777), "0o700")
-                    self.assertEqual(private.parent, self.xdg)
+                    self.assertEqual(oct(private.parent.stat().st_mode & 0o777), "0o700")  # the runtime's own container
+                    self.assertEqual(private.parent, self.xdg / f"trial-copies-{os.getuid()}")
                     with self.assertRaises(OSError):
                         trial._place_copies(arm, home, private)
         finally:
             os.umask(old)
         self.assertEqual(seen, ["0o600", "0o600"])
-        made = [p for p in self.xdg.rglob("*") if p.is_dir() and p.parent != self.xdg]  # the copied directory
+        made = [p for p in self.xdg.rglob("0") if p.is_dir()]  # the copied directory
         self.assertTrue(made)
         self.assertTrue(all(oct(p.stat().st_mode & 0o777) == "0o700" for p in made))
 
@@ -692,7 +698,7 @@ class LauncherTest(unittest.TestCase):
                 finally:
                     os.killpg(proc.pid, signal.SIGKILL)
                     proc.wait()
-                self.assertTrue(list(self.out.rglob(".fake-sign-in")) and list(self.xdg.iterdir()))  # left, interrupted
+                self.assertTrue(list(self.out.rglob(".fake-sign-in")) and self._copies_left())  # left, interrupted
                 if then == "run":
                     r = self.run_plan("signed-in", FAKE_LAUNCHER_MARK=secret)
                     self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -712,7 +718,7 @@ class LauncherTest(unittest.TestCase):
         # directory of the runtime's, one naming the run directory's plan as a placement: never acted on
         mine = self.tmp / "keep-me"
         write(mine / "notes.txt", "the user's own\n")
-        named = self.xdg / "trial-copies-abcd1234"
+        named = self.xdg / f"trial-copies-{os.getuid()}" / "abcd1234"
         write(named / "0", "kept\n")
         forged = {"theirs.json": {"private": str(mine), "placed": [f"runs/{job}/harness/home/.fake-sign-in"]},
                   "plan.json": {"private": str(named), "placed": ["plan.json"]}}
@@ -745,16 +751,86 @@ class LauncherTest(unittest.TestCase):
         write(self.tmp / "auth" / "token", secret)
         arm = {"copy": {".fake-auth": str(self.tmp / "auth")}}
         with mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)):
-            private, marker = trial._start_copies(out, home, arm)
+            entry, marker = trial._start_copies(out, job, arm)
+            private = Path(entry["private"])
             trial._place_copies(arm, home, private)
             with mock.patch.object(trial.shutil, "rmtree", side_effect=OSError("cannot remove")):
-                self.assertFalse(trial._end_copies(out, job, arm, private, marker))
+                self.assertFalse(trial._end_copies(out, entry, marker))
             self.assertTrue(marker.exists() and (private / "0" / "token").exists())
             log = [json.loads(l) for l in (out / "credentials.jsonl").read_text().splitlines()]
             self.assertEqual(log[-1]["unremoved"], [str(private)])
             trial._sweep_copies(out, "run")  # a later sweep, whose removal works, finishes it
         self.assertFalse(marker.exists() or private.exists())
-        self.assertEqual(list(self.xdg.iterdir()), [])
+        self.assertEqual(self._copies_left(), [])
+
+    def test_an_interruption_while_a_run_is_noted_leaves_nothing_the_journal_does_not_name(self):
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        (job / "harness" / "home").mkdir(parents=True)
+        write(self.tmp / "sign-in", "".join(["sess", "-", os.urandom(16).hex()]))
+        arm = {"copy": {".fake-sign-in": str(self.tmp / "sign-in")}}
+        real = os.mkdir
+
+        def stopped(path, *args, **kwargs):  # interrupted once noted, before its copies' directory is made
+            if Path(path).parent.name.startswith("trial-copies-"):
+                raise KeyboardInterrupt
+            return real(path, *args, **kwargs)
+        with mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)):
+            with mock.patch.object(trial.os, "mkdir", stopped), self.assertRaises(KeyboardInterrupt):
+                trial._start_copies(out, job, arm)
+            self.assertEqual(self._copies_left(), [])  # nothing made that is not noted
+            write(out / ".copies" / "0123abcd.json.k3j2.tmp", '{"private"')  # a note whose own writing was interrupted
+            trial._sweep_copies(out, "run")
+        self.assertEqual(list((out / ".copies").iterdir()), [])
+
+    def test_a_home_whose_cleanup_fails_keeps_its_run_tracked_until_a_sweep_clears_it(self):
+        # a run that signs in from its environment alone still has its home cleared, and one whose home cannot be
+        # cleared stays tracked (so it is not run again, or set aside with a credential in it) until a sweep clears it
+        secret = "".join(["sess", "-", os.urandom(16).hex()])
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        write(home / ".tool" / "stash" / "sign-in", secret)  # a tool's own sign-in cache
+        write(home / ".tool" / "session.jsonl", "a session\n")
+        write(job / "record.json", json.dumps({"finished": True, "transcripts": ["harness/home/.tool/session.jsonl"]}))
+        arm = {"secret_env": ["TOKEN"]}
+        real = shutil.rmtree
+
+        def stuck(path, *a, **k):
+            if Path(path).name == "stash":
+                raise OSError("cannot remove")
+            return real(path, *a, **k)
+        with mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)):
+            entry, marker = trial._start_copies(out, job, arm)
+            with mock.patch.object(trial.shutil, "rmtree", stuck):
+                self.assertFalse(trial._end_copies(out, entry, marker))
+            self.assertTrue(marker.exists() and trial._copies_tracked(out, job))
+            log = [json.loads(l) for l in (out / "credentials.jsonl").read_text().splitlines()]
+            self.assertEqual(log[-1]["unremoved"], ["runs/r0123456789abcdef/harness/home/.tool/stash"])
+            trial._sweep_copies(out, "recheck")
+        self.assertFalse(marker.exists() or trial._copies_tracked(out, job) or (home / ".tool" / "stash").exists())
+        self.assertEqual((home / ".tool" / "session.jsonl").read_text(), "a session\n")  # the transcript stays
+
+    def test_an_expanded_key_variable_is_held_apart_from_configuration_like_a_written_one(self):
+        self.plan({"a": dict(self.arm(), api_key_var="${FAKE_KEY_NAME}")})  # whose pass_env holds FAKE_LAUNCHER_MARK
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run", FAKE_KEY_NAME="FAKE_LAUNCHER_MARK")
+        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
+        self.assertIn("api_key_var", r.stderr)
+
+    def test_a_transcript_reached_through_a_link_is_kept_whole_when_the_home_is_cleared(self):
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        write(home / ".tool" / "sessions" / "s1.jsonl", "a session\n")
+        os.symlink("sessions/s1.jsonl", home / ".tool" / "current")
+        os.symlink(".tool", home / ".tool-link")
+        write(home / ".tool" / "cache", "anything else\n")
+        record = {"finished": True, "transcripts": ["harness/home/.tool/current", "harness/home/.tool-link/sessions/s1.jsonl"]}
+        self.assertIsNone(trial._transcripts_problem(record, job))  # what the record validator accepts
+        write(job / "record.json", json.dumps(record))
+        with mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)):
+            entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]})
+            self.assertTrue(trial._end_copies(out, entry, marker))
+        self.assertIsNone(trial._transcripts_problem(record, job))  # is what cleanup keeps
+        self.assertEqual((home / ".tool" / "current").read_text(), "a session\n")
+        self.assertFalse((home / ".tool" / "cache").exists())
 
     def test_a_rejudge_whose_sign_in_fails_shows_none_of_what_the_launcher_said(self):
         secret = "".join(["sess", "-", os.urandom(16).hex()])
@@ -779,6 +855,181 @@ class LauncherTest(unittest.TestCase):
         self.assertIn("could not sign in (exit 77)", r.stderr)
         self.assertFalse(list(self.out.glob("runs/*")))  # no scored run was made
         self._no_credential_left(wrong, r.stdout + r.stderr)  # its stderr.log kept, with what it printed replaced
+
+    # ---- the credential matrix: every source, arm kind and judge, mode, and lifecycle
+
+    def _matrix_secrets(self):
+        """One distinct secret per credential source, assembled at run time."""
+        return {name: "".join(["sess", "-", name, "-", os.urandom(12).hex()])
+                for name in ("env_file", "api_key_var", "secret_env", "copied_file", "copied_dir", "judge_env_file")}
+
+    def _matrix_plan(self, sandbox, secrets, root, sibling):
+        """Arms of every kind holding every credential source they accept, and a launcher judge holding its own: L1 a
+        launcher keyed from an env_file, L2 one keyed from this process's environment, both with secret_env and a copied
+        file and directory; C a command arm and H a host arm with secret_env. Each prints what it holds, caches it in its
+        home as a tool keeps its sign-in, and (L1, L2, C, the judge) records what it can see of the copies' container."""
+        write(self.tmp / "sign-in.json", json.dumps({"access_token": secrets["copied_file"], "user": "me"}))
+        write(self.tmp / "auth" / "token", secrets["copied_dir"] + "\n")
+        write(self.tmp / "keys.env", f"FAKE_KEY={secrets['env_file']}\n")
+        write(self.tmp / "judge.env", f"FAKE_JKEY={secrets['judge_env_file']}\n")
+        see = ["FAKE_COPIES_ROOT", "FAKE_SIBLING"]
+        launcher = {"executor": "launcher", "script": "launcher.py", "model": "pretend-1", "effort": "low",
+                    "instructions": "arms/note.md", "pass_env": ["FAKE_LAUNCHER_MODE", "FAKE_SLOW", *see],
+                    "secret_env": ["FAKE_SECRET"],
+                    "copy": {".fake-sign-in": "sign-in.json", ".fake-auth": "auth"}}
+        command = ('printf "leaked %s\\n" "$FAKE_SECRET" >&2; printf "%s\\n" "$FAKE_SECRET"; mkdir -p "$HOME/.tool-cache"; '
+                   'printf %s "$FAKE_SECRET" > "$HOME/.tool-cache/sign-in"; printf "hi\\n" > out.txt; '
+                   '{ ls -A "$FAKE_COPIES_ROOT" 2>/dev/null | tr "\\n" " "; echo; } > "$TRIAL_HARNESS/visible-c.txt"; '
+                   'cat "$FAKE_SIBLING" >/dev/null 2>&1 && echo readable >> "$TRIAL_HARNESS/visible-c.txt"; '
+                   'printf "out.txt written" > "$TRIAL_REPLY"')
+        arms = {"L1": dict(launcher, api_key_var="FAKE_KEY", env_file="keys.env"),
+                "L2": dict(launcher, api_key_var="FAKE_KEY2"),
+                "C": {"executor": "command", "command": command, "pass_env": see, "secret_env": ["FAKE_SECRET"]},
+                "H": {"executor": "host", "secret_env": ["FAKE_SECRET"], "host_env": True}}
+        judge = {"executor": "launcher", "script": "launcher.py", "model": "pretend-judge",
+                 "pass_env": ["FAKE_LAUNCHER_MODE", *see], "secret_env": ["FAKE_SECRET"], "api_key_var": "FAKE_JKEY",
+                 "env_file": "judge.env", "copy": {".fake-sign-in": "sign-in.json"}}
+        s = self.tmp / "scenarios" / "make-file"
+        write(s / "scenario.json", json.dumps({"prompt": "create out.txt", "required": ["made_file", "nothing_held"],
+                                               "judge": {"question": "Did it report out.txt written?", "pass_when": "it does"}}))
+        write(s / "check.py", "def check(run):\n"  # run before anything else reads the run: nothing it held is left
+                              "    held = [p for p in run.harness.rglob('*') if p.name in ('.fake-sign-in', '.fake-auth', '.tool-cache')]\n"
+                              "    return {'made_file': run.file('out.txt').strip() == 'hi', 'nothing_held': not held}\n")
+        self.plan(arms, judge=judge, sandbox=sandbox)
+        return {"FAKE_KEY2": secrets["api_key_var"], "FAKE_SECRET": secrets["secret_env"],
+                "FAKE_COPIES_ROOT": str(root), "FAKE_SIBLING": str(sibling), "XDG_RUNTIME_DIR": str(root.parent)}
+
+    def _play_hosts(self, secrets):
+        """Carry out every host job waiting in the run directory as a host's controller would: its executor caches the
+        credential it was given in its home, as a tool keeps its sign-in, and leaves a transcript there."""
+        dispatch = self.out / "dispatch.json"
+        for entry in json.loads(dispatch.read_text()) if dispatch.exists() else []:
+            if Path(entry["record"]).exists():
+                continue
+            env = dict(entry["env"], **{n: secrets["secret_env"] for n in entry["pass_env"] if n == "FAKE_SECRET"})
+            subprocess.run(["sh", "-c", 'mkdir -p "$HOME/.tool-cache" "$HOME/.host" && printf %s "$FAKE_SECRET" > '
+                            '"$HOME/.tool-cache/sign-in" && echo session > "$HOME/.host/session.jsonl" && echo hi > out.txt'],
+                           cwd=entry["workdir"], env=env, check=True)
+            Path(entry["reply"]).write_text("out.txt written")
+            Path(entry["record"]).write_text(json.dumps({"finished": True, "transcripts": ["harness/home/.host/session.jsonl"]}))
+
+    def _matrix_run(self, env, secrets, mode="matrix", *args):
+        """`run` into the directory, playing the host for what waits on it, until nothing waits."""
+        outputs = ""
+        for _ in range(3):
+            r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), *args, mode=mode, **env)
+            outputs += r.stdout + r.stderr
+            if r.returncode != 4:
+                break
+            self._play_hosts(secrets)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        return outputs
+
+    def _assert_matrix_clean(self, sets, outputs, root, sibling, sibling_secret, confined):
+        """No secret on disk, in the run directory or the copies' container (but the sibling's own, untouched), no
+        copies' directory or journal entry left, and, confined, nothing of the container visible but a run's own."""
+        values = [v for secrets in sets for v in secrets.values()]
+        for value in values:
+            self.assertNotIn(value, outputs)
+        for path in [*self.out.rglob("*"), *root.rglob("*")]:
+            if path.is_file() and not path.is_symlink():
+                data = path.read_bytes()
+                for value in values:
+                    self.assertNotIn(value.encode(), data, path)
+        self.assertEqual(sorted(p.name for p in root.iterdir()), [sibling.parent.name])  # only another run's copies
+        self.assertEqual(sibling.read_text(), sibling_secret)
+        self.assertEqual(list((self.out / ".copies").iterdir()) if (self.out / ".copies").exists() else [], [])
+        log = [json.loads(l) for l in (self.out / "credentials.jsonl").read_text().splitlines()]
+        self.assertTrue(log and all("unremoved" not in e and "ignored" not in e for e in log), log)
+        seen = [json.loads(p.read_text()) for p in self.out.rglob("visible-*.json")]
+        seen_c = [p.read_text() for p in self.out.rglob("visible-c.txt")]
+        self.assertTrue(seen)
+        for view in seen if confined else []:  # its own copies' directory alone, and never another run's
+            self.assertEqual(len(view["root"]), 1, view)
+            self.assertNotIn(sibling.parent.name, view["root"])
+            self.assertFalse(view["sibling"], view)
+        for view in seen_c if confined else []:
+            self.assertEqual(view.split("\n")[0].strip(), "", view)  # a command arm, which holds no copies, sees none
+            self.assertNotIn("readable", view)
+
+    def _assert_matrix_evidence(self, repeats=1):
+        """Every run valid and passing, its transcripts kept whole (a launcher's, through a link too; a host's)."""
+        for arm in ("L1", "L2", "C", "H"):
+            for rep in range(1, repeats + 1):
+                result = json.loads((self.out / "runs" / f"make-file__{arm}__r{rep}" / "result.json").read_text())
+                self.assertEqual((result["status"], result["passed"]), ("ok", True), (arm, rep, result))
+                home = (self.out / "runs" / f"make-file__{arm}__r{rep}").resolve() / "harness" / "home"
+                if arm.startswith("L"):
+                    self.assertTrue((home / ".fake" / "state.json").is_file() and (home / ".fake" / "current").is_file())
+                if arm == "H":
+                    self.assertEqual((home / ".host" / "session.jsonl").read_text(), "session\n")
+
+    def test_no_credential_survives_any_source_arm_kind_mode_or_interruption(self):
+        # The adversarial sweep: every credential source (env_file, api_key_var from the environment, secret_env, a
+        # copied file, a copied directory) held by every arm kind that accepts it (launcher, command, host) and a launcher
+        # judge, confined and not, run to the end, or interrupted and recovered by run, recheck, or pairwise. Afterwards
+        # no secret is anywhere on disk, no copies' directory or journal entry is left, a confined executor saw no other
+        # run's copies, evidence is kept, and the digests do not depend on any secret.
+        import signal
+        base = Path("/var/tmp") if os.access("/var/tmp", os.W_OK) else self.tmp  # where confinement hides nothing itself
+        for sandbox in (["confined", "none"] if CONFINED else ["none"]):
+            for lifecycle in ("normal", "interrupted, then run", "interrupted, then recheck", "interrupted, then pairwise"):
+                with self.subTest(sandbox=sandbox, lifecycle=lifecycle):
+                    xdg = Path(tempfile.mkdtemp(prefix="split-xdg-", dir=base))
+                    self.addCleanup(shutil.rmtree, xdg, True)
+                    root = xdg / f"trial-copies-{os.getuid()}"
+                    sibling_secret = "".join(["sess", "-", "sibling", "-", os.urandom(12).hex()])
+                    sibling = root / "zzsiblng" / "0"  # another run's copy, in the same container
+                    write(sibling, sibling_secret)
+                    os.chmod(root, 0o700)
+                    subprocess.run(["chmod", "-R", "u+rwx", str(self.out)], capture_output=True)
+                    shutil.rmtree(self.out, ignore_errors=True)
+                    self.assertFalse(self.out.exists())  # each case in a run directory of its own
+                    secrets = self._matrix_secrets()
+                    env = self._matrix_plan(sandbox, secrets, root, sibling)
+                    outputs = ""
+                    if lifecycle == "normal":
+                        outputs += self._matrix_run(env, secrets)
+                        self._assert_matrix_evidence()
+                        # the same runs again with every secret changed: the same conditions and judge, or it is refused
+                        again = self._matrix_secrets()
+                        env = self._matrix_plan(sandbox, again, root, sibling)
+                        outputs += self._matrix_run(env, again, "matrix", "--repeats", "2")
+                        self._assert_matrix_evidence(repeats=2)
+                        runs = [json.loads(p.read_text()) for p in (self.out / "runs").glob("r*/result.json")]
+                        for arm in ("L1", "L2", "C", "H"):
+                            mine = [r for r in runs if r["arm"] == arm]
+                            self.assertEqual(len({json.dumps(r.get("conditions"), sort_keys=True) for r in mine}), 1, arm)
+                            self.assertEqual(len({json.dumps(r.get("judge_identity"), sort_keys=True) for r in mine}), 1, arm)
+                        self._assert_matrix_clean([secrets, again], outputs, root, sibling, sibling_secret,
+                                                  sandbox == "confined")
+                        continue
+                    proc = subprocess.Popen([sys.executable, str(SCRIPT), "run", str(self.tmp / "plan.json"), "--out",
+                                             str(self.out)], env=dict(os.environ, FAKE_LAUNCHER_MODE="matrix", FAKE_SLOW="1", **env),
+                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                    done_c = self.out / "runs" / "make-file__C__r1" / "result.json"  # one run judged and stored before
+                    try:
+                        for _ in range(600):
+                            if list(self.out.rglob("started")) and done_c.exists():
+                                break
+                            time.sleep(0.1)
+                        self.assertTrue(list(self.out.rglob("started")) and done_c.exists())
+                    finally:
+                        os.killpg(proc.pid, signal.SIGKILL)
+                        proc.wait()
+                        # an unconfined launcher outlives the runtime killed under it (a confined one ends with it): ended
+                        # here, as whoever interrupted the run would, so none writes after the recovery below
+                        subprocess.run(["pkill", "-KILL", "-f", str(self.out)], capture_output=True)
+                    self.assertTrue([d for d in root.iterdir() if d.name != "zzsiblng"])  # its copies, left in place
+                    self.assertTrue(list(self.out.rglob(".tool-cache")))  # and what its tools cached in their homes
+                    then = lifecycle.split(", then ")[1]
+                    if then == "run":
+                        outputs += self._matrix_run(env, secrets)
+                        self._assert_matrix_evidence()
+                    else:
+                        r = self.run_cli(then, str(self.out), *(("--arms", "L1,L2") if then == "pairwise" else ()), **env)
+                        outputs += r.stdout + r.stderr
+                    self._assert_matrix_clean([secrets], outputs, root, sibling, sibling_secret, sandbox == "confined")
 
     def test_copies_that_overlap_are_refused(self):
         write(self.tmp / "dir" / "a", "x")

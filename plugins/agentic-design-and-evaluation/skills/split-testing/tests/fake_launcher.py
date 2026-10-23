@@ -43,6 +43,12 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
     signed-in-stash     as signed-in, and a scenario's first turn copies its sign-in to ~/.config/stash/sign-in
     leak                every call prints the key variable's value, FAKE_LAUNCHER_MARK, and ~/.fake-sign-in on
                         standard error, and an arm's on standard output too
+    matrix              every call prints every credential it holds (its key, FAKE_SECRET, its copied files) on
+                        standard error, an arm's on standard output too, caches them in ~/.tool-cache as a tool keeps
+                        its sign-in, refreshes ~/.fake-sign-in by replacing it, names a transcript reached through a
+                        link, and writes what it can see of FAKE_COPIES_ROOT and FAKE_SIBLING into
+                        $TRIAL_HARNESS/visible-<turn>.json; with FAKE_SLOW set, a scenario's first turn waits a
+                        minute ($TRIAL_HARNESS/started marks it)
     signed-in-slow      as signed-in, and a scenario's first turn waits a minute ($TRIAL_HARNESS/started marks it)
     signed-in-slow-probe  as signed-in, and the probe's first turn waits a minute
 """
@@ -113,6 +119,32 @@ def main():
         print(f"leaked {held}", file=sys.stderr)
         if not os.environ.get("TRIAL_SCHEMA_FILE"):
             print(json.dumps({"leaked": held}))
+    if MODE.startswith("matrix"):  # every credential it holds, wherever a careless tool might put it
+        key = os.environ.get("TRIAL_API_KEY_VAR")
+        held = [v for v in (os.environ.get(key) if key else None, os.environ.get("FAKE_SECRET")) if v]
+        held += [(HOME / rel).read_text() for rel in (".fake-sign-in", ".fake-auth/token") if (HOME / rel).is_file()]
+        print("leaked", *held, file=sys.stderr)
+        judging = bool(os.environ.get("TRIAL_SCHEMA_FILE"))
+        if not judging:
+            print(json.dumps({"leaked": held}))
+        (HOME / ".tool-cache").mkdir(exist_ok=True)
+        (HOME / ".tool-cache" / f"sign-in-{TURN}").write_text(" ".join(held))
+        if (HOME / ".fake-sign-in").is_file():  # refreshed, as a tool does: a new file in the old one's place
+            (HOME / ".fake-sign-in.new").write_text((HOME / ".fake-sign-in").read_text())
+            os.replace(HOME / ".fake-sign-in.new", HOME / ".fake-sign-in")
+        try:
+            listing = sorted(os.listdir(os.environ["FAKE_COPIES_ROOT"]))
+        except OSError:
+            listing = None
+        try:
+            sibling = bool(Path(os.environ["FAKE_SIBLING"]).read_text())
+        except OSError:
+            sibling = False
+        harness = Path(os.environ["TRIAL_HARNESS"])
+        (harness / f"visible-{TURN}.json").write_text(json.dumps({"root": listing, "sibling": sibling}))
+        if os.environ.get("FAKE_SLOW") and TURN == 1 and not judging and "create out.txt" in Path(os.environ["TRIAL_PROMPT_FILE"]).read_text():
+            (harness / "started").write_text("")
+            time.sleep(60)
     if MODE == "show-env":  # what an executor it started would see: its environment and working directory
         (HOME / f"seen-env-{TURN}.json").write_text(json.dumps({"env": dict(os.environ), "cwd": os.getcwd(), "argv": sys.argv}))
     if os.environ.get("TRIAL_SCHEMA_FILE"):  # called as a judge
@@ -242,6 +274,10 @@ def main():
             record["limits"] = ["a pretend agent whose home does not stay in its run"]
         elif MODE != "no-transcripts":
             record["transcripts"] = ["harness/home/.fake/state.json"]
+        if MODE.startswith("matrix"):  # a transcript named through a link to it, as a tool's "current session" link is
+            if not (STATE / "current").is_symlink():
+                os.symlink("state.json", STATE / "current")
+            record["transcripts"].append("harness/home/.fake/current")
         Path(os.environ["TRIAL_RECORD"]).write_text(json.dumps(record))
     if MODE == "plant-links" and "create out.txt" in message:
         subprocess.run(["sh", "-c", 'rm -f out.txt && mkfifo out.txt && cd "$1" && rm -rf harness final-0.md && '
