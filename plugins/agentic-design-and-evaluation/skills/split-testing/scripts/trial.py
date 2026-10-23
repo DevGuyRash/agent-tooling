@@ -1830,7 +1830,8 @@ def _copies_places() -> tuple[Path, Path]:
 def _copies_root_path(out: Path | None) -> tuple[Path, bool]:
     """Where a run directory's copies' container is, and whether `out` has recorded it (see _copies_root): the place
     RUN_DIR/.copies-root names, else the first of _copies_places when /run/user/<uid> is the user's own directory,
-    else the second. Never chosen by the environment, so every invocation of this user's uses the same."""
+    reached through no link, else the second. Never chosen by the environment, so every invocation of this user's uses
+    the same."""
     note = out / ".copies-root" if out is not None else None
     recorded = _read(note, follow=False).strip() if note is not None and _there(note) else ""
     run, tmp = _copies_places()
@@ -1839,7 +1840,12 @@ def _copies_root_path(out: Path | None) -> tuple[Path, bool]:
             raise TrialError(f"{note} names {recorded}, which is no copies' directory of the runtime's; remove {note}")
         return Path(recorded), True
     mine = run.parent
-    return (run if mine.is_dir() and mine.stat().st_uid == os.getuid() else tmp), False
+    try:
+        st = os.lstat(mine)
+        ours = stat.S_ISDIR(st.st_mode) and st.st_uid == os.getuid() and os.path.realpath(mine) == str(mine)
+    except OSError:
+        ours = False
+    return (run if ours else tmp), False  # never through a link, which would put copies where it leads
 
 
 def _copies_root(out: Path) -> Path:
@@ -1849,6 +1855,10 @@ def _copies_root(out: Path) -> Path:
     Unnamed files the runtime keeps a run's output in until its credentials are replaced (see _run) are made here
     too."""
     root, recorded = _copies_root_path(out)
+    if os.path.realpath(root.parent) != str(root.parent):  # refused before anything is made or written there
+        raise TrialError(f"{root.parent} is reached through a link, so copied credentials kept under it would sit where "
+                         "the link leads, which confinement does not hide; replace the link with a directory of its "
+                         f"own, or remove {out / '.copies-root'} so a place reached through no link is chosen")
     with contextlib.suppress(FileExistsError):
         os.mkdir(root, 0o700)
     st = os.lstat(root)
@@ -1865,7 +1875,8 @@ def _check_off_copies(paths, what: str):
     """Refuse (TrialError) a host path a run is given (made readable to it, started from, or copied into it) that is,
     holds, or lies inside any place a copies' container can be (see _copies_places): the run could read other runs'
     credentials there, whatever confinement hides."""
-    for given, root in ((given, root) for given in paths for root in _copies_places()):
+    places = {*_copies_places(), *(Path(os.path.realpath(p)) for p in _copies_places())}  # and where a link leads
+    for given, root in ((given, root) for given in paths for root in places):
         for q in {Path(os.path.abspath(given)), Path(os.path.realpath(given))}:
             how = ("is" if q == root else "holds" if root.is_relative_to(q)
                    else "lies inside" if q.is_relative_to(root) else "")
@@ -1909,7 +1920,8 @@ def _with_credentials(arm: dict, job_dir: Path, out: Path, turns):
 def _start_copies(out: Path, job_dir: Path, arm: dict, awaiting: Path | None = None) -> tuple[dict, Path]:
     """Note, in the credential journal (RUN_DIR/.copies/<id>.json), what a run holding credentials will need cleared
     before any credential is placed: its copies' directory (made here, owner-only, in _copies_root, when it copies
-    anything), each placement's path in its private home, the home itself, and what of the home is the runtime's own
+    anything, and made before it is noted, under a name no other run holds, so no note ever names another run's
+    directory; an interruption between the two leaves it empty and unnoted, holding nothing), each placement's path in its private home, the home itself, and what of the home is the runtime's own
     and stays (the arm's resources and stub skills). Paths only, never content. A run interrupted before it is
     cleared is cleared by the next run, recheck, or pairwise on the directory (see _sweep_copies). A host job's is
     noted as it is dispatched, with its `awaiting` marker: every sweep clears its home, and keeps it noted while it
@@ -1918,10 +1930,14 @@ def _start_copies(out: Path, job_dir: Path, arm: dict, awaiting: Path | None = N
     root = _copies_root(out)
     if root.is_relative_to(out) or out.is_relative_to(root):
         raise TrialError(f"the runtime keeps copied credentials in {root}, which is inside the run directory {out} or "
-                         "holds it; set XDG_RUNTIME_DIR, or --out, so that neither is inside the other")
+                         f"holds it; give --out a directory apart from {root}")
     journal = _owned(out / ".copies")
-    private = root / "".join(random.SystemRandom().choices("abcdefghijklmnopqrstuvwxyz0123456789_", k=8)) \
-        if arm.get("copy") else None
+    private = None
+    while arm.get("copy") and private is None:  # made before it is noted, so a note only ever names this run's own
+        candidate = root / "".join(random.SystemRandom().choices("abcdefghijklmnopqrstuvwxyz0123456789_", k=8))
+        with contextlib.suppress(FileExistsError):  # another run's: never claimed, another name taken instead
+            os.mkdir(candidate, 0o700)
+            private = candidate
     entry = {"private": str(private) if private else None,
              "placed": [(home / rel).relative_to(out).as_posix() for rel in arm.get("copy") or {}],
              "home": home.relative_to(out).as_posix(),
@@ -1929,9 +1945,12 @@ def _start_copies(out: Path, job_dir: Path, arm: dict, awaiting: Path | None = N
                       for rel in [*(arm.get("resources") or {}), *(d for d, _ in _stub_files(arm))]],
              **({"awaiting": awaiting.relative_to(out).as_posix()} if awaiting else {})}
     marker = journal / f"{os.urandom(8).hex()}.json"
-    _write_json(marker, entry)
-    if private:
-        os.mkdir(private, 0o700)  # once noted, so an interruption at any point leaves nothing the journal does not name
+    try:
+        _write_json(marker, entry)
+    except BaseException:
+        if private:
+            os.rmdir(private)  # nothing is in it yet
+        raise
     return entry, marker
 
 
