@@ -77,7 +77,7 @@ None of these, nor the working directory, names the run's arm or scenario: the r
 
 What it does:
 
-- **Setup** (`TRIAL_TURN=0`): write the executor's configuration into the private home, and place the instructions where the executor reads standing instructions. It does not start the agent. Exit non-zero to refuse a file already in the way.
+- **Setup** (`TRIAL_TURN=0`): write the executor's configuration into the private home, and place the instructions where the executor reads standing instructions. It does not start the agent. Exit non-zero to refuse a file already in the way: the run is then invalid as `setup-exit-N`, with your exit status N (75 is retried as transient; 77 is a failed sign-in). A setup turn that runs past its timeout (the scenario's `timeout_s`, or the default) is `setup-timeout`, and one after which a watched path cannot be read is `setup-watch-unreadable`.
 - **Turn 1**: start a fresh session with the model, effort and instructions, give it the message literally, let it act without asking for approval (confinement, not the executor, is the boundary), and wait for its final message.
 - **Later turns**: continue that same session with the message.
 - **After every turn**: write the final message to `TRIAL_REPLY` and the record (below) to `TRIAL_RECORD`.
