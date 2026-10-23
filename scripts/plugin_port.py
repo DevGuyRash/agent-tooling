@@ -219,6 +219,7 @@ class AgentDocument:
     path: Path
     content: str
     warnings: tuple[str, ...] = ()
+    origin: str = ""
 
 
 def _agent_files(root: Path, host: str) -> list[Path]:
@@ -285,42 +286,38 @@ def _toml_value(value: Any) -> str:
     die(f"unsupported agent TOML value: {type(value).__name__}")
 
 
-def _validate_codex_agent(fields: dict[str, Any], path: Path) -> None:
-    allowed = {"name", "description", "developer_instructions", "model", "model_reasoning_effort", "model_reasoning_summary", "model_verbosity", "personality", "service_tier", "nickname_candidates", "features", "skills"}
-    unknown = set(fields) - allowed
-    if unknown:
-        die(f"{path}: cannot preserve unsupported Codex agent fields: {', '.join(sorted(unknown))}")
-    for key in ("model", "model_reasoning_effort", "service_tier"):
-        if key in fields:
-            _agent_string(fields[key], key, path)
-    for key, choices in {
-        "model_reasoning_summary": {"auto", "concise", "detailed", "none"},
-        "model_verbosity": {"low", "medium", "high"},
-        "personality": {"none", "friendly", "pragmatic"},
-    }.items():
-        if key in fields and (not isinstance(fields[key], str) or fields[key] not in choices):
-            die(f"{path}: invalid agent {key}; expected {', '.join(sorted(choices))}")
-    if "nickname_candidates" in fields:
-        candidates = fields["nickname_candidates"]
-        if not isinstance(candidates, list) or not candidates or any(not isinstance(item, str) or not item.strip() for item in candidates):
-            die(f"{path}: agent nickname_candidates must contain non-empty strings")
-    if "features" in fields:
-        features = fields["features"]
-        allowed_features = {"shell_tool", "apps", "plugins", "memories", "request_permissions_tool"}
-        if not isinstance(features, dict) or any(key not in allowed_features or value is not False for key, value in features.items()):
-            die(f"{path}: cannot preserve Codex agent features except supported capability disables")
-    if "skills" in fields:
-        skills = fields["skills"]
-        if not isinstance(skills, dict) or set(skills) - {"config", "bundled", "include_instructions"}:
-            die(f"{path}: cannot preserve unsupported Codex agent skills settings")
-        if "include_instructions" in skills and skills["include_instructions"] is not False:
-            die(f"{path}: cannot preserve skills.include_instructions except false")
-        if "bundled" in skills and skills["bundled"] != {"enabled": False}:
-            die(f"{path}: cannot preserve skills.bundled except enabled=false")
-        if "config" in skills:
-            entries = skills["config"]
-            if not isinstance(entries, list) or any(not isinstance(item, dict) or set(item) != {"path", "enabled"} or item["enabled"] is not False or not isinstance(item["path"], str) or not item["path"].strip() for item in entries):
-                die(f"{path}: cannot preserve skills.config except path-based disables")
+# The only concepts both hosts' agents share. Conversion translates these and nothing else: every other key belongs to
+# its own host, and a host that does not know a key cannot honor it. Same-host projection keeps every key unchanged.
+PORTABLE_AGENT_FIELDS = {"claude": {"name", "description", "model", "effort"},
+                         "codex": {"name", "description", "developer_instructions", "model", "model_reasoning_effort"}}
+# Keys whose loss changes no permission: conversion drops them with a warning instead of refusing the agent.
+ADVISORY_AGENT_FIELDS = {"claude": {"background", "is_background", "color"}, "codex": {"nickname_candidates"}}
+
+
+def _read_agent(root: Path, host: str, path: Path, *, relocating: bool) -> tuple[str, dict[str, Any], str, str]:
+    """Return (identity, fields, description, instructions); identity is the name the host registers, without a plugin prefix."""
+    if host == "claude":
+        metadata, body = _agent_frontmatter(path)
+        name = _agent_string(metadata.get("name", path.stem), "name", path).strip()
+        description = _agent_string(metadata.get("description", first_text_paragraph(body) or f"{name} agent."), "description", path)
+        _agent_string(body, "instructions", path)
+        # Claude registers agents/review/security.md named internal-label as plugin:review:internal-label.
+        agent_root = root / "agents"
+        subdirectories = path.parent.relative_to(agent_root).parts if path.is_relative_to(agent_root) else ()
+        return ":".join((*subdirectories, name)), dict(metadata), description, body
+    try:
+        fields = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (tomllib.TOMLDecodeError, UnicodeError) as exc:
+        die(f"{path}: invalid agent TOML: {exc}")
+    # Codex ignores a discovered role file without these, so a projection without them would register nothing.
+    name = _agent_string(fields.get("name"), "name", path).strip()
+    description = _agent_string(fields.get("description"), "description", path)
+    body = _agent_string(fields.get("developer_instructions"), "developer_instructions", path)
+    skills = fields.get("skills")
+    entries = skills.get("config") if isinstance(skills, dict) else None
+    if relocating and isinstance(entries, list) and any(isinstance(entry, dict) and isinstance(entry.get("path"), str) and not Path(entry["path"]).is_absolute() for entry in entries):
+        die(f"{path.relative_to(root)}: cannot preserve relative skills.config paths when projecting an agent; use absolute skill paths")
+    return name, fields, description, body
 
 
 def agent_documents(
@@ -331,60 +328,44 @@ def agent_documents(
     namespace: str | None = None,
     source_host: str | None = None,
 ) -> list[AgentDocument]:
-    """Render native definitions without registering them or modifying the source."""
+    """Render native definitions without registering them or modifying the source.
+
+    A package's own host is authoritative when it names one. A dual package uses each agent's native definition for the
+    target and converts only the agents that have none, so shipping a native file is how an author keeps an agent whose
+    settings cannot be converted.
+    """
     if target not in {"codex", "claude"} or source_host not in {None, "dual", "codex", "claude"}:
         die("agent host must be codex or claude")
     if namespace is not None and (target != "codex" or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", namespace)):
         die("agent namespace requires Codex and a lowercase plugin identifier")
     root = root.resolve()
-    origin = target if source_host in {None, "dual"} else source_host
-    paths = _agent_files(root, origin)
-    if not paths:
-        origin = "claude" if origin == "codex" else "codex"
-        paths = _agent_files(root, origin)
+    other = "claude" if target == "codex" else "codex"
+    if source_host in {target, other}:
+        first = source_host
+        second = "claude" if first == "codex" else "codex"
+        plan = [(first, path) for path in _agent_files(root, first)] or [(second, path) for path in _agent_files(root, second)]
+    else:
+        plan = [(target, path) for path in _agent_files(root, target)] + [(other, path) for path in _agent_files(root, other)]
     documents: list[AgentDocument] = []
+    native_identities: set[str] = set()
     names: set[str] = set()
     outputs: set[Path] = set()
-    for path in paths:
+    for origin, path in plan:
         source_path = path.relative_to(root)
+        identity, fields, description, body = _read_agent(root, origin, path, relocating=namespace is not None)
+        if origin == target:
+            native_identities.add(identity)
+        elif identity in native_identities:
+            continue  # this agent's native definition for the target supersedes converting it
         warnings: list[str] = []
-        if origin == "claude":
-            metadata, body = _agent_frontmatter(path)
-            name = _agent_string(metadata.get("name", path.stem), "name", path).strip()
-            description = _agent_string(metadata.get("description", first_text_paragraph(body) or f"{name} agent."), "description", path)
-            _agent_string(body, "instructions", path)
-            prompt_key = "developer_instructions"
-            fields = dict(metadata)
-            fields.update(name=name, description=description)
-            if target == "codex":
-                # Claude registers a plugin agent as its subdirectories under agents/ followed by its frontmatter name
-                # (agents/review/security.md named internal-label is plugin:review:internal-label), so Codex uses the same.
-                agent_root = root / "agents"
-                subdirectories = path.parent.relative_to(agent_root).parts if path.is_relative_to(agent_root) else ()
-                name = ":".join((*subdirectories, name))
-                fields["name"] = name
-        else:
-            try:
-                fields = tomllib.loads(path.read_text(encoding="utf-8"))
-            except (tomllib.TOMLDecodeError, UnicodeError) as exc:
-                die(f"{path}: invalid agent TOML: {exc}")
-            name = _agent_string(fields.get("name"), "name", path).strip()
-            description = _agent_string(fields.get("description"), "description", path)
-            body = _agent_string(fields.get("developer_instructions"), "developer_instructions", path)
-            _validate_codex_agent(fields, path)
-            if namespace is not None and any(not Path(entry["path"]).is_absolute() for entry in fields.get("skills", {}).get("config", [])):
-                die(f"{source_path}: cannot preserve relative skills.config paths when projecting an agent; use absolute skill paths")
-            prompt_key = "developer_instructions"
-        source_name = name
         if origin != target:
-            portable = {"name", "description", "model", "effort"} if origin == "claude" else {"name", "description", "developer_instructions", "model", "model_reasoning_effort"}
-            advisory = {"background", "is_background", "color"} if origin == "claude" else set()
-            unsupported = set(fields) - portable - advisory
+            unsupported = set(fields) - PORTABLE_AGENT_FIELDS[origin] - ADVISORY_AGENT_FIELDS[origin]
             if unsupported:
-                die(f"{source_path}: cannot preserve agent fields in {target}: {', '.join(sorted(unsupported))}; keep this agent on {origin}")
-            for key in sorted(set(fields) & advisory):
+                die(f"{source_path}: cannot preserve agent fields in {target}: {', '.join(sorted(unsupported))}; "
+                    f"keep this agent on {origin}, or add a native {target} definition for it, which is used instead of converting it")
+            for key in sorted(set(fields) & ADVISORY_AGENT_FIELDS[origin]):
                 warnings.append(f"{source_path}: {key} is advisory metadata and is not enforced in {target}")
-            converted: dict[str, Any] = {"name": name, "description": description}
+            converted: dict[str, Any] = {"name": identity, "description": description}
             model = fields.get("model")
             if model is not None:
                 _agent_string(model, "model", path)
@@ -404,38 +385,33 @@ def agent_documents(
                 warnings.append(f"{source_path}: effort {effort!r} retains its label; support depends on the target model")
             fields = converted
         if target == "codex":
-            if namespace and not name.startswith(namespace + ":"):
-                name = f"{namespace}:{name}"
-            fields.update(name=name, description=description)
-            fields[prompt_key] = body
-            content = "".join(f"{json.dumps(key)} = {_toml_value(value)}\n" for key, value in fields.items())
+            invocation = f"{namespace}:{identity}" if namespace else identity
+            fields = {**fields, "name": invocation, "description": description, "developer_instructions": body}
+            content = "".join(f"{_toml_string(key)} = {_toml_value(value)}\n" for key, value in fields.items())
             base = root / (".codex/agents" if origin == "codex" else "agents")
             relative = path.relative_to(base) if path.is_relative_to(base) else Path(path.name)
             destination = Path(".codex/agents") / relative.with_suffix(".toml")
         else:
-            if origin == "codex" and any(part in {"", ".", ".."} or any(character in part for character in ("/", "\\", "\x00")) for part in source_name.split(":")):
-                die(f"{source_path}: cannot preserve agent name {source_name!r} as a Claude filename")
-            if origin == "codex":
-                # Claude derives plugin:team:review from agents/team/review.md named review.
-                name = source_name.split(":")[-1]
-            if ":" in name or name.startswith("-") or len(name) > 256:
+            parts = identity.split(":")
+            if any(part in {"", ".", ".."} or any(character in part for character in ("/", "\\", "\x00")) for part in parts):
+                die(f"{source_path}: cannot preserve agent name {identity!r} as a Claude filename")
+            name = parts[-1]
+            if name.startswith("-") or len(name) > 256:
                 die(f"{source_path}: cannot preserve agent name {name!r} in Claude; use a name without colons, at most 256 characters")
-            fields.pop("developer_instructions", None)
+            fields = {key: value for key, value in fields.items() if key != "developer_instructions"}
             fields.update(name=name, description=description)
             content = f"---\n{dump_yaml_data(fields)}\n---\n{body}"
-            base = root / ("agents" if origin == "claude" else ".codex/agents")
-            relative = path.relative_to(base) if path.is_relative_to(base) else Path(path.name)
-            if origin == "codex":
-                identity = source_name.split(":")
-                destination = Path("agents", *identity[:-1], identity[-1] + ".md")
-            else:
+            if origin == "claude":
+                relative = path.relative_to(root / "agents") if path.is_relative_to(root / "agents") else Path(path.name)
                 destination = Path("agents") / relative.with_suffix(".md")
-        invocation = name if target == "codex" else ":".join((*destination.parent.relative_to("agents").parts, name))
+            else:
+                destination = Path("agents", *parts[:-1], name + ".md")
+            invocation = identity
         if invocation in names or destination in outputs:
             die(f"{root}: duplicate agent name or output path: {invocation}")
         names.add(invocation)
         outputs.add(destination)
-        documents.append(AgentDocument(invocation, source_name, source_path, destination, content, tuple(warnings)))
+        documents.append(AgentDocument(invocation, identity, source_path, destination, content, tuple(warnings), origin))
     return documents
 
 
@@ -1570,6 +1546,13 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
     )
 
     if target == "codex":
+        if agents and all(document.origin == "claude" for document in agents):
+            for old_path in _agent_files(out_root, "codex"):
+                relative = old_path.relative_to(out_root)
+                archive = out_root / PORTABILITY_DIR / "original-agents" / relative
+                archive.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(old_path), str(archive))
+                report.add_preserved("original-codex-agent", archive.relative_to(out_root).as_posix(), "Superseded agent source is inactive; the current Claude definition supplies the Codex agent")
         convert_commands_to_codex_skills(out_root, report, mode=mode)
         normalize_codex_skills(out_root, report, mode=mode)
         hooks = load_hooks_from_plugin(out_root, pkg.claude_manifest or pkg.codex_manifest)
@@ -1579,7 +1562,7 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
             write_json(out_root / ".mcp.json", normalize_mcp_config(load_json(out_root / ".mcp.json"), target="codex"))
         write_json(out_root / CODEX_MANIFEST, build_codex_manifest(pkg, out_root))
     elif target == "claude":
-        from_native_codex = bool(agents) and all(document.source_path.is_relative_to(".codex/agents") for document in agents)
+        from_native_codex = bool(agents) and all(document.origin == "codex" for document in agents)
         if from_native_codex:
             for old_path in _agent_files(out_root, "claude"):
                 relative = old_path.relative_to(out_root)

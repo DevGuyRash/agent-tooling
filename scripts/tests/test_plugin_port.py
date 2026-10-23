@@ -154,13 +154,63 @@ class PluginPortTests(unittest.TestCase):
         plugin_port.convert_plugin(source, "codex", output, mode="strict", overwrite=False)
         self.assertEqual("Codex instructions.", tomllib.loads((output / ".codex/agents/reviewer.toml").read_text())["developer_instructions"])
 
-    def test_native_codex_ignored_restrictions_are_rejected(self) -> None:
+    def test_codex_projection_keeps_every_key_and_codex_decides(self) -> None:
+        # Same-host projection is the file as its author wrote it: keys Codex adds later, or ignores in roles, stay.
         source = self.root / "source"
-        for setting in ('sandbox_mode="read-only"', 'unknownPolicy=true', '[features]\nshell_tool=true'):
-            with self.subTest(setting=setting):
-                write(source / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Review."\n' + setting + '\n')
-                with self.assertRaisesRegex(plugin_port.PluginPortError, "cannot preserve"):
-                    plugin_port.agent_documents(source, "codex")
+        settings = 'sandbox_mode="read-only"\nfuture_setting=7\n[features]\nshell_tool=false\n'
+        write(source / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Review."\n' + settings)
+        document, = plugin_port.agent_documents(source, "codex", namespace="kit")
+        definition = tomllib.loads(document.content)
+        self.assertEqual(("read-only", 7, {"shell_tool": False}), (definition["sandbox_mode"], definition["future_setting"], definition["features"]))
+        self.assertEqual("kit:reviewer", definition["name"])
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "cannot preserve.*future_setting.*native claude definition"):
+            plugin_port.agent_documents(source, "claude")
+        write(source / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\n')
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "developer_instructions"):
+            plugin_port.agent_documents(source, "codex", namespace="kit")
+
+    def test_native_definition_is_the_per_agent_escape_hatch(self) -> None:
+        source = self.root / "source"
+        write(source / "agents/plain.md", "---\nname: plain\ndescription: Plain.\n---\nPlain body.\n")
+        write(source / "agents/locked.md", "---\nname: locked\ndescription: Locked.\ntools: Read, Grep\n---\nLocked body.\n")
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "locked.md.*tools.*native codex definition"):
+            plugin_port.agent_documents(source, "codex", namespace="kit")
+        write(source / ".codex/agents/locked.toml", 'name="locked"\ndescription="Locked."\ndeveloper_instructions="Native locked body."\n[features]\nshell_tool=false\n')
+        documents = {document.name: tomllib.loads(document.content) for document in plugin_port.agent_documents(source, "codex", namespace="kit")}
+        self.assertEqual({"kit:plain", "kit:locked"}, set(documents))
+        self.assertEqual("Native locked body.", documents["kit:locked"]["developer_instructions"])
+        self.assertEqual("Plain body.\n", documents["kit:plain"]["developer_instructions"])
+
+    def test_codex_display_names_drop_with_a_warning(self) -> None:
+        source = self.root / "source"
+        write(source / ".codex/agents/scout.toml", 'name="scout"\ndescription="Scout."\nnickname_candidates=["Ada"]\ndeveloper_instructions="Look."\n')
+        document, = plugin_port.agent_documents(source, "claude")
+        self.assertNotIn("nickname_candidates", document.content)
+        self.assertTrue(any("nickname_candidates" in warning for warning in document.warnings))
+
+    def test_round_trips_never_leave_two_definitions_of_one_agent(self) -> None:
+        for name, start in (("codex", {".codex/agents/team.toml": 'name="team:review"\ndescription="Review."\ndeveloper_instructions="Review."\n'}),
+                            ("claude", {"agents/filename.md": "---\nname: frontname\ndescription: Review.\n---\nReview.\n"})):
+            with self.subTest(start=name):
+                source = self.root / f"start-{name}"
+                write(source / f".{name}-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+                for relative, text in start.items():
+                    write(source / relative, text)
+                hosts = ["claude", "codex", "claude", "codex"] if name == "codex" else ["codex", "claude", "codex"]
+                previous, previous_host = source, name
+                for step, host in enumerate(hosts):
+                    output = self.root / f"{name}-{step}-{host}"
+                    plugin_port.convert_plugin(previous, host, output, mode="strict", overwrite=False, explicit_host=previous_host)
+                    previous, previous_host = output, host
+                expected = "kit:team:review" if name == "codex" else "kit:frontname"
+                self.assertEqual([expected], [document.name for document in plugin_port.agent_documents(previous, "codex", namespace="kit")])
+
+    def test_a_directory_named_like_the_plugin_keeps_its_segment(self) -> None:
+        source = self.root / "source"
+        write(source / "agents/probe/filename.md", "---\nname: review\ndescription: Nested.\n---\nNested.\n")
+        write(source / "agents/review.md", "---\nname: review\ndescription: Root.\n---\nRoot.\n")
+        names = sorted(document.name for document in plugin_port.agent_documents(source, "codex", namespace="probe"))
+        self.assertEqual(["probe:probe:review", "probe:review"], names)
 
     def test_codex_projection_rejects_relative_skill_disable_paths(self) -> None:
         source = self.root / "source"
