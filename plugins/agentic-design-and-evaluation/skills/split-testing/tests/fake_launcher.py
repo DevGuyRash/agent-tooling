@@ -38,7 +38,11 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
     judge-transient-once  as a judge, exits 75 the first time (FAKE_LAUNCHER_MARK names a file it creates)
     signed-in           every call, arm or judge: unless ~/.fake-sign-in holds FAKE_LAUNCHER_MARK, prints what it held
                         and refuses (exit 77), or as a judge answers outside the verdict schema; and writes the
-                        permission bits of what it was copied into $TRIAL_HARNESS/sign-in-modes-<turn>.json
+                        permission bits of what it was copied into $TRIAL_HARNESS/sign-in-modes-<turn>.json, and
+                        whether each is inside its run's directory into $TRIAL_HARNESS/sign-in-where-<turn>.json
+    signed-in-stash     as signed-in, and a scenario's first turn copies its sign-in to ~/.config/stash/sign-in
+    leak                every call prints the key variable's value, FAKE_LAUNCHER_MARK, and ~/.fake-sign-in on
+                        standard error, and an arm's on standard output too
     signed-in-slow      as signed-in, and a scenario's first turn waits a minute ($TRIAL_HARNESS/started marks it)
     signed-in-slow-probe  as signed-in, and the probe's first turn waits a minute
 """
@@ -93,11 +97,22 @@ def main():
         modes = {rel: oct(stat.S_IMODE((HOME / rel).stat().st_mode))
                  for rel in (".fake-sign-in", ".fake-auth", ".fake-auth/token") if (HOME / rel).exists()}
         (harness / f"sign-in-modes-{TURN}.json").write_text(json.dumps(modes))
+        job = os.environ["TRIAL_JOB_DIR"] + os.sep
+        where = {rel: "inside the run" if os.path.realpath(HOME / rel).startswith(job) else "outside the run"
+                 for rel in (".fake-sign-in", ".fake-auth") if (HOME / rel).exists()}
+        (harness / f"sign-in-where-{TURN}.json").write_text(json.dumps(where))
         prompt = Path(os.environ["TRIAL_PROMPT_FILE"]).read_text() if TURN else ""
         slow = (MODE == "signed-in-slow" and "create out.txt" in prompt) or (MODE == "signed-in-slow-probe" and "short check" in prompt)
         if slow and TURN == 1 and not os.environ.get("TRIAL_SCHEMA_FILE"):
             (harness / "started").write_text("")
             time.sleep(60)
+    if MODE == "leak":  # as a careless tool might: every credential it holds, where its output is kept
+        sign_in = HOME / ".fake-sign-in"
+        held = " ".join([os.environ.get(os.environ.get("TRIAL_API_KEY_VAR", ""), ""), os.environ.get("FAKE_LAUNCHER_MARK", ""),
+                         sign_in.read_text() if sign_in.is_file() else ""])
+        print(f"leaked {held}", file=sys.stderr)
+        if not os.environ.get("TRIAL_SCHEMA_FILE"):
+            print(json.dumps({"leaked": held}))
     if MODE == "show-env":  # what an executor it started would see: its environment and working directory
         (HOME / f"seen-env-{TURN}.json").write_text(json.dumps({"env": dict(os.environ), "cwd": os.getcwd(), "argv": sys.argv}))
     if os.environ.get("TRIAL_SCHEMA_FILE"):  # called as a judge
@@ -153,6 +168,9 @@ def main():
         (STATE / "profile.json").write_text(json.dumps({"model": "changed through the link"}))
     if MODE == "two-models" and TURN > 1:
         model = "some-other-model"
+    if MODE == "signed-in-stash" and scenario and TURN == 1:  # its own copy, under another name in its home
+        (HOME / ".config" / "stash").mkdir(parents=True, exist_ok=True)
+        (HOME / ".config" / "stash" / "sign-in").write_text((HOME / ".fake-sign-in").read_text())
     if MODE == "swap-harness" and scenario and TURN == 1:
         job = Path(os.environ["TRIAL_JOB_DIR"])
         os.rename(job / "harness", job / "harness-moved")
