@@ -7,7 +7,7 @@
 import { attrs, axisTicks, count, esc, fmtInt, fmtNum, inline, isNum, niceTicks, num, outcomeMark } from "../core";
 import type { RenderContext } from "../model";
 import type { Alternative, Comparison, ComparisonFilter, Metric, MetricDifference, MetricKind, MetricSummary } from "../comparison-model";
-import { difference as differenceOf, groupComparison, groupPath, observationStatus, summarize, summarizeGroups } from "../comparison-stats";
+import { caseKey, difference as differenceOf, evidenceAs, groupComparison, groupPath, NO_CASE, NO_CASE_WORDS, pooledWords, summarize, summarizeGroups } from "../comparison-stats";
 import { placement, Placement } from "../stats";
 import { empty, frame, FrameInput, pos } from "./frame";
 
@@ -60,8 +60,13 @@ function caseIds(data: Comparison): string[] {
   const out = new Set<string>();
   for (const c of Array.isArray(data.cases) ? data.cases : []) if (c && typeof c.id === "string") out.add(c.id);
   for (const list of [data.observations, data.aggregates, data.preferences, data.rankings])
-    for (const x of Array.isArray(list) ? list : []) if (x && typeof (x as { case?: unknown }).case === "string") out.add((x as { case: string }).case);
+    for (const x of Array.isArray(list) ? list : []) if (x && caseKey((x as { case?: unknown }).case) !== NO_CASE) out.add(caseKey((x as { case?: unknown }).case));
   return [...out];
+}
+
+/** Whether any evidence of the comparison names no case. */
+function namesNoCase(data: Comparison): boolean {
+  return [data.observations, data.aggregates, data.preferences, data.rankings].some(list => (Array.isArray(list) ? list : []).some(x => x && caseKey((x as { case?: unknown }).case) === NO_CASE));
 }
 
 function resolve(kind: string, input: CompareInput, ctx: RenderContext, needMetric = true): Source | string {
@@ -91,56 +96,78 @@ function resolve(kind: string, input: CompareInput, ctx: RenderContext, needMetr
   const inside = (id: string) => !groups || !groups.length || groups.every((g, i) => groupPath(info.get(id)?.group)[i] === g);
   const alts = (pick ? [...new Set(pick.filter(id => info.has(id)))] : known).filter(inside);
   if (!alts.length) return frame(kind, input, `${problemList(problems)}${empty(groups?.length ? `No alternative sits inside the group ${groups.join(" › ")}.` : "No alternatives to show.")}`);
-  if (cases) { const all = caseIds(raw), bad = cases.filter(c => !all.includes(c)); if (bad.length) problems.push(`No observations name these cases: ${listed(bad)}. Cases: ${listed(all)}.`); }
+  // A selector reads its case as evidence does: an empty or blank one selects the evidence naming no case.
+  if (cases) { const all = caseIds(raw), none = namesNoCase(raw), bad = cases.filter(c => caseKey(c) === NO_CASE ? !none : !all.includes(c)); if (bad.length) problems.push(`No observations name these cases: ${listed(bad.map(c => caseKey(c) === NO_CASE ? NO_CASE_WORDS : c))}. Cases: ${listed(all)}.`); }
   const filter: ComparisonFilter = {};
   if (cases) filter.cases = cases;
   if (groups && groups.length) filter.groups = groups;
   if (caseGroups && caseGroups.length) filter.caseGroups = caseGroups;
   let baseline = typeof input.baseline === "string" ? input.baseline : typeof raw.baseline === "string" ? raw.baseline : undefined;
   if (baseline && !alts.includes(baseline)) { problems.push(`The baseline “${baseline}” is not among the alternatives shown, so nothing is read against it.`); baseline = undefined; }
-  return { data: raw, metrics: usable, metric, alts, info, filter, baseline, problems };
+  // Every view, breakdown and warning reads the evidence the summaries read under this filter.
+  return { data: evidenceAs(raw, filter), metrics: usable, metric, alts, info, filter, baseline, problems };
 }
 
 function caseName(data: Comparison, ctx: RenderContext, id: string): string {
+  if (caseKey(id) === NO_CASE) return NO_CASE_WORDS;
   const c = (Array.isArray(data.cases) ? data.cases : []).find(x => x && x.id === id);
   return typeof c?.label === "string" && c.label ? c.label : ctx.caseLabels[id] || id;
 }
 
 function scopeLine(src: Source, ctx: RenderContext): string {
   const parts: string[] = [];
-  if (src.filter.cases) parts.push(`${src.filter.cases.length === 1 ? "case" : "cases"} ${src.filter.cases.map(c => caseName(src.data, ctx, c)).join(", ")}`);
+  if (src.filter.cases) {
+    // Named cases by name; an empty or blank selector as the evidence naming no case it selects.
+    const named = [...new Set(src.filter.cases.filter(c => caseKey(c) !== NO_CASE))], none = src.filter.cases.some(c => caseKey(c) === NO_CASE);
+    parts.push([named.length ? `${named.length === 1 ? "case" : "cases"} ${named.map(c => caseName(src.data, ctx, c)).join(", ")}` : "", none ? NO_CASE_WORDS : ""].filter(Boolean).join(" and "));
+  }
   if (src.filter.groups) parts.push(`alternatives in ${src.filter.groups.join(" › ")}`);
   if (src.filter.caseGroups) parts.push(`cases in ${src.filter.caseGroups.join(" › ")}`);
   return parts.length ? `<p class="av-cmp-scope"><span class="av-eyebrow">Only</span>${esc(parts.join("; "))}</p>` : "";
 }
 
-/** Cases each alternative has valid data for on these metrics, when they differ: a pooled
- * value then mixes different cases, so a gap between two alternatives can come from the
- * case mix rather than the alternatives. Only data that names a case is read. */
+/** Where the alternatives' values come from different cases, or from the same cases weighted differently: a pooled gap
+ * can then come from the case mix rather than the alternatives. Both read each summary's own case weights, so they
+ * describe exactly the evidence the values were taken from, after the filter (evidence naming no case is a case of its
+ * own). A difference in weights is flagged, as in the trial view, where a case's share is more than 10 points apart. */
 function coverageLine(src: Source, ctx: RenderContext, metrics: Metric[]): string {
-  const caseInfo = new Map<string, string[]>();
-  for (const c of Array.isArray(src.data.cases) ? src.data.cases : []) if (c && typeof c.id === "string" && !caseInfo.has(c.id)) caseInfo.set(c.id, groupPath(c.group));
-  const okCase = (id: string) => (!src.filter.cases || src.filter.cases.includes(id)) && (!src.filter.caseGroups || src.filter.caseGroups.every((g, i) => (caseInfo.get(id) || [])[i] === g));
-  const status = observationStatus(src.data), byGap = new Map<string, string[]>();
+  const byGap = new Map<string, string[]>(), byMix = new Map<string, string[]>();
+  const pct = (x: number) => `${Math.round(x * 100)}%`;
+  const named = (id: string) => id === NO_CASE ? NO_CASE_WORDS : caseName(src.data, ctx, id);
   for (const m of metrics) {
     if (m.kind === "preference") continue;
-    const seen = new Map<string, Set<string>>();
-    const note = (alt: unknown, cs: unknown) => { if (typeof alt !== "string" || typeof cs !== "string" || !src.alts.includes(alt) || !okCase(cs)) return; if (!seen.has(alt)) seen.set(alt, new Set()); seen.get(alt)!.add(cs); };
-    (Array.isArray(src.data.observations) ? src.data.observations : []).forEach((o, i) => { if (o && o.metric === m.id && status[i] === null) note(o.alternative, o.case); });
-    for (const a of Array.isArray(src.data.aggregates) ? src.data.aggregates : []) if (a && a.metric === m.id) note(a.alternative, a.case);
-    if (m.kind === "rank") for (const r of Array.isArray(src.data.rankings) ? src.data.rankings : []) if (r && (r.metric === m.id || r.metric === undefined) && Array.isArray(r.order)) for (const alt of r.order) note(alt, r.case);
-    if (seen.size < 2) continue;
-    const all = new Set<string>(); for (const set of seen.values()) for (const c of set) all.add(c);
-    const gaps = src.alts.filter(a => seen.has(a)).map(a => [a, [...all].filter(c => !seen.get(a)!.has(c))] as const).filter(([, miss]) => miss.length);
-    if (!gaps.length) continue;
-    const who = gaps.map(([a, miss]) => `${ctx.arms.label(a)} has no data for ${miss.map(c => caseName(src.data, ctx, c)).join(", ")}`).join("; ");
-    if (!byGap.has(who)) byGap.set(who, []);
-    byGap.get(who)!.push(metricName(m));
+    const sums = summarize(src.data, m.id, src.filter).filter(x => src.alts.includes(x.alternative) && x.caseWeights?.length);
+    const weight = new Map(sums.map(x => [x.alternative, new Map(x.caseWeights!)] as const));
+    // A case an alternative ran with no valid result there is not a case it has no data for.
+    const ran = new Map(sums.map(x => [x.alternative, new Set(x.casesRun || [])] as const));
+    if (weight.size < 2) continue;
+    const all: string[] = [];
+    for (const w of weight.values()) for (const c of w.keys()) if (!all.includes(c)) all.push(c);
+    const alts = src.alts.filter(a => weight.has(a));
+    const gaps = alts.map(a => [a, all.filter(c => !weight.get(a)!.has(c))] as const).filter(([, miss]) => miss.length);
+    if (gaps.length) {
+      const who = gaps.map(([a, miss]) => {
+        const there = miss.filter(c => ran.get(a)!.has(c)), never = miss.filter(c => !ran.get(a)!.has(c));
+        return `${ctx.arms.label(a)} has ${[never.length ? `no data for ${never.map(named).join(", ")}` : "", there.length ? `no valid result for ${there.map(named).join(", ")}` : ""].filter(Boolean).join(" and ")}`;
+      }).join("; ");
+      if (!byGap.has(who)) byGap.set(who, []);
+      byGap.get(who)!.push(metricName(m));
+      continue;
+    }
+    // Name only the cases whose share differs, each with the alternatives that give it the most and the least weight.
+    const share = (a: string) => { const w = weight.get(a)!, t = all.reduce((u, c) => u + (w.get(c) || 0), 0); return all.map(c => t ? (w.get(c) || 0) / t : 0); };
+    const shares = alts.map(share);
+    const uneven = all.map((c, i) => { const v = shares.map(x => x[i]), hi = v.indexOf(Math.max(...v)), lo = v.indexOf(Math.min(...v)); return { c, i, hi, lo, gap: v[hi] - v[lo] }; }).filter(x => x.gap > 0.1);
+    if (all.length > 1 && uneven.length) {
+      const whose = (a: string) => { const l = ctx.arms.label(a); return /s$/.test(l) ? `${l}'` : `${l}'s`; };
+      const how = uneven.map(x => `${named(x.c)} carries ${pct(shares[x.hi][x.i])} of ${whose(alts[x.hi])} data but ${pct(shares[x.lo][x.i])} of ${whose(alts[x.lo])}`).join("; ");
+      if (!byMix.has(how)) byMix.set(how, []);
+      byMix.get(how)!.push(metricName(m));
+    }
   }
-  if (!byGap.size) return "";
   const shown = metrics.filter(m => m.kind !== "preference").length;
-  const text = [...byGap].map(([who, names]) => `${shown > 1 && names.length < shown ? `On ${names.join(", ")}: ` : ""}${who}.`).join(" ");
-  return `<p class="av-cmp-scope av-cmp-coverage"><span class="av-eyebrow">Unequal cases</span><span>${esc(text)} Pooled values then cover different cases, so a gap can come from the case mix; set “cases” to the shared ones to compare like with like.</span></p>`;
+  const said = (map: Map<string, string[]>) => [...map].map(([who, names]) => `${shown > 1 && names.length < shown ? `On ${names.join(", ")}: ` : ""}${who}.`).join(" ");
+  return `${byGap.size ? `<p class="av-cmp-scope av-cmp-coverage"><span class="av-eyebrow">Unequal cases</span><span>${esc(said(byGap))} Pooled values then cover different cases, so a gap can come from the case mix; set “cases” to the shared ones to compare like with like.</span></p>` : ""}${byMix.size ? `<p class="av-cmp-scope av-cmp-coverage"><span class="av-eyebrow">Uneven case mix</span><span>${esc(said(byMix))} Pooled values weight each case by its data, so a gap between them can come from the case mix alone; read the values case by case.</span></p>` : ""}`;
 }
 
 function thresholdOf(raw: Threshold | undefined, m: Metric): { value: number; label: string } | null {
@@ -254,6 +281,8 @@ function head(m: Metric, s: MetricSummary | undefined, center: Center = "mean"):
   out.text = fmtValue(m, out.v);
   out.ciText = out.ci ? fmtRange(m, out.ci) : "";
   out.ok = out.v !== null;
+  // Pooled over several cases: the value stands without an interval, and says so.
+  if ((s.cases ?? 1) > 1 && out.ok) out.detail = `${out.detail} · across ${pooledWords(s)}`;
   return out;
 }
 
@@ -514,7 +543,7 @@ export function metric(input: MetricInput, ctx: RenderContext): string {
   // and draw no panels when none of this metric's data names a case.
   const own = m.kind === "rank" || m.kind === "preference" ? [] : [...(Array.isArray(src.data.observations) ? src.data.observations : []), ...(Array.isArray(src.data.aggregates) ? src.data.aggregates : [])]
     .filter(x => x && x.metric === m.id && typeof x.alternative === "string" && src.alts.includes(x.alternative));
-  const caseless = own.filter(x => typeof x.case !== "string" || !x.case).length;
+  const caseless = own.filter(x => caseKey(x.case) === NO_CASE).length;
   // When none of it names a case, the empty-view notice below says so.
   const caseNote = byCase && caseless && caseless < own.length ? `<p class="av-cmp-scope"><span class="av-eyebrow">No case</span>${esc(`${fmtInt(caseless)} of ${fmtInt(own.length)} entries for ${metricName(m)} name no case; they count in the rows above and in no panel below.`)}</p>` : "";
   const cases = byCase && !(caseless && caseless === own.length) ? (src.filter.cases || caseIds(src.data)) : [];
@@ -719,6 +748,7 @@ function differencePanel(src: Source, m: Metric, input: DifferenceInput, ctx: Re
   };
   const reading = (r: DRow): string => {
     const A = esc(ctx.arms.label(r.a)), B = esc(ctx.arms.label(r.b));
+    if (r.est !== null && !r.ci) return `<strong>${esc(fmtDiff(m, r.est))}, with no interval.</strong> ${esc(r.method || "The observations do not allow one.")}`;
     if (!r.ci || r.est === null) return `<strong>No interval.</strong> ${esc(r.method || "The observations do not allow one.")}`;
     if (r.noise) return Math.abs(r.est) < 1e-9 ? "<strong>Identical material.</strong> These copies came out the same this time." : `<strong>Identical material,</strong> so this gap of ${esc(fmtDiff(m, Math.abs(r.est)).replace(/^\+/, ""))} is chance alone.`;
     const place: Placement = placement(r.ci, 0);
@@ -733,10 +763,10 @@ function differencePanel(src: Source, m: Metric, input: DifferenceInput, ctx: Re
   };
   const rowHtml = (r: DRow): string => {
     const place = r.ci ? placement(r.ci, 0) : null;
-    const style = `--c:${r.noise ? "var(--av-warn)" : ctx.arms.color(r.a)};--z:${sc.at(0)};${r.est !== null && r.ci ? `--p:${sc.at(r.est)};--lo:${sc.at(r.ci[0])};--hi:${sc.at(r.ci[1])};` : ""}${thr && !r.noise ? `--t:${sc.at(thr.value)};` : ""}${band !== null && !r.noise ? `--b0:${sc.at(-band)};--b1:${sc.at(band)};` : ""}`;
-    const aria = `${ctx.arms.label(r.a)} minus ${ctx.arms.label(r.b)}: ${r.ci && r.est !== null ? `${fmtDiff(m, r.est)}, 95% interval ${fmtDiff(m, r.ci[0])} to ${fmtDiff(m, r.ci[1])}` : "no interval"}`;
-    const trackHtml = `<div class="av-cmp-dtrack${r.ci ? "" : " av-cmp-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}">${band !== null && !r.noise && r.ci ? '<span class="av-cmp-band"></span>' : ""}<span class="av-cmp-zero"></span>${thr && !r.noise ? '<span class="av-cmp-thr"></span>' : ""}${r.ci && r.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : '<span class="av-cmp-none">no interval</span>'}</div>`;
-    const nums = `<div class="av-cmp-num">${r.ci && r.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, r.est))}</span><span class="av-ci-text">${esc(`${fmtDiff(m, r.ci[0], false)} to ${fmtDiff(m, r.ci[1], false)}`)}</span>${place ? `<span class="av-cmp-place av-cmp-place--${place}">${place === "spans" ? "includes 0" : "excludes 0"}</span>` : ""}` : '<span class="av-cmp-v av-cmp-v--none">—</span>'}</div>`;
+    const style = `--c:${r.noise ? "var(--av-warn)" : ctx.arms.color(r.a)};--z:${sc.at(0)};${r.est !== null ? `--p:${sc.at(r.est)};` : ""}${r.est !== null && r.ci ? `--lo:${sc.at(r.ci[0])};--hi:${sc.at(r.ci[1])};` : ""}${thr && !r.noise ? `--t:${sc.at(thr.value)};` : ""}${band !== null && !r.noise ? `--b0:${sc.at(-band)};--b1:${sc.at(band)};` : ""}`;
+    const aria = `${ctx.arms.label(r.a)} minus ${ctx.arms.label(r.b)}: ${r.ci && r.est !== null ? `${fmtDiff(m, r.est)}, 95% interval ${fmtDiff(m, r.ci[0])} to ${fmtDiff(m, r.ci[1])}` : r.est !== null ? `${fmtDiff(m, r.est)}, no interval` : "no interval"}`;
+    const trackHtml = `<div class="av-cmp-dtrack${r.est !== null ? "" : " av-cmp-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}">${band !== null && !r.noise && r.ci ? '<span class="av-cmp-band"></span>' : ""}<span class="av-cmp-zero"></span>${thr && !r.noise ? '<span class="av-cmp-thr"></span>' : ""}${r.ci && r.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : r.est !== null ? '<span class="av-pt av-pt--pooled"></span>' : '<span class="av-cmp-none">no interval</span>'}</div>`;
+    const nums = `<div class="av-cmp-num">${r.ci && r.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, r.est))}</span><span class="av-ci-text">${esc(`${fmtDiff(m, r.ci[0], false)} to ${fmtDiff(m, r.ci[1], false)}`)}</span>${place ? `<span class="av-cmp-place av-cmp-place--${place}">${place === "spans" ? "includes 0" : "excludes 0"}</span>` : ""}` : r.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, r.est))}</span><span class="av-ci-text" title="${esc(r.method)}">no interval</span>` : '<span class="av-cmp-v av-cmp-v--none">—</span>'}</div>`;
     return `<li class="av-cmp-drow${r.noise ? " av-cmp-drow--noise" : ""}"${attrs({ "data-place": place || undefined, "data-a": r.a, "data-b": r.b })}><div class="av-cmp-dlabel">${side(r.a)}<span class="av-cmp-minus" aria-hidden="true">minus</span>${side(r.b)}</div><div class="av-cmp-cell">${trackHtml}</div>${nums}<p class="av-cmp-reading">${reading(r)}</p></li>`;
   };
   const ticks = sc.ticks.map(t => `<span style="--x:${sc.at(t)}">${esc(fmtDiff(m, t, false))}</span>`).join("");
@@ -831,10 +861,10 @@ function groupedView(src: Source, m: Metric, ctx: RenderContext, o: { maxDepth: 
   const gapRow = (g: Gap, depth: number, scopeName: string) => {
     const place = g.ci ? placement(g.ci, 0) : null;
     const tone = place && place !== "spans" && better ? ((place === "above") === (better === "higher") ? "better" : "worse") : "";
-    const style = `--c:var(--av-ink-2);--z:${ds.at(0)};${g.ci && g.est !== null ? `--p:${ds.at(g.est)};--lo:${ds.at(g.ci[0])};--hi:${ds.at(g.ci[1])};` : ""}`;
-    const aria = `${g.a} minus ${g.b}, ${metricName(m)}: ${g.ci && g.est !== null ? `${fmtDiff(m, g.est)}, 95% interval ${fmtDiff(m, g.ci[0])} to ${fmtDiff(m, g.ci[1])}` : `no interval${g.method ? ` (${g.method})` : ""}`}`;
-    const cell = `<div class="av-cmp-dtrack av-cmp-dtrack--mini${g.ci ? "" : " av-cmp-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}"><span class="av-cmp-zero"></span>${g.ci && g.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : '<span class="av-cmp-none">no interval</span>'}<span class="av-cmp-dend av-cmp-dend--l">${esc(fmtDiff(m, -ds.M, false))}</span><span class="av-cmp-dend av-cmp-dend--r">${esc(fmtDiff(m, ds.M, false))}</span></div>`;
-    const nums = `<div class="av-cmp-num" role="cell">${g.ci && g.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, g.est))}</span><span class="av-ci-text">${esc(`${fmtDiff(m, g.ci[0], false)} to ${fmtDiff(m, g.ci[1], false)}`)}</span>` : `<span class="av-cmp-v av-cmp-v--none" title="${esc(g.method)}">—</span>`}${place ? `<span class="av-cmp-place av-cmp-place--${place}${tone ? ` av-cmp-place--${tone}` : ""}">${place === "spans" ? "includes 0" : `excludes 0${tone ? ` · ${tone}` : ""}`}</span>` : ""}</div>`;
+    const style = `--c:var(--av-ink-2);--z:${ds.at(0)};${g.est !== null ? `--p:${ds.at(g.est)};` : ""}${g.ci && g.est !== null ? `--lo:${ds.at(g.ci[0])};--hi:${ds.at(g.ci[1])};` : ""}`;
+    const aria = `${g.a} minus ${g.b}, ${metricName(m)}: ${g.ci && g.est !== null ? `${fmtDiff(m, g.est)}, 95% interval ${fmtDiff(m, g.ci[0])} to ${fmtDiff(m, g.ci[1])}` : `${g.est !== null ? `${fmtDiff(m, g.est)}, ` : ""}no interval${g.method ? ` (${g.method})` : ""}`}`;
+    const cell = `<div class="av-cmp-dtrack av-cmp-dtrack--mini${g.est !== null ? "" : " av-cmp-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}"><span class="av-cmp-zero"></span>${g.ci && g.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : g.est !== null ? '<span class="av-pt av-pt--pooled"></span>' : '<span class="av-cmp-none">no interval</span>'}<span class="av-cmp-dend av-cmp-dend--l">${esc(fmtDiff(m, -ds.M, false))}</span><span class="av-cmp-dend av-cmp-dend--r">${esc(fmtDiff(m, ds.M, false))}</span></div>`;
+    const nums = `<div class="av-cmp-num" role="cell">${g.ci && g.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, g.est))}</span><span class="av-ci-text">${esc(`${fmtDiff(m, g.ci[0], false)} to ${fmtDiff(m, g.ci[1], false)}`)}</span>` : g.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, g.est))}</span><span class="av-ci-text" title="${esc(g.method)}">no interval</span>` : `<span class="av-cmp-v av-cmp-v--none" title="${esc(g.method)}">—</span>`}${place ? `<span class="av-cmp-place av-cmp-place--${place}${tone ? ` av-cmp-place--${tone}` : ""}">${place === "spans" ? "includes 0" : `excludes 0${tone ? ` · ${tone}` : ""}`}</span>` : ""}</div>`;
     const label = `<span class="av-eyebrow">${esc(`Between ${scopeName}`)}</span><span class="av-cmp-gap-name">${esc(g.a)} <span class="av-cmp-minus">minus</span> ${esc(g.b)}</span>`;
     return row(label, cell, nums, { style: `--depth:${depth}` }, ` av-cmp-row--gap${place ? ` av-cmp-row--${place}` : ""}`);
   };

@@ -4,11 +4,12 @@
  * is complete without it; this only adds ways to move through the data. Each
  * browser feature is used only where present, so a partial document (or a test
  * double) gets the behaviors it can support and never an error. */
-import { esc, fmtNum, fmtSeconds, inline, isNum, outcomeBadge, outcomeLabel, outcomeMark } from "./core";
+import { esc, fmtNum, fmtSeconds, inline, isNum, outcomeBadge, outcomeLabel, outcomeMark, entriesOf, keysIn } from "./core";
 import { failureCause, invalidReason } from "./failure";
 import { attachMermaid, DiagramController } from "./mermaid";
 import { createContext, RenderContext, ReportSpec } from "./model";
 import { renderReport } from "./report";
+import { attachReader } from "./reader";
 import { costUsd, displayPath, judgeQuestion, outcomeOf, recordPath, TrialReport, TrialRun, TrialScenario } from "./trial-model";
 
 const THEME_KEY = "av-theme";
@@ -52,7 +53,7 @@ export function runsCsv(data: TrialReport, indexes?: number[], labels: { arm?: (
   const picked = (indexes || runs.map((_, i) => i)).filter(i => Number.isInteger(i) && !!runs[i]);
   const checkNames: string[] = [];
   const seen = new Set<string>();
-  for (const i of picked) for (const k of Object.keys(runs[i].checks && typeof runs[i].checks === "object" ? runs[i].checks! : {})) if (!seen.has(k)) { seen.add(k); checkNames.push(k); }
+  for (const i of picked) for (const k of keysIn(runs[i].checks && typeof runs[i].checks === "object" ? runs[i].checks! : {})) if (!seen.has(k)) { seen.add(k); checkNames.push(k); }
   const usage = (r: TrialRun, k: string) => { const v = r.usage && typeof r.usage === "object" ? r.usage[k] : undefined; return isNum(v) ? v : null; };
   const head = ["n", "job", "case", "case_label", "arm", "arm_label", "repeat", "outcome", "cause", "invalid_reason", "judge_verdict", "judge_reason",
     "seconds", "output_tokens", "input_tokens", "total_cost_usd", "commands", "record_path", ...checkNames.map(k => `check.${k}`)];
@@ -88,8 +89,10 @@ const MARKS = "button[data-run]";
 const TIPPED = "button[data-run], [data-av-tip]";
 const FIELDS = "input, select, textarea, [contenteditable=''], [contenteditable='true']";
 
-/** Add behavior to a rendered report. `ctx` supplies the trial runs for the drawer. */
-export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
+/** Add behavior to a rendered report. `ctx` supplies the trial runs for the drawer. A report read inside a
+ * collection passes `hashBase` (such as "#report/ID"): its links, run links and ledger views then live under
+ * that address ("#report/ID/run-3"), and addresses without it are read as before. */
+export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashBase?: string; idPrefix?: string } = {}): Enhancement {
   const doc = root.ownerDocument, win = doc.defaultView!;
   const report = root.matches("[data-av-report]") ? root : root.querySelector<HTMLElement>("[data-av-report]") || root;
   const offs: Array<() => void> = [];
@@ -173,24 +176,52 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
 
   // Hash: run links (#run-12), section links (#cost) and ledger views
   // (#runs?outcome=fail&arm=…). replaceState never fires hashchange.
-  const currentHash = () => loc?.hash || "";
-  const setHash = (hash: string) => {
-    try { if (hist?.replaceState && loc) hist.replaceState(hist.state, "", hash || loc.pathname + loc.search); } catch { /* sandboxed viewers may refuse */ }
+  const base = options.hashBase || "";
+  const currentHash = () => {
+    const raw = loc?.hash || "";
+    if (!base || !raw.startsWith(base)) return raw;
+    return raw === base ? "" : raw.charAt(base.length) === "/" ? "#" + raw.slice(base.length + 1) : raw;
   };
-  const linkTo = (hash: string) => loc ? loc.href.replace(/#.*$/, "") + hash : hash;
+  const scoped = (hash: string) => base ? (hash ? `${base}/${hash.slice(1)}` : base) : hash;
+  const setHash = (hash: string) => {
+    try { if (hist?.replaceState && loc) hist.replaceState(hist.state, "", scoped(hash) || loc.pathname + loc.search); } catch { /* sandboxed viewers may refuse */ }
+  };
+  const linkTo = (hash: string) => loc ? loc.href.replace(/#.*$/, "") + scoped(hash) : scoped(hash);
+  /** The element with an id inside this report: a report mounted inside a collection carries its ids under a prefix
+   * (scopeIds), and even unprefixed, another report on the page may share an id (a collection and its member both have av-top). */
+  const prefix = options.idPrefix || "";
+  const byIdIn = (id: string): HTMLElement | null => {
+    const inReport = (x: string) => { try { return report.querySelector<HTMLElement>(`[id="${x.replace(/["\\]/g, "\\$&")}"]`); } catch { return null; } };
+    if (prefix) return inReport(prefix + id) || inReport(id);
+    const first = typeof doc.getElementById === "function" ? doc.getElementById(id) : null;
+    if (!first || report.contains(first)) return first;
+    return inReport(id);
+  };
+  /** An element's id as the report itself names it, without the prefix a mounted report's ids carry: the id its
+   * address and links use. */
+  const localId = (el: HTMLElement): string => prefix && el.id.startsWith(prefix) ? el.id.slice(prefix.length) : el.id;
+  /** The id a link inside this report names, under the report's own address or as a plain #id. */
+  const linkedId = (a: HTMLAnchorElement): string => {
+    let h = a.getAttribute("href") || "";
+    if (base && h.startsWith(`${base}/`)) h = "#" + h.slice(base.length + 1);
+    try { return decodeURIComponent(h.slice(1).split("?")[0]); } catch { return h.slice(1).split("?")[0]; }
+  };
 
   // Theme -------------------------------------------------------------
   const toggle = report.querySelector<HTMLButtonElement>("[data-av-theme-toggle]");
   if (toggle) {
     const show = (t: Theme) => { toggle.setAttribute("data-theme-choice", t); toggle.querySelector(".av-theme-word")!.textContent = t === "auto" ? "Auto" : t === "light" ? "Light" : "Dark"; toggle.setAttribute("aria-label", `Color theme: ${t === "auto" ? "follows the system" : t}. Select to change.`); };
     show(storedTheme()); toggle.hidden = false;
-    on(toggle, "click", () => { const next = themes[(themes.indexOf(storedTheme()) + 1) % themes.length]; applyTheme(doc, next); show(next); diagrams?.refresh(); });
+    on(toggle, "click", () => { const next = themes[(themes.indexOf(storedTheme()) + 1) % themes.length]; applyTheme(doc, next); show(next); diagrams?.refresh(); doc.dispatchEvent(new win.Event("av-theme")); });
+    // Another report on the page (a collection's reader) may change the theme too.
+    on(doc, "av-theme", () => show(storedTheme()));
   }
 
   // Section index: the current section is the last whose top has passed a
   // line a third of the way down the window; above the first, none is current.
   const links = all<HTMLAnchorElement>(".av-toc a");
-  const sections = links.map(a => doc.getElementById(decodeURIComponent(a.hash.slice(1)))).filter((s): s is HTMLElement => !!s);
+  const sectionOf = new Map(links.map(a => [a, byIdIn(linkedId(a))] as const));
+  const sections = [...sectionOf.values()].filter((s): s is HTMLElement => !!s);
   const bar = report.querySelector<HTMLElement>(".av-topbar");
   let spyQueued = false;
   const spy = () => {
@@ -199,7 +230,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
     let current: HTMLElement | undefined;
     for (const s of sections) if (s.getBoundingClientRect().top <= line) current = s;
     for (const a of links) {
-      const active = !!current && a.hash === "#" + current.id;
+      const active = !!current && sectionOf.get(a) === current;
       if (active !== a.hasAttribute("aria-current")) { a.toggleAttribute("aria-current", active); if (active) a.scrollIntoView?.({ block: "nearest", inline: "nearest" }); }
     }
     bar?.toggleAttribute("data-scrolled", win.scrollY > 8);
@@ -212,7 +243,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
   const ledgerSection = report.querySelector<HTMLTableElement>("table.av-ledger")?.closest<HTMLElement>(".av-section[id]");
   const firstSkip = report.querySelector<HTMLAnchorElement>(".av-skip");
   if (ledgerSection && firstSkip && !report.querySelector("[data-av-skip-ledger]")) {
-    const skip = make("a", { class: "av-skip", href: `#${ledgerSection.id}`, "data-av-skip-ledger": "" }, "Skip to the run ledger");
+    const skip = make("a", { class: "av-skip", href: scoped(`#${localId(ledgerSection)}`), "data-av-skip-ledger": "" }, "Skip to the run ledger");
     if (skip) firstSkip.after(skip);
   }
 
@@ -223,7 +254,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
     let anchor = head.querySelector<HTMLAnchorElement>(".av-anchor");
     if (!anchor) {
       const title = section.querySelector(".av-section-title")?.textContent?.trim() || section.id;
-      anchor = make("a", { class: "av-anchor", href: `#${section.id}`, "aria-label": `Copy a link to this section: ${title}` }) as HTMLAnchorElement | null;
+      anchor = make("a", { class: "av-anchor", href: scoped(`#${localId(section)}`), "aria-label": `Copy a link to this section: ${title}` }) as HTMLAnchorElement | null;
       if (!anchor) continue;
       const mark = make("span", { "aria-hidden": "true", class: "av-anchor-mark" }, "#"), word = make("span", { class: "av-anchor-word", "data-av-word": "" }, "Link");
       if (mark && word) anchor.append(mark, word);
@@ -233,7 +264,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
     on(a, "click", async (e: MouseEvent) => {
       if (e.button || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       e.preventDefault();
-      const hash = `#${section.id}`;
+      const hash = `#${localId(section)}`;
       if (!dialog?.open) setHash(hash);
       const copied = await copyText(linkTo(hash), a);
       flash(a, copied ? "Copied" : "In address bar");
@@ -397,7 +428,9 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
     const fresh = !dialog.open;
     currentRun = i;
     hideTip();
-    dialog.querySelector<HTMLElement>("[data-av-drawer-body]")!.innerHTML = drawerHtml(data, i, ctx, sequence());
+    const drawerBody = dialog.querySelector<HTMLElement>("[data-av-drawer-body]")!;
+    drawerBody.innerHTML = drawerHtml(data, i, ctx, sequence());
+    if (prefix) drawerBody.querySelectorAll<HTMLElement>("[id]").forEach(el => { el.id = prefix + el.id; });
     if (fresh) {
       (dialog as any).__opener = opener;
       if (hashBefore === null) hashBefore = currentHash();
@@ -510,7 +543,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
 
     const tools = block.querySelector<HTMLElement>("[data-av-ledger-tools]");
     const count = block.querySelector<HTMLOutputElement>(".av-ledger-count");
-    const sectionId = block.closest<HTMLElement>(".av-section[id]")?.id || "";
+    const home = block.closest<HTMLElement>(".av-section[id]"), sectionId = home ? localId(home) : "";
     let outcome = "", exportLabel: HTMLElement | null = null;
     const exportShown: HTMLButtonElement[] = [];
     // Every select[data-filter] narrows by the row attribute it names (arm, case, metric, …).
@@ -760,10 +793,11 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
   const route = (initial: boolean) => {
     const { id, params } = parseHash(currentHash());
     if (!id) return;
-    const el = typeof doc.getElementById === "function" ? doc.getElementById(id) : null;
+    const el = byIdIn(id);
     if (el && report.contains(el)) {
       if (params) for (const l of ledgers) if (l.sectionId === id) l.restore(new URLSearchParams(params));
-      if (initial) jumpTo(el);
+      // Inside a collection the address names the report first, so the browser cannot jump to the section itself.
+      if (initial || base) jumpTo(el);
       if (el.matches(".av-section")) markTarget(el, initial);
       return;
     }
@@ -776,11 +810,13 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
   on(win, "hashchange", () => route(false));
   route(true);
 
-  // Printing: paper gets the light theme and every collapsed case opened.
-  let printState: { theme: string | null; opened: HTMLDetailsElement[] } | null = null;
+  // Printing: paper gets the light theme and every collapsed case opened. With several reports on the page (a
+  // collection and the member it shows), the first to see the print takes the theme and restores it once.
+  let printState: { owns: boolean; opened: HTMLDetailsElement[] } | null = null;
   on(win, "beforeprint", () => {
-    const html = doc.documentElement;
-    printState = { theme: html.getAttribute("data-theme"), opened: all<HTMLDetailsElement>("details:not([open])").filter(d => !dialog?.contains(d)) };
+    const html = doc.documentElement, owns = !html.hasAttribute("data-av-print-theme");
+    if (owns) html.setAttribute("data-av-print-theme", html.getAttribute("data-theme") ?? "auto");
+    printState = { owns, opened: all<HTMLDetailsElement>("details:not([open])").filter(d => !dialog?.contains(d)) };
     printState.opened.forEach(d => { d.open = true; });
     html.setAttribute("data-theme", "light");
   });
@@ -788,7 +824,11 @@ export function enhance(root: HTMLElement, ctx?: RenderContext): Enhancement {
     if (!printState) return;
     const html = doc.documentElement;
     printState.opened.forEach(d => { d.open = false; });
-    if (printState.theme === null) html.removeAttribute("data-theme"); else html.setAttribute("data-theme", printState.theme);
+    if (printState.owns) {
+      const theme = html.getAttribute("data-av-print-theme");
+      html.removeAttribute("data-av-print-theme");
+      if (theme === "auto" || theme === null) html.removeAttribute("data-theme"); else html.setAttribute("data-theme", theme);
+    }
     printState = null;
   });
 
@@ -861,7 +901,7 @@ function drawerHtml(data: TrialReport, i: number, ctx: RenderContext, seq: numbe
     const held = checks[k] === true || !decides;
     return `<tr class="av-req${held ? "" : " av-req--unmet"}"><th scope="row"><code>${esc(k).replace(/_/g, "_<wbr>")}</code> <span class="av-chip av-chip--req">required</span></th><td>${has(k) ? value(checks[k]) : value(undefined)}</td></tr>`;
   }).join("");
-  const others = Object.entries(checks).filter(([k]) => !required.has(k));
+  const others = entriesOf(checks).filter(([k]) => !required.has(k));
   const bools = others.filter(([, v]) => typeof v === "boolean"), values = others.filter(([, v]) => typeof v !== "boolean");
   const unmet = requiredList.filter(k => checks[k] !== true).length;
   const table = (body: string) => `<table class="av-table av-table--compact av-drawer-checks"><tbody>${body}</tbody></table>`;
@@ -872,7 +912,7 @@ function drawerHtml(data: TrialReport, i: number, ctx: RenderContext, seq: numbe
     values.length ? `<details class="av-drawer-sec av-drawer-values"${values.length <= 4 ? " open" : ""}><summary>${values.length} recorded value${values.length === 1 ? "" : "s"} <span class="av-muted">· text and numbers the checks wrote</span></summary>${table(plainRows(values))}</details>` : "",
   ].join("");
 
-  const usage = Object.entries(r.usage && typeof r.usage === "object" ? r.usage : {}).filter(([, v]) => isNum(v) && v !== 0);
+  const usage = entriesOf(r.usage && typeof r.usage === "object" ? r.usage : {}).filter(([, v]) => isNum(v) && v !== 0);
   const path = recordPath(data, r);
   const q = judgeQuestion(scenario);
   return `<header class="av-drawer-head"><div class="av-drawer-id"><p class="av-eyebrow">Run ${i + 1} of ${total}${r.job ? ` · <code>${esc(r.job)}</code>` : ""}${esc(view)}</p><h2 id="av-drawer-title" class="av-drawer-title">${esc(caseName)}</h2><p class="av-drawer-sub">${ctx.arms.tag(r.arm)}<span>repeat ${esc(r.repeat ?? "?")}</span>${outcomeBadge(o)}</p></div><div class="av-drawer-actions"><button type="button" class="av-btn av-btn--small" data-av-copy-link aria-label="Copy a link to this run"><span data-av-word>Copy link</span></button><button type="button" class="av-drawer-close" aria-label="Close run record">✕</button></div></header>
@@ -888,9 +928,44 @@ ${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-draw
 <footer class="av-drawer-foot"><button type="button" class="av-btn" data-av-nav="prev" aria-label="Previous run">← Previous</button><span class="av-muted">${esc(outcomeLabel[o])}<span class="av-drawer-keys"> · ← → to move</span></span><button type="button" class="av-btn" data-av-nav="next" aria-label="Next run">Next →</button></footer>`;
 }
 
-/** Render a specification into a target and enhance it. */
+/** Render a specification into a target and enhance it. A specification with a collection also gets its
+ * reader: #report/ID opens a member's full report in the page and #compare/A/B two members side by side. */
+/** A report mounted inside another keeps ids of its own: each id gains the prefix, every reference to one follows it,
+ * and every link to a place in the report carries the report's own address, so a copied link, or one opened in a new
+ * tab, opens the report at that place. */
+export function scopeIds(root: HTMLElement, base: string, prefix: string): void {
+  const ids = new Set<string>();
+  root.querySelectorAll<HTMLElement>("[id]").forEach(el => { ids.add(el.id); el.id = prefix + el.id; });
+  for (const attr of ["aria-labelledby", "aria-describedby", "aria-controls", "aria-owns", "aria-activedescendant", "aria-details", "aria-errormessage", "for", "headers", "list", "form"])
+    // A label may name an element the report writes later, such as an open run's title: every name is the report's own.
+    root.querySelectorAll<HTMLElement>(`[${attr}]`).forEach(el => el.setAttribute(attr, (el.getAttribute(attr) || "").split(/\s+/).map(t => t && (ids.has(t) || attr.startsWith("aria-")) ? prefix + t : t).join(" ")));
+  root.querySelectorAll<HTMLAnchorElement>("a[href^='#']").forEach(a => {
+    const href = a.getAttribute("href") || "";
+    let id = href.slice(1).split("?")[0];
+    try { id = decodeURIComponent(id); } catch { /* keep it raw */ }
+    if (ids.has(id) || /^run-\d+$/.test(id)) a.setAttribute("href", `${base}/${href.slice(1)}`);
+  });
+  // Drawn references: url(#id) in a fill, stroke, marker or style, and an SVG use or link to #id.
+  const urlRef = /url\(\s*(['"]?)#([^'")\s]+)\1\s*\)/g;
+  root.querySelectorAll<Element>("svg, svg *").forEach(el => {
+    for (const at of Array.from(el.attributes)) {
+      if ((at.name === "href" || at.name === "xlink:href") && at.value.startsWith("#") && ids.has(at.value.slice(1))) el.setAttribute(at.name, `#${prefix}${at.value.slice(1)}`);
+      else if (at.value.includes("url(")) el.setAttribute(at.name, at.value.replace(urlRef, (m, q, id) => ids.has(id) ? `url(${q}#${prefix}${id}${q})` : m));
+    }
+  });
+}
+
 export function mount(target: HTMLElement, spec: ReportSpec): Enhancement {
   target.innerHTML = renderReport(spec);
   target.removeAttribute("aria-busy");
-  return enhance(target, createContext(spec, spec.cases || {}));
+  // The reader routes first, so a collection address is handled before the report's own deep links.
+  const reader = spec.collection ? attachReader(target, spec.collection, (host, inner, hashBase) => {
+    host.innerHTML = renderReport(inner);
+    const idPrefix = `${hashBase.replace(/^#/, "").replace(/[^\w-]+/g, "-")}--`;
+    scopeIds(host, hashBase, idPrefix);
+    return enhance(host, createContext(inner, inner.cases || {}), { hashBase, idPrefix });
+  }) : null;
+  const done = enhance(target, createContext(spec, spec.cases || {}));
+  reader?.start();
+  return reader ? { diagrams: done.diagrams, cleanup() { reader.cleanup(); done.cleanup(); } } : done;
 }

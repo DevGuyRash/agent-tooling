@@ -7,6 +7,8 @@ import type { TrialReport } from "./trial-model";
 import { comparisonReport, fromTrial } from "./comparison-compose";
 import type { ComparisonNarrative } from "./comparison-compose";
 import type { Comparison } from "./comparison-model";
+import { collectionReport } from "./collection";
+import type { Collection } from "./collection";
 
 export { escapeText, wilson } from "./core";
 export { ArmRegistry, createContext } from "./model";
@@ -21,12 +23,15 @@ export type { CasePair } from "./trial-model";
 export { enhance, mount, csvCell, runsCsv } from "./enhance";
 export type { Enhancement } from "./enhance";
 export { mermaidDiagram } from "./figures";
-export { validateSpec, validateNarrative, validateComparison } from "./validate";
+export { validateSpec, validateNarrative, validateComparison, validateCollection, reportCases } from "./validate";
 export { comparisonReport, fromTrial, COMPARISON_SECTION_IDS } from "./comparison-compose";
 export type { ComparisonNarrative, Criterion } from "./comparison-compose";
-export { summarize, difference, summarizeGroups, winMatrix, groupPath, groupComparison, metricOf, alternativeIds, judgmentMetric, observationStatus, ordinalLevels, invalidJudgments, superiority, bootstrap, tCdf, tQuantile, tInterval, welch, poolMoments } from "./comparison-stats";
+export { summarize, difference, evidenceAs, caseKey, casesWords, caseSplit, NO_CASE_WORDS, summarizeGroups, winMatrix, groupPath, groupComparison, metricOf, alternativeIds, judgmentMetric, observationStatus, ordinalLevels, invalidJudgments, superiority, bootstrap, tCdf, tQuantile, tInterval, welch, poolMoments } from "./comparison-stats";
 export type { Comparison, Metric, MetricKind, Alternative, Case, Observation, Aggregate, Preference, Ranking, MetricSummary, MetricDifference, ComparisonFilter } from "./comparison-model";
 export type { Problem } from "./validate";
+export { collectionReport, compareReport, memberReport, collectionModel, COLLECTION_SECTION_IDS } from "./collection";
+export type { Collection, CollectionMember, CollectionTheme, CollectionPair, CollectionModel, MemberSummary } from "./collection";
+export { readerRoute } from "./reader";
 export { failureCause } from "./failure";
 export type { FailureCause } from "./failure";
 export { newcombe } from "./stats";
@@ -43,7 +48,7 @@ function embedded<T>(id: string): T | null {
 }
 
 /** Render the report the document carries, if it carries one: a full
- * specification in #av-spec, a comparison in #av-comparison, or trial data in
+ * specification in #av-spec, a collection of reports in #av-collection, a comparison in #av-comparison, or trial data in
  * #av-trial, with an optional narrative in #av-narrative, into the element
  * marked data-av-mount. A specification borrows the trial or comparison beside it.
  * Trial data with #av-general set to true is drawn through the comparison views
@@ -55,10 +60,12 @@ export function autoMount(): boolean {
   const spec = embedded<ReportSpec>("av-spec");
   const trial = embedded<TrialReport>("av-trial");
   const comparison = embedded<Comparison>("av-comparison");
-  if (!spec && !trial && !comparison) return false;
+  const collection = embedded<Collection>("av-collection");
+  if (!spec && !trial && !comparison && !collection) return false;
   target.setAttribute("data-av-mounted", "");
   try {
-    if (spec) { if (trial && !spec.trial) spec.trial = trial; if (comparison && !spec.comparison) spec.comparison = comparison; mount(target, spec); }
+    if (spec) { if (trial && !spec.trial) spec.trial = trial; if (comparison && !spec.comparison) spec.comparison = comparison; if (collection && !spec.collection) spec.collection = collection; mount(target, spec); }
+    else if (collection) mount(target, collectionReport(collection));
     else if (comparison) mount(target, comparisonReport(comparison, embedded<ComparisonNarrative>("av-narrative") || {}));
     else if (embedded<boolean>("av-general") === true) mount(target, comparisonReport(fromTrial(trial!), embedded<ComparisonNarrative>("av-narrative") || {}));
     else mount(target, trialReport(trial!, embedded<Narrative>("av-narrative") || {}));

@@ -164,7 +164,7 @@ class ExamplesTest(unittest.TestCase):
         self.assertTrue(any(row["n"] for row in rows), "a count carries its trials")
 
     def test_report_check_accepts_every_comparison_example(self) -> None:
-        inputs = [["--data", COMPARISONS / f"{n}.json", "--narrative", COMPARISONS / f"{n}-narrative.json"] for n in COMPARISON_NAMES] + [["--csv", COMPARISONS / "commute.csv"]]
+        inputs = [["--data", COMPARISONS / f"{n}.json", "--narrative", COMPARISONS / f"{n}-narrative.json"] for n in COMPARISON_NAMES] + [["--csv", COMPARISONS / "commute.csv", "--narrative", COMPARISONS / "commute-narrative.json"]]
         for args in inputs:
             with self.subTest(example=args[1].name):
                 result = run_python(REPORT, "--check", *args)

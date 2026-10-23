@@ -7,6 +7,7 @@
  * checks that did not hold, or the judge, and an invalid run names the reason
  * trial.py recorded instead of a result. Nothing here is guessed: a failed run
  * whose data name no cause says so. */
+import { entriesOf, stripText, WS_RUN } from "./core";
 import { invalidReason } from "./trial-model";
 import type { TrialRun, TrialScenario } from "./trial-model";
 
@@ -52,7 +53,7 @@ export function judgeFailed(run: TrialRun, scenario?: TrialScenario): boolean {
 
 /** Collapse whitespace so a value reads as one line. */
 export function oneLine(value: unknown): string {
-  return (typeof value === "string" ? value : value === null || value === undefined ? "" : String(value)).replace(/\s+/g, " ").trim();
+  return stripText((typeof value === "string" ? value : value === null || value === undefined ? "" : String(value)).replace(WS_RUN, " "));
 }
 
 /** At most `max` characters: whole sentences where they fit, else a clause, else
@@ -85,7 +86,7 @@ const DETAIL_PART = /(^|[_\-.\s])(problems?|errors?|failures?|failed|reasons?|no
  * whose value is not empty, "-", "ok" or similar. Shown with its name, never as
  * the cause itself. */
 export function recordedDetail(run: TrialRun): { name: string; value: string } | null {
-  const entries = Object.entries(run.checks && typeof run.checks === "object" ? run.checks : {})
+  const entries = entriesOf(run.checks && typeof run.checks === "object" ? run.checks : {})
     .filter((e): e is [string, string] => typeof e[1] === "string" && e[0] !== "check_error" && !NOTHING.has(oneLine(e[1]).toLowerCase()));
   const hit = entries.find(([k]) => DETAIL_NAME.test(k)) || entries.find(([k]) => DETAIL_PART.test(k));
   return hit ? { name: hit[0], value: oneLine(hit[1]) } : null;
@@ -103,7 +104,7 @@ export function relatedValue(run: TrialRun, check: string): { name: string; valu
   const want = tokens(String(check));
   if (!want.length) return null;
   let best: { name: string; value: string; score: number } | null = null;
-  for (const [name, raw] of Object.entries(run.checks && typeof run.checks === "object" ? run.checks : {})) {
+  for (const [name, raw] of entriesOf(run.checks && typeof run.checks === "object" ? run.checks : {})) {
     if (name === check || name === "check_error" || (typeof raw !== "string" && typeof raw !== "number")) continue;
     const value = oneLine(raw);
     if (typeof raw === "string" && NOTHING.has(value.toLowerCase())) continue;

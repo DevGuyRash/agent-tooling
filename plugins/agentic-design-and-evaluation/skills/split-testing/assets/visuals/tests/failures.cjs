@@ -88,7 +88,7 @@ test("many failed checks stay within about 200 characters and count the rest", (
 test("every invalid reason trial.py writes reads in plain words and is never called a failure", () => {
   const cases = {
     "judge-missing": "plan names no judge", "judge-stale": "another judge", "judge-error": "gave no verdict", "check-error": "checks failed to run",
-    timeout: "time limit", "exit-137": "code 137", "setup-failed": "setup did not finish", "no-thread-for-followup": "follow-up", skipped: "not attempted",
+    timeout: "time limit", "exit-137": "code 137", "setup-failed": "failed or ran past 300 seconds", "no-thread-for-followup": "follow-up", skipped: "not attempted",
   };
   for (const [code, words] of Object.entries(cases)) {
     const c = cause({ scenario: "c1", arm: "a", passed: null, status: /^(timeout|exit-|setup|no-thread|skipped)/.test(code) ? code : "ok", invalid_reason: code }, SCEN);
