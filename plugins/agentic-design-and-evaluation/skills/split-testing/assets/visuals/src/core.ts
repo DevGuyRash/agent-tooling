@@ -35,6 +35,9 @@ export function slug(value: string, prefix = "av"): string {
   return `${prefix}-${base || "x"}-${hash(String(value))}`;
 }
 
+/** An identifier: text with something in it that starts with no "$" (kept for notes) and has no space or tab at either
+ * end. Every check of every kind of data holds each id to this, so every view compares ids exactly as written. */
+export const isId = (v: unknown): v is string => typeof v === "string" && v !== "" && !v.startsWith("$") && v === v.trim();
 /** The entries of a keyed map in data, in its own order, as every check and every view lists them: a trial's pairwise
  * judgments, a judgment's counts by case, a plan's arms, a run's checks and usage, a total's level counts, an
  * alternative's attributes, a criterion's scores, and a narrative's or story's records. A key starting with "$" is a

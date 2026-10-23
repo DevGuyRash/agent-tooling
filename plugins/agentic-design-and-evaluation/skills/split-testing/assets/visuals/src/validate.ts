@@ -4,7 +4,7 @@
  * input that would break a view or make it misread; a warning is input the
  * report does not use as written. report.py --check applies the same rules
  * without a browser; tests/test_validate.py keeps the two in agreement. */
-import { esc, entriesOf, keysIn } from "./core";
+import { esc, entriesOf, isId, keysIn } from "./core";
 import type { ReportSpec } from "./model";
 import { blockTypes } from "./report";
 import { casePairs, trialArms, wellFormedPair } from "./trial-model";
@@ -205,9 +205,9 @@ const GROUP_PATH: Field = { oneOf: ["text", { list: "text" }] };
 const COMPARISON: Shape = {
   fields: {
     title: "text", question: "text", summary: "prose",
-    alternatives: { list: { fields: { id: "string", label: "text", description: "text", group: GROUP_PATH, attributes: { record: { oneOf: ["text", "boolean", "null"] } }, content: "text", note: "text" }, required: ["id"] } },
-    cases: { list: { fields: { id: "string", label: "text", description: "text", group: GROUP_PATH }, required: ["id"] } },
-    metrics: { list: { fields: { id: "string", label: "text", kind: { enum: METRIC_KINDS }, better: { enum: ["higher", "lower", "none"] }, unit: "text", levels: { list: "text" }, primary: "boolean", description: "text", threshold: "number" }, required: ["id", "kind"] } },
+    alternatives: { list: { fields: { id: "alternative-id", label: "text", description: "text", group: GROUP_PATH, attributes: { record: { oneOf: ["text", "boolean", "null"] } }, content: "text", note: "text" }, required: ["id"] } },
+    cases: { list: { fields: { id: "case-id", label: "text", description: "text", group: GROUP_PATH }, required: ["id"] } },
+    metrics: { list: { fields: { id: "metric-id", label: "text", kind: { enum: METRIC_KINDS }, better: { enum: ["higher", "lower", "none"] }, unit: "text", levels: { list: "text" }, primary: "boolean", description: "text", threshold: "number" }, required: ["id", "kind"] } },
     observations: { list: { fields: { alternative: "alternative", metric: "metric", case: "comparison-case", value: { oneOf: ["boolean", "text", "null"] }, n: "count", unit: "text", valid: "boolean", invalid_reason: "text", note: "text", excerpt: "text", source: "text", id: "text" }, required: ["alternative", "metric"] } },
     aggregates: { list: { fields: { alternative: "alternative", metric: "metric", case: "comparison-case", k: "count", n: "count", mean: "number", sd: "number", median: "number", lo: "number", hi: "number", counts: { record: "count" }, source: "text", note: "text" }, required: ["alternative", "metric"] } },
     preferences: { list: { fields: { a: "alternative", b: "alternative", winner: { oneOf: ["text", "null"] }, case: "comparison-case", metric: "metric", judge: "text", note: "text" }, required: ["a", "b"] } },
@@ -303,6 +303,7 @@ function describe(f: Field): string {
     arm: "an arm id", "arm-ref": "an arm id", "arm-label": "an arm id", case: "a case id", "case-ref": "a case id", check: "a check name", pair: "a pairwise key",
     measure: "a measure id", "section-id": "a section id", alternative: "an alternative id", "alternative-ref": "an alternative id", metric: "a metric id", "comparison-case": "a case id",
     member: "a report id", "member-id": "a report id", theme: "a theme id", "theme-id": "a theme id",
+    "alternative-id": "an alternative id", "case-id": "a case id", "metric-id": "a metric id",
   } as Record<string, string>)[f] || f;
   if ("enum" in f) return `one of ${f.enum.join(", ")}`;
   if ("list" in f) return "a list";
@@ -427,6 +428,8 @@ function knownFrom(trial: unknown, comparison?: unknown, collection?: unknown): 
   return known;
 }
 
+/** Field kinds that hold an identifier in data or name one the data defines: each is held to the identifier rule (isId). */
+const ID_KINDS = ["arm", "case", "check", "pair", "alternative", "alternative-ref", "metric", "comparison-case", "member", "member-id", "theme", "theme-id", "alternative-id", "case-id", "metric-id"];
 const IDS: Record<string, { list: "arms" | "cases" | "checks" | "pairs" | "alternatives" | "metrics" | "ccases" | "members" | "themes" | null; noun: string; plural: string; level: Problem["level"]; tail: string }> = {
   arm: { list: "arms", noun: "an arm in this trial", plural: "arms in this trial", level: "error", tail: "" },
   "arm-ref": { list: "arms", noun: "an arm in this trial", plural: "arms in this trial", level: "warning", tail: "; it gets an identity color of its own" },
@@ -502,6 +505,8 @@ class Checker {
     if (kind === "theme-id" && !(v as string).trim()) this.add("error", where, "a theme id cannot be blank, since reports join their theme by its id", "name the theme");
     if (kind === "section-id" && !/^[A-Za-z][\w:.-]*$/.test(v as string))
       this.add("warning", where, `"${clip(v as string)}" cannot be used as a section id, so the section gets a generated one`, "start with a letter and use only letters, digits, _ : . or -");
+    // An id that is not blank but breaks the identifier rule is refused here; a blank one is told by its kind's own check.
+    if (ID_KINDS.includes(kind) && (v as string).trim() !== "" && !isId(v)) return this.add("error", where, `"${clip(v as string)}" cannot be an id: an id starts with no "$" (kept for notes) and has no space or tab at either end`, "write the id without them");
     if (kind in IDS) this.id(v as string, kind, where);
   }
 
@@ -534,7 +539,7 @@ class Checker {
     for (const name of f.required || []) {
       const x = v[name];
       if (x === undefined || x === null) this.add("error", where, `missing required field "${name}"`, `required here: ${(f.required || []).join(", ")}`);
-      else if (typeof x === "string" && !x.trim() && ["text", "string", "prose"].includes(f.fields[name] as string))
+      else if (typeof x === "string" && !x.trim() && ["text", "string", "prose", "alternative-id", "case-id", "metric-id"].includes(f.fields[name] as string))
         this.add("error", this.join(where, name), `"${name}" is empty`, f.empty?.[name] || "write the text the report should show, or remove the entry");
     }
     for (const [name, field] of Object.entries(f.fields)) {
@@ -724,8 +729,9 @@ function storyChecks(c: Checker, owner: Obj, at: string, needs: StoryNeeds): voi
   }
   const described = (key: "alternatives" | "cases", needed: Map<string, string> | null) => {
     if (!needed) return;
-    const ids = [...needed.keys()], given = isObj(story[key]) ? story[key] as Obj : {};
-    for (const [id, noun] of needed) if (!said(given[id])) c.add("error", c.join(where, key), `does not describe ${noun} "${clip(id)}"`, key === "alternatives" ? "say in plain words what each one is and how it differs from the others" : "say in plain words why each case exists and what it checks for");
+    // The descriptions the story view draws (entriesOf: a "$" key is a note), so a note never counts as one.
+    const ids = [...needed.keys()], given = isObj(story[key]) ? story[key] as Obj : {}, drawn = new Map(entriesOf(given));
+    for (const [id, noun] of needed) if (!said(drawn.get(id))) c.add("error", c.join(where, key), `does not describe ${noun} "${clip(id)}"`, key === "alternatives" ? "say in plain words what each one is and how it differs from the others" : "say in plain words why each case exists and what it checks for");
     const article = key === "cases" ? "a case" : [...needed.values()].every(n => n === "arm") && ids.length ? "an arm" : "an alternative";
     for (const k of keysOf(given)) if (!ids.includes(k)) {
       const s = suggest(k, ids);
@@ -967,8 +973,7 @@ export function reportCases(spec: ReportSpec | unknown, options: { trial?: unkno
   return specNeeds(spec, knownFrom(trial, comparison), trial, comparison).cases || [];
 }
 /** An identifier the views group or label by: text with something in it. */
-const isId = (v: unknown): v is string => typeof v === "string" && !!v.trim();
-const ID_HINT = "write the trial with trial.py report RUN_DIR --out FILE, which names each as text";
+const ID_HINT = 'an id is text that starts with no "$" (kept for notes) and has no space or tab at either end, as trial.py report RUN_DIR --out FILE writes it';
 /** The one check of trial data, however it enters: a specification's own `trial`, a trial supplied beside a
  * specification, a narrative's trial (so every composed trial report), and a collection member's. It must be trial report
  * data, and every identifier the views group or label by must be text: each run's arm and scenario (and its job, when
@@ -983,16 +988,20 @@ function checkTrial(c: Checker, trial: unknown, where: string): boolean {
     if (!isId(r.arm)) c.add("error", `${where}.runs[${i}].arm`, "a trial run must name its arm", ID_HINT);
     if (!isId(r.scenario)) c.add("error", `${where}.runs[${i}].scenario`, "a trial run must name its scenario", ID_HINT);
     if (r.job !== undefined && r.job !== null && !isId(r.job)) c.add("error", `${where}.runs[${i}].job`, "a trial run's job, when given, must name its record", ID_HINT);
-    if (!isVerdict(r.passed)) c.add("error", `${where}.runs[${i}].passed`, "a trial run must say whether it passed: true, false, or null for no verdict", ID_HINT.replace("names each as text", "writes each run's verdict"));
+    if (!isVerdict(r.passed)) c.add("error", `${where}.runs[${i}].passed`, "a trial run must say whether it passed: true, false, or null for no verdict", "write the trial with trial.py report RUN_DIR --out FILE, which writes each run's verdict");
   });
   if (isObj(trial.plan) && Array.isArray(trial.plan.scenarios))
     trial.plan.scenarios.forEach((sc, i) => { if (isObj(sc) && !isId(sc.name)) c.add("error", `${where}.plan.scenarios[${i}].name`, "a plan scenario must have a name", ID_HINT); });
+  // A plan's arms are keyed by their ids.
+  if (isObj(trial.plan)) for (const k of keysIn(trial.plan.arms)) if (!isId(k)) c.add("error", c.join(c.join(c.join(where, "plan"), "arms"), k), `"${clip(k)}" cannot be an arm id`, ID_HINT);
   // A pairwise judgment names exactly two different arms this trial knows, with its overall counts and its counts by case.
   if (isObj(trial.pairwise)) {
     const known = trialArms(trial);
     for (const k of keysOf(trial.pairwise)) {
       const p = trial.pairwise[k], at = c.join(c.join(where, "pairwise"), k);
+      if (!isId(k)) c.add("error", at, `"${clip(k)}" cannot be a pairwise judgment's id`, ID_HINT);
       if (!isObj(p)) { c.add("error", at, "a pairwise judgment must be an object with its arms and counts", ID_HINT); continue; }
+      for (const s of keysIn(p.scenarios)) if (!isId(s)) c.add("error", c.join(c.join(at, "scenarios"), s), `"${clip(s)}" cannot be a case id`, ID_HINT);
       if (!Array.isArray(p.arms) || p.arms.length !== 2) c.add("error", c.join(at, "arms"), "a pairwise judgment must name its two arms", ID_HINT);
       else {
         p.arms.forEach((a, i) => {
@@ -1001,8 +1010,8 @@ function checkTrial(c: Checker, trial: unknown, where: string): boolean {
         });
         if (isId(p.arms[0]) && p.arms[0] === p.arms[1]) c.add("error", c.join(at, "arms"), "a pairwise judgment must name two different arms", ID_HINT);
       }
-      if (!isObj(p.overall)) c.add("error", c.join(at, "overall"), "a pairwise judgment needs its overall counts", ID_HINT.replace("names each as text", "writes them"));
-      if (!isObj(p.scenarios)) c.add("error", c.join(at, "scenarios"), "a pairwise judgment needs its counts by case", ID_HINT.replace("names each as text", "writes them"));
+      if (!isObj(p.overall)) c.add("error", c.join(at, "overall"), "a pairwise judgment needs its overall counts", "write the trial with trial.py report RUN_DIR --out FILE, which writes them");
+      if (!isObj(p.scenarios)) c.add("error", c.join(at, "scenarios"), "a pairwise judgment needs its counts by case", "write the trial with trial.py report RUN_DIR --out FILE, which writes them");
     }
   }
   return true;
@@ -1016,7 +1025,7 @@ function wellFormedTrial(trial: unknown): unknown {
   const runs = trial.runs.filter(r => !isObj(r) || (isId(r.arm) && isId(r.scenario) && (r.job === undefined || r.job === null || isId(r.job)) && isVerdict(r.passed)));
   const plan = isObj(trial.plan) && Array.isArray(trial.plan.scenarios) ? { ...trial.plan, scenarios: trial.plan.scenarios.filter(sc => !isObj(sc) || isId(sc.name)) } : trial.plan;
   const known = trialArms(trial);
-  const pairwise = isObj(trial.pairwise) ? Object.fromEntries(entriesOf(trial.pairwise).filter(([, p]) => wellFormedPair(p, known))) : trial.pairwise;
+  const pairwise = isObj(trial.pairwise) ? Object.fromEntries(entriesOf(trial.pairwise).filter(([k, p]) => isId(k) && wellFormedPair(p, known))) : trial.pairwise;
   return { ...trial, runs, ...(plan !== undefined ? { plan } : {}), ...(pairwise !== undefined ? { pairwise } : {}) };
 }
 /** A check's problems, moved from the place it names its input (`from`, such as "comparison") to where the input
@@ -1167,7 +1176,8 @@ export function validateNarrative(narrative: unknown, given?: unknown): Problem[
         (group as unknown[]).forEach((arm, j) => {
           const other = typeof arm === "string" && Object.prototype.hasOwnProperty.call(c.known.settings, arm) ? c.known.settings[arm] : undefined;
           if (typeof arm !== "string" || arm === first || !other) return;
-          const differ = [...new Set([...Object.keys(base), ...Object.keys(other)])].filter(k => !MATERIAL_TEXT.includes(k) && canon(base[k]) !== canon(other[k])).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+          // Settings listed as the setup view lists them (entriesOf: a "$" key is a note).
+          const differ = [...new Set([...keysIn(base), ...keysIn(other)])].filter(k => !MATERIAL_TEXT.includes(k) && canon(base[k]) !== canon(other[k])).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
           if (differ.length) c.add("error", c.join(c.join(where, i), j), `"${clip(arm)}" differs from "${clip(first)}" in ${listOf(differ)}, so the gap between them is not chance alone`, "identical is for copies whose every recorded setting matches; leave these arms out of it");
         });
       });

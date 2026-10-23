@@ -154,6 +154,8 @@ export interface CollectionModel {
 export const MEMBER_ID = /^[A-Za-z][\w.-]*$/;
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const text = (v: unknown): string => typeof v === "string" ? v.trim() : isNum(v) ? String(v) : "";
+/** An id as written: the checks hold every id to the identifier rule (isId), so ids are compared exactly, never trimmed. */
+const idOf = (v: unknown): string => typeof v === "string" ? v : "";
 const isTrial = (v: unknown): v is TrialReport => isObject(v) && Array.isArray(v.runs);
 const isComparisonData = (v: unknown): v is Comparison => isObject(v) && Array.isArray(v.alternatives);
 const isSpec = (v: unknown): v is ReportSpec => isObject(v) && typeof v.title === "string" && Array.isArray(v.sections);
@@ -384,7 +386,7 @@ function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): 
   const label = (id: string) => arms.label(id);
   const named = custom ? text(spec.title) : text(narrative.title) || text(narrative.question);
   const own = (fallback: string) => ({ title: text(m.title) || named || fallback || m.id, short: text(m.label) || text(m.title) || named || fallback || m.id });
-  const base = { id: m.id, index, theme: text(m.theme), verdict, stamp: text(decision?.label) || verdictWords[verdict], headline: text(decision?.headline), note: text(m.note), follows: text(m.follows) || null, arms };
+  const base = { id: m.id, index, theme: idOf(m.theme), verdict, stamp: text(decision?.label) || verdictWords[verdict], headline: text(decision?.headline), note: text(m.note), follows: idOf(m.follows) || null, arms };
   const listed = Array.isArray(m.models) && m.models.length ? m.models.map(text).filter(Boolean) : null;
   // The cases the member's report ran: exactly those its story must describe, from every source of data it uses.
   const cases = caseList(spec), noCase = namesNoCase(spec);
@@ -478,7 +480,7 @@ export function collectionModel(data: Collection): CollectionModel {
     if (a === b || !byId.has(a) || !byId.has(b) || pairs.some(p => (p.a === a && p.b === b) || (p.a === b && p.b === a))) return;
     pairs.push({ a, b, ...extra, source });
   };
-  for (const p of Array.isArray(data?.pairs) ? data.pairs : []) if (isObject(p)) add(text(p.a), text(p.b), { title: text(p.title) || undefined, note: text(p.note) || undefined }, "pair");
+  for (const p of Array.isArray(data?.pairs) ? data.pairs : []) if (isObject(p)) add(idOf(p.a), idOf(p.b), { title: text(p.title) || undefined, note: text(p.note) || undefined }, "pair");
   for (const s of members) if (s.follows) add(s.follows, s.id, {}, "follows");
   const model: CollectionModel = { data, members, byId, themes: themes.filter(t => t.members.length), pairs, spec, member: id => usable.find(x => x.id === id) || null };
   if (print) models.set(data, { print, model });

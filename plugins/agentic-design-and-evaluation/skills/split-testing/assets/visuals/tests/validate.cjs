@@ -436,4 +436,26 @@ test("round 22: the pairwise view draws exactly the judgments the checks accept"
   }
 });
 
+test("round 23: an id starts with no $ and has no space or tab at either end, and ids are compared exactly", () => {
+  const story = { background: "b", intent: "i", questions: ["q"], rule: "r", covers: "c", notCovered: "n" };
+  // 1. The reviewer's trial: an arm and a case named with "$", described under those keys (which are notes).
+  const noted = { title: "T", story: { ...story, alternatives: { $arm: "Arm." }, cases: { $case: "Case." } }, sections: [{ title: "S", reading: "r", blocks: [{ type: "tapestry" }] }],
+    trial: { runs: [{ arm: "$arm", scenario: "$case", passed: true }] } };
+  const errors = spec => H.plain(V.validateSpec(spec)).filter(p => p.level === "error").map(p => `${p.where}: ${p.message}`);
+  H.ok(errors(noted).includes("trial.runs[0].arm: a trial run must name its arm") && errors(noted).includes("trial.runs[0].scenario: a trial run must name its scenario"), `the arm and case are refused: ${errors(noted).join(" | ")}`);
+  H.includes(V.renderReport(noted), "av-problems--error", "and the page says so");
+  // 2. The reviewer's collection: a theme declared and referenced with spaces around its id.
+  const member = { id: "one", theme: " t ", trial: { runs: [{ arm: "a", scenario: "c1", passed: true }] } };
+  const said = H.plain(V.validateCollection({ themes: [{ id: "t", label: "Unrelated", summary: "U." }, { id: " t ", label: "Intended", summary: "I." }], members: [member] })).filter(p => p.level === "error").map(p => p.where);
+  H.ok(said.includes("collection.themes[1].id") && said.includes("collection.members[0].theme"), `the padded theme id and reference are refused: ${said.join(", ")}`);
+  // Ids written exactly join exactly: the report sits under its own theme.
+  const exact = V.collectionModel({ themes: [{ id: "t", label: "Its theme" }, { id: "u", label: "Other" }], members: [{ ...member, theme: "t" }] });
+  H.equal(H.plain(exact.themes.map(t => [t.label, t.members.map(m => m.id)])), [["Its theme", ["one"]]], "grouped under the theme it names");
+  // Keys that are ids are held to the rule too: a plan's arms, a pairwise judgment's name and its cases.
+  const keyed = { runs: [{ arm: "a", scenario: "c1", passed: true }, { arm: "b", scenario: "c1", passed: false }], plan: { arms: { a: {}, " b": {} } },
+    pairwise: { " p": { arms: ["a", "b"], overall: { a_wins: 1 }, scenarios: { "c1 ": { a_wins: 1 } } } } };
+  const keyErrors = H.plain(V.validateSpec({ title: "T", sections: [], trial: keyed })).filter(p => p.level === "error").map(p => p.where);
+  for (const at of ['trial.plan.arms[" b"]', 'trial.pairwise[" p"]', 'trial.pairwise[" p"].scenarios["c1 "]']) H.ok(keyErrors.includes(at), `${at} refused: ${keyErrors.join(", ")}`);
+});
+
 H.report();

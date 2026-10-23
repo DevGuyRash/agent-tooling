@@ -281,9 +281,9 @@ GROUP_PATH = {"oneOf": ["text", {"list": "text"}]}
 COMPARISON = {
     "fields": {
         "title": "text", "question": "text", "summary": "prose",
-        "alternatives": {"list": {"fields": {"id": "string", "label": "text", "description": "text", "group": GROUP_PATH, "attributes": {"record": {"oneOf": ["text", "boolean", "null"]}}, "content": "text", "note": "text"}, "required": ["id"]}},
-        "cases": {"list": {"fields": {"id": "string", "label": "text", "description": "text", "group": GROUP_PATH}, "required": ["id"]}},
-        "metrics": {"list": {"fields": {"id": "string", "label": "text", "kind": {"enum": METRIC_KINDS}, "better": {"enum": ["higher", "lower", "none"]}, "unit": "text", "levels": {"list": "text"}, "primary": "boolean", "description": "text", "threshold": "number"}, "required": ["id", "kind"]}},
+        "alternatives": {"list": {"fields": {"id": "alternative-id", "label": "text", "description": "text", "group": GROUP_PATH, "attributes": {"record": {"oneOf": ["text", "boolean", "null"]}}, "content": "text", "note": "text"}, "required": ["id"]}},
+        "cases": {"list": {"fields": {"id": "case-id", "label": "text", "description": "text", "group": GROUP_PATH}, "required": ["id"]}},
+        "metrics": {"list": {"fields": {"id": "metric-id", "label": "text", "kind": {"enum": METRIC_KINDS}, "better": {"enum": ["higher", "lower", "none"]}, "unit": "text", "levels": {"list": "text"}, "primary": "boolean", "description": "text", "threshold": "number"}, "required": ["id", "kind"]}},
         "observations": {"list": {"fields": {"alternative": "alternative", "metric": "metric", "case": "comparison-case", "value": {"oneOf": ["boolean", "text", "null"]}, "n": "count", "unit": "text", "valid": "boolean", "invalid_reason": "text", "note": "text", "excerpt": "text", "source": "text", "id": "text"}, "required": ["alternative", "metric"]}},
         "aggregates": {"list": {"fields": {"alternative": "alternative", "metric": "metric", "case": "comparison-case", "k": "count", "n": "count", "mean": "number", "sd": "number", "median": "number", "lo": "number", "hi": "number", "counts": {"record": "count"}, "source": "text", "note": "text"}, "required": ["alternative", "metric"]}},
         "preferences": {"list": {"fields": {"a": "alternative", "b": "alternative", "winner": {"oneOf": ["text", "null"]}, "case": "comparison-case", "metric": "metric", "judge": "text", "note": "text"}, "required": ["a", "b"]}},
@@ -326,7 +326,10 @@ DESCRIPTIONS = {
     "arm": "an arm id", "arm-ref": "an arm id", "arm-label": "an arm id", "case": "a case id", "case-ref": "a case id", "check": "a check name", "pair": "a pairwise key",
     "measure": "a measure id", "section-id": "a section id", "alternative": "an alternative id", "alternative-ref": "an alternative id", "metric": "a metric id", "comparison-case": "a case id",
     "member": "a report id", "member-id": "a report id", "theme": "a theme id", "theme-id": "a theme id",
+    "alternative-id": "an alternative id", "case-id": "a case id", "metric-id": "a metric id",
 }
+# Field kinds that hold an identifier in data or name one the data defines: each is held to the identifier rule (is_id).
+ID_KINDS = ("arm", "case", "check", "pair", "alternative", "alternative-ref", "metric", "comparison-case", "member", "member-id", "theme", "theme-id", "alternative-id", "case-id", "metric-id")
 IDS = {
     "arm": ("arms", "an arm in this trial", "arms in this trial", "error", ""),
     "arm-ref": ("arms", "an arm in this trial", "arms in this trial", "warning", "; it gets an identity color of its own"),
@@ -637,6 +640,9 @@ class Checker:
             self.add("error", where, "a theme id cannot be blank, since reports join their theme by its id", "name the theme")
         if kind == "section-id" and not SECTION_ID.fullmatch(v):
             self.add("warning", where, f'"{clip(v)}" cannot be used as a section id, so the section gets a generated one', "start with a letter and use only letters, digits, _ : . or -")
+        # An id that is not blank but breaks the identifier rule is refused here; a blank one is told by its kind's own check.
+        if kind in ID_KINDS and v.strip() != "" and not is_id(v):
+            return self.add("error", where, f'"{clip(v)}" cannot be an id: an id starts with no "$" (kept for notes) and has no space or tab at either end', "write the id without them")
         if kind in IDS:
             self.id(v, kind, where)
         return None
@@ -680,7 +686,7 @@ class Checker:
             x = v.get(name)
             if x is None:
                 self.add("error", where, f'missing required field "{name}"', f"required here: {', '.join(required)}")
-            elif isinstance(x, str) and not x.strip() and f["fields"].get(name) in ("text", "string", "prose"):
+            elif isinstance(x, str) and not x.strip() and f["fields"].get(name) in ("text", "string", "prose", "alternative-id", "case-id", "metric-id"):
                 self.add("error", self.join(where, name), f'"{name}" is empty', f.get("empty", {}).get(name) or "write the text the report should show, or remove the entry")
         for name, field in f["fields"].items():
             x = v.get(name)
@@ -888,11 +894,12 @@ def named_ids(value, field, out: dict) -> None:
 
 
 def is_id(v) -> bool:
-    """An identifier the views group or label by: text with something in it."""
-    return isinstance(v, str) and bool(v.strip())
+    """An identifier (src/core.ts isId): text with something in it that starts with no "$" (kept for notes) and has no
+    space or tab at either end."""
+    return isinstance(v, str) and v != "" and not v.startswith("$") and v == v.strip()
 
 
-ID_HINT = "write the trial with trial.py report RUN_DIR --out FILE, which names each as text"
+ID_HINT = 'an id is text that starts with no "$" (kept for notes) and has no space or tab at either end, as trial.py report RUN_DIR --out FILE writes it'
 
 
 def check_trial_data(c, trial, where: str) -> bool:
@@ -913,20 +920,30 @@ def check_trial_data(c, trial, where: str) -> bool:
         if r.get("job") is not None and not is_id(r.get("job")):
             c.add("error", f"{where}.runs[{i}].job", "a trial run's job, when given, must name its record", ID_HINT)
         if not is_verdict(r, "passed"):
-            c.add("error", f"{where}.runs[{i}].passed", "a trial run must say whether it passed: true, false, or null for no verdict", ID_HINT.replace("names each as text", "writes each run's verdict"))
+            c.add("error", f"{where}.runs[{i}].passed", "a trial run must say whether it passed: true, false, or null for no verdict", "write the trial with trial.py report RUN_DIR --out FILE, which writes each run's verdict")
     plan = trial.get("plan")
     if isinstance(plan, dict) and isinstance(plan.get("scenarios"), list):
         for i, sc in enumerate(plan["scenarios"]):
             if isinstance(sc, dict) and not is_id(sc.get("name")):
                 c.add("error", f"{where}.plan.scenarios[{i}].name", "a plan scenario must have a name", ID_HINT)
+    # A plan's arms are keyed by their ids.
+    if isinstance(plan, dict):
+        for k, _ in entries_of(plan.get("arms")):
+            if not is_id(k):
+                c.add("error", c.join(c.join(c.join(where, "plan"), "arms"), k), f'"{clip(k)}" cannot be an arm id', ID_HINT)
     # A pairwise judgment names exactly two different arms this trial knows, with its overall counts and its counts by case.
     if isinstance(trial.get("pairwise"), dict):
         known = trial_arms(trial)
         for k in keys_of(trial["pairwise"]):
             p, at = trial["pairwise"][k], c.join(c.join(where, "pairwise"), k)
+            if not is_id(k):
+                c.add("error", at, f'"{clip(k)}" cannot be a pairwise judgment\'s id', ID_HINT)
             if not isinstance(p, dict):
                 c.add("error", at, "a pairwise judgment must be an object with its arms and counts", ID_HINT)
                 continue
+            for sk, _ in entries_of(p.get("scenarios")):
+                if not is_id(sk):
+                    c.add("error", c.join(c.join(at, "scenarios"), sk), f'"{clip(sk)}" cannot be a case id', ID_HINT)
             arms = p.get("arms")
             if not isinstance(arms, list) or len(arms) != 2:
                 c.add("error", c.join(at, "arms"), "a pairwise judgment must name its two arms", ID_HINT)
@@ -939,9 +956,9 @@ def check_trial_data(c, trial, where: str) -> bool:
                 if is_id(arms[0]) and arms[0] == arms[1]:
                     c.add("error", c.join(at, "arms"), "a pairwise judgment must name two different arms", ID_HINT)
             if not isinstance(p.get("overall"), dict):
-                c.add("error", c.join(at, "overall"), "a pairwise judgment needs its overall counts", ID_HINT.replace("names each as text", "writes them"))
+                c.add("error", c.join(at, "overall"), "a pairwise judgment needs its overall counts", "write the trial with trial.py report RUN_DIR --out FILE, which writes them")
             if not isinstance(p.get("scenarios"), dict):
-                c.add("error", c.join(at, "scenarios"), "a pairwise judgment needs its counts by case", ID_HINT.replace("names each as text", "writes them"))
+                c.add("error", c.join(at, "scenarios"), "a pairwise judgment needs its counts by case", "write the trial with trial.py report RUN_DIR --out FILE, which writes them")
     return True
 
 
@@ -967,7 +984,7 @@ def trial_arms(trial: dict) -> list:
 def well_formed_pair(p, known: list) -> bool:
     """A pairwise judgment every view can read (as src/validate.ts wellFormedPair)."""
     return (isinstance(p, dict) and isinstance(p.get("arms"), list) and len(p["arms"]) == 2 and all(is_id(a) and a in known for a in p["arms"])
-            and p["arms"][0] != p["arms"][1] and isinstance(p.get("overall"), dict) and isinstance(p.get("scenarios"), dict))
+            and p["arms"][0] != p["arms"][1] and isinstance(p.get("overall"), dict) and isinstance(p.get("scenarios"), dict) and all(is_id(k) for k, _ in entries_of(p["scenarios"])))
 
 
 def well_formed_trial(trial):
@@ -981,7 +998,7 @@ def well_formed_trial(trial):
         out["plan"] = {**plan, "scenarios": [sc for sc in plan["scenarios"] if not isinstance(sc, dict) or is_id(sc.get("name"))]}
     if isinstance(trial.get("pairwise"), dict):
         known = trial_arms(trial)
-        out["pairwise"] = {k: p for k, p in entries_of(trial["pairwise"]) if well_formed_pair(p, known)}
+        out["pairwise"] = {k: p for k, p in entries_of(trial["pairwise"]) if is_id(k) and well_formed_pair(p, known)}
     return out
 
 
@@ -1172,8 +1189,10 @@ def story_checks(c, owner: dict, at: str, needs: dict) -> None:
             return
         ids = list(needed)
         given = story[key] if isinstance(story.get(key), dict) else {}
+        # The descriptions the story view draws (entries_of: a "$" key is a note), so a note never counts as one.
+        drawn = dict(entries_of(given))
         for ident, noun in needed.items():
-            if not said(given.get(ident)):
+            if not said(drawn.get(ident)):
                 c.add("error", c.join(where, key), f'does not describe {noun} "{clip(ident)}"', "say in plain words what each one is and how it differs from the others" if key == "alternatives" else "say in plain words why each case exists and what it checks for")
         article = "a case" if key == "cases" else "an arm" if ids and all(n == "arm" for n in needed.values()) else "an alternative"
         for k in keys_of(given):
@@ -1984,7 +2003,9 @@ def validate_narrative(narrative, trial=None) -> list[dict]:
                 other = settings.get(arm) if isinstance(arm, str) else None
                 if arm == first or other is None:
                     continue
-                differ = sorted(k for k in {*base, *other} if k not in MATERIAL_TEXT and (canon(base[k]) if k in base else "") != (canon(other[k]) if k in other else ""))
+                # Settings listed as the setup view lists them (entries_of: a "$" key is a note).
+                b, o = dict(entries_of(base)), dict(entries_of(other))
+                differ = sorted(k for k in {*b, *o} if k not in MATERIAL_TEXT and (canon(b[k]) if k in b else "") != (canon(o[k]) if k in o else ""))
                 if differ:
                     c.add("error", c.join(c.join(where, i), j), f'"{clip(arm)}" differs from "{clip(first)}" in {list_of(differ)}, so the gap between them is not chance alone', "identical is for copies whose every recorded setting matches; leave these arms out of it")
 

@@ -1,6 +1,6 @@
 /** The document `trial.py report RUN_DIR` writes, and derivations from it.
  * Fields are read defensively: older run directories omit some of them. */
-import { isNum, median, Outcome, wilson, entriesOf, keysIn } from "./core";
+import { isNum, median, Outcome, wilson, entriesOf, isId, keysIn } from "./core";
 import { caseKey, caseSplit, casesWords, pooledCases } from "./stats";
 
 export interface TrialRun {
@@ -368,18 +368,18 @@ export function caseChecks(data: TrialReport, scenario: string, arms: string[]):
   return { required: req, judge, measures, outcome };
 }
 
-const isIdText = (v: unknown): v is string => typeof v === "string" && !!v.trim();
 const isPlain = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 /** The arms a trial knows: those its runs with an arm and a scenario ran, and those its plan lists (entriesOf). */
 export function trialArms(trial: unknown): string[] {
   const out: string[] = [];
   if (!isPlain(trial)) return out;
-  for (const r of Array.isArray(trial.runs) ? trial.runs : []) if (isPlain(r) && isIdText(r.arm) && isIdText(r.scenario) && !out.includes(r.arm)) out.push(r.arm);
-  if (isPlain(trial.plan)) for (const a of keysIn(trial.plan.arms)) if (isIdText(a) && !out.includes(a)) out.push(a);
+  for (const r of Array.isArray(trial.runs) ? trial.runs : []) if (isPlain(r) && isId(r.arm) && isId(r.scenario) && !out.includes(r.arm)) out.push(r.arm);
+  if (isPlain(trial.plan)) for (const a of keysIn(trial.plan.arms)) if (isId(a) && !out.includes(a)) out.push(a);
   return out;
 }
 /** A pairwise judgment every check and every view reads: two different arms the trial knows, with its overall counts
- * and its counts by case, each an object. The checks refuse any other, and the pairwise view draws none. */
+ * and its counts by case, each an object, each case named by an id. The checks refuse any other, and the pairwise view
+ * draws none. */
 export function wellFormedPair(p: unknown, known: string[]): boolean {
-  return isPlain(p) && Array.isArray(p.arms) && p.arms.length === 2 && p.arms.every(a => isIdText(a) && known.includes(a)) && p.arms[0] !== p.arms[1] && isPlain(p.overall) && isPlain(p.scenarios);
+  return isPlain(p) && Array.isArray(p.arms) && p.arms.length === 2 && p.arms.every(a => isId(a) && known.includes(a)) && p.arms[0] !== p.arms[1] && isPlain(p.overall) && isPlain(p.scenarios) && keysIn(p.scenarios).every(isId);
 }

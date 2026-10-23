@@ -460,7 +460,8 @@ class EntryPathMatrixTest(unittest.TestCase):
 
 # Every identifier field of each kind of data, and the malformed values each must be refused (or, where the field may be
 # left out, accepted as left out). Each entry's path names the field; "*" marks its index in the base input.
-BAD_IDS = [None, False, 0, {}, [], "", "  "]
+# An identifier is text with something in it, starting with no "$" (a note) and with no space or tab at either end.
+BAD_IDS = [None, False, 0, {}, [], "", "  ", "$x", " x", "x ", "\t"]
 
 
 def id_base_trial() -> dict:
@@ -498,7 +499,7 @@ ID_FIELDS = {
 OPTIONAL = {"case", "winner", "metric", "job", "theme", "follows"}
 # A member's theme that names no declared theme, a blank one among them, leaves the report among the other reports: a
 # warning, as for any theme the collection does not declare.
-ALLOWED = {("case", ""): ["warning"], ("case", "  "): ["warning"], ("theme", ""): ["warning"], ("theme", "  "): ["warning"]}
+ALLOWED = {(name, blank): ["warning"] for name in ("case", "theme") for blank in ("", "  ", "\t")}
 
 
 def with_value(base: dict, path: tuple, value) -> dict:
