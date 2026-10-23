@@ -8,7 +8,7 @@
 .av-problems-text { min-width: 0; }
 .av-problems-text .av-eyebrow { margin-bottom: 2px; }
 .av-problems-title { font: 600 1rem/1.35 var(--av-font-text); color: var(--av-ink); letter-spacing: -.003em; }
-.av-problems-lead { margin-top: 3px !important; color: var(--av-ink-2); max-width: 74ch; }
+.av-problems-lead { margin-top: 3px !important; color: var(--av-ink-2); max-width: min(calc(var(--av-measure) + 6ch), 92ch); }
 .av-problems-details { margin: 10px 0 0 36px; }
 .av-problems-details > summary, .av-problems-more > summary { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; padding: 3px 2px; font: 600 .8rem/1.4 var(--av-font-text); color: var(--av-ink-2); border-radius: 4px; }
 .av-problems-details > summary::-webkit-details-marker, .av-problems-more > summary::-webkit-details-marker { display: none; }
