@@ -739,17 +739,20 @@ class LauncherTest(unittest.TestCase):
     def test_a_copied_sign_in_is_compared_only_where_the_run_was_given_it(self):
         # what an agent leaves in its home is compared without being trusted: a home replaced by a link to a copy of
         # the very same sign-ins elsewhere is never read through (both are named, being no longer where they were given,
-        # and the decoy is untouched); a directory-only tree added within a copied directory, or a FIFO in a sign-in's
-        # place, is named, not taken as unchanged nor waited on
+        # and the decoy is untouched); a directory-only tree added within a copied directory is named without being
+        # entered (it cannot be: it is unreadable), and a FIFO in a sign-in's place is named, never waited on
         decoy = self.tmp / "decoy"
+        decoyed = {}
 
         def relinked(home):
             shutil.copytree(home, decoy, symlinks=False)  # the same bytes, outside the run
+            decoyed.update({p.relative_to(decoy).as_posix(): p.read_bytes() for p in decoy.rglob("*") if p.is_file()})
             os.rename(home, home.with_name("home-moved"))
             os.symlink(decoy, home)
 
         def deepened(home):
-            (home / ".fake-auth" / "added" / "deeper" / "still").mkdir(parents=True)
+            (home / ".fake-auth" / "added" / "deeper").mkdir(parents=True)
+            os.chmod(home / ".fake-auth" / "added", 0)  # entering it would fail the comparison, and name nothing
 
         def fifo(home):
             os.unlink(home / ".fake-sign-in")
@@ -761,14 +764,19 @@ class LauncherTest(unittest.TestCase):
             with self.subTest(label):
                 shutil.rmtree(self.tmp / "out-unit", ignore_errors=True)
                 shutil.rmtree(decoy, ignore_errors=True)
-                raised, said, last, _ = self._finalized(during)
+                decoyed.clear()
+                raised, said, last, private = self._finalized(during)
                 self.assertIsNone(raised)
                 home = "runs/r0123456789abcdef/harness/home"
                 self.assertEqual([f"{home}/{rel}" for rel in changed], last.get("changed"))
+                sources = {".fake-sign-in": self.tmp / "sign-in", ".fake-auth": self.tmp / "auth"}
                 for rel in changed:
-                    self.assertIn(f"changed the sign-in copied from {self.tmp}", said)
-                if decoy.exists():
-                    self.assertEqual(sorted(p.name for p in decoy.iterdir()), [".fake-auth", ".fake-sign-in"])
+                    self.assertIn(f"changed the sign-in copied from {sources[rel]} ({rel} in its home)", said)
+                self.assertFalse(Path(private).exists())  # cleared all the same
+                if during is relinked:
+                    self.assertEqual(decoyed, {p.relative_to(decoy).as_posix(): p.read_bytes()
+                                               for p in decoy.rglob("*") if p.is_file()})
+                    self.assertEqual(sorted(decoyed), [".fake-auth/nested/more", ".fake-auth/token", ".fake-sign-in"])
 
     def test_an_unchanged_copy_larger_than_what_is_read_is_never_named(self):
         # what cannot be read whole as it is given cannot be compared: it is never named, rather than named for a
