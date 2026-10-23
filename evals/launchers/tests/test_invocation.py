@@ -152,26 +152,41 @@ class ClaudeInvocationTest(LauncherCase):
         (self.home / ".launcher").mkdir(exist_ok=True)
         (self.home / ".launcher" / "settings.json").write_text('{"bare": false}')
         (self.home / ".claude").mkdir(exist_ok=True)
-        login = self.home / ".claude" / ".credentials.json"
+        default, elsewhere = self.home / ".claude" / ".credentials.json", self.home / "config" / ".credentials.json"
+        elsewhere.parent.mkdir()
         now_ms = int(time.time() * 1000)
-        for label, expires, limit, refused in (("expires within the turn", now_ms + 20 * 60_000, "1800", True),
-                                               ("already marked expired", 0, "900", True),
-                                               ("outlasts the turn", now_ms + 8 * 3_600_000, "1800", False)):
-            with self.subTest(label):
+
+        def turns(expiries, limit, **env):
+            """Run turn 0, then one turn per expiry, the login rewritten to it first; each turn's (exit, claude started)."""
+            module = self.launcher()
+            with mock.patch.dict(os.environ, {**self.env, "TRIAL_TURN": "0", **env}):
+                self.assertEqual(module.main(), 0)
+            outcomes = []
+            for turn, (login, expires) in enumerate(expiries, 1):
                 login.write_text(json.dumps({"claudeAiOauth": {"accessToken": "a", "refreshToken": "r", "expiresAt": expires}}))
-                module = self.launcher()
-                with mock.patch.dict(os.environ, {**self.env, "TRIAL_TURN": "0"}):
-                    self.assertEqual(module.main(), 0)
                 launched = Launched([[init, result]])
                 stderr = io.StringIO()
                 with contextlib.redirect_stderr(stderr):
-                    code = self.turn(module, 1, launched, TRIAL_TURNS="1", TRIAL_TIMEOUT_S=limit)
-                started = [call for call in launched.calls if call["cmd"][0] == "claude"]  # the last turn also cleans caches
-                if refused:
-                    self.assertEqual((77, []), (code, started))
+                    code = self.turn(module, turn, launched, TRIAL_TURNS=str(len(expiries)), TRIAL_TIMEOUT_S=limit, **env)
+                started = len([call for call in launched.calls if call["cmd"][0] == "claude"])  # the last turn also cleans caches
+                outcomes.append((code, started))
+                if code == 77:
                     self.assertIn("refresh", stderr.getvalue())
-                else:
-                    self.assertEqual((0, 1), (code, len(started)))
+                login.unlink()
+            return outcomes
+
+        hours, minutes = 3_600_000, 60_000
+        for label, expiries, limit, env, expected in (
+                ("expires within the turn", [(default, now_ms + 20 * minutes)], "1800", {}, [(77, 0)]),
+                ("expires after the turn, within ten minutes of its end", [(default, now_ms + 35 * minutes)], "1800", {}, [(77, 0)]),
+                ("already marked expired", [(default, 0)], "900", {}, [(77, 0)]),
+                ("outlasts the turn", [(default, now_ms + 8 * hours)], "1800", {}, [(0, 1)]),
+                ("outlasts the first turn but not the follow-up", [(default, now_ms + 8 * hours), (default, now_ms + 20 * minutes)],
+                 "1800", {}, [(0, 1), (77, 0)]),
+                ("held where CLAUDE_CONFIG_DIR says", [(elsewhere, now_ms + 20 * minutes)], "1800",
+                 {"CLAUDE_CONFIG_DIR": str(elsewhere.parent)}, [(77, 0)])):
+            with self.subTest(label):
+                self.assertEqual(expected, turns(expiries, limit, **env))
 
     def test_a_signed_in_run_turns_off_everything_its_account_brings_that_claude_code_can_and_a_bare_run_is_unchanged(self):
         # A signed-in login (not bare) would bring its claude.ai account into every run. Every control Claude Code 2.1.299

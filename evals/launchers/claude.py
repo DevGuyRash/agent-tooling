@@ -67,13 +67,15 @@ ACCOUNT_OFF = {
 # A claude.ai login refreshes by rotating its refresh token: a refresh inside a run would give the new tokens to the run's
 # copy, which the runtime removes afterwards, and leave the owner's own login holding the revoked one, signed out. So a
 # turn on a copied login starts only while its access token outlasts the turn's time limit (TRIAL_TIMEOUT_S, from the
-# runtime) and a margin. Only the expiry and whether a refresh token exists are read; neither is printed.
+# runtime) and a margin. Only the expiry and whether a refresh token exists are read; neither is printed. The login is
+# read where Claude Code reads it: CLAUDE_CONFIG_DIR, when the arm passes one, else ~/.claude.
 REFRESH_MARGIN_S = 600
 
 
 def copied_login_needs_refresh() -> bool:
+    config = Path(os.environ.get("CLAUDE_CONFIG_DIR") or HOME / ".claude")
     try:
-        oauth = json.loads((HOME / ".claude" / ".credentials.json").read_text()).get("claudeAiOauth")
+        oauth = json.loads((config / ".credentials.json").read_text()).get("claudeAiOauth")
     except (OSError, ValueError, AttributeError):
         return False
     if not isinstance(oauth, dict) or not oauth.get("refreshToken"):

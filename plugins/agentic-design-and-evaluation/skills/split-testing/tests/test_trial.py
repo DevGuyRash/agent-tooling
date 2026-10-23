@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -59,25 +60,50 @@ def results_in(out: Path) -> dict:
 
 
 class ProcessStartTest(unittest.TestCase):
-    def test_a_launcher_written_while_another_thread_forks_still_starts(self):
-        # Writing a script while another thread forks lets the child hold its write handle until its own exec, and
-        # starting the script in that window fails with ETXTBSY ("Text file busy"); the start is retried, nothing else.
-        real = subprocess.Popen
-        attempts = []
-        def busy_once(*args, **kwargs):
-            attempts.append(1)
-            if len(attempts) == 1:
-                raise OSError(errno.ETXTBSY, "Text file busy")
-            return real(*args, **kwargs)
+    @unittest.skipUnless(os.path.isdir("/proc/self/fd"), "reads the runtime's open files from /proc")
+    def test_no_process_starts_while_a_launcher_is_being_copied_into_a_run(self):
+        # A process forked while another thread holds a file open for writing holds it too, until its own exec, and
+        # executing that file meanwhile fails with ETXTBSY ("Text file busy"), whether the runtime executes it or
+        # bubblewrap does a moment later; on a loaded machine that moment is long enough (it failed CI), and scenario
+        # checks fork in the runtime too. Threads copy a launcher into run after run and start it, as concurrent runs do:
+        # no process starts while the runtime holds a launcher open for writing, and every run exits 0 in time.
+        threads, rounds = 8, 40
+        switch = sys.getswitchinterval()
+        sys.setswitchinterval(1e-6)  # interleave the threads as finely as Python allows
+        self.addCleanup(sys.setswitchinterval, switch)
+        real, overlaps, outcomes, failures = subprocess.Popen, [], [], []
         with tempfile.TemporaryDirectory() as tmp:
-            out, err = Path(tmp) / "out", Path(tmp) / "err"
-            with mock.patch.object(trial.subprocess, "Popen", side_effect=busy_once):
-                code, timed_out = trial._run(["true"], cwd=tmp, env=dict(os.environ), stdin_text=None, timeout=30,
-                                             stdout_path=out, stderr_path=err)
-            self.assertEqual((0, False, 2), (code, timed_out, len(attempts)))
-            with mock.patch.object(trial.subprocess, "Popen", side_effect=OSError(errno.ENOENT, "missing")):
-                with self.assertRaises(OSError):
-                    trial._run(["true"], cwd=tmp, env=dict(os.environ), stdin_text=None, timeout=30, stdout_path=out, stderr_path=err)
+            root = os.path.realpath(tmp)
+            src = Path(root) / "launcher.sh"
+            src.write_text("#!/bin/sh\nexit 0\n")
+
+            def start(*args, **kwargs):  # what the runtime holds open as it starts a process
+                for fd in os.listdir("/proc/self/fd"):
+                    with contextlib.suppress(OSError):
+                        held = os.readlink(f"/proc/self/fd/{fd}")
+                        if held.startswith(root) and "/launcher/" in held:
+                            overlaps.append(held)
+                return real(*args, **kwargs)
+
+            def runs(n):
+                try:
+                    for i in range(rounds):
+                        job = Path(root) / f"job-{n}-{i}"
+                        job.mkdir()
+                        script, _ = trial._launcher_files({"script": str(src)}, job)
+                        outcomes.append(trial._run([str(script)], cwd=job, env=dict(os.environ), stdin_text=None,
+                                                   timeout=30, stdout_path=job / "out", stderr_path=job / "err"))
+                except Exception as exc:  # a thread's own exception would end it unseen
+                    failures.append((n, repr(exc)))
+
+            with mock.patch.object(trial.subprocess, "Popen", side_effect=start):
+                workers = [threading.Thread(target=runs, args=(n,)) for n in range(threads)]
+                for w in workers:
+                    w.start()
+                for w in workers:
+                    w.join()
+        self.assertEqual(([], []), (overlaps[:3], failures[:3]))
+        self.assertEqual([(0, False)] * threads * rounds, outcomes)
 
 
 class LatestModelTest(unittest.TestCase):

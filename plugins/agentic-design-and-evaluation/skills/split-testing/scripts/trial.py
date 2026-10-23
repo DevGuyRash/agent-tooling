@@ -105,7 +105,6 @@ import subprocess
 import sys
 import tempfile
 import threading
-import time
 from pathlib import Path
 
 try:
@@ -827,7 +826,7 @@ def _snapshot_scripts(plan: dict, out: Path):
         target = out / "launchers" / (sha + src.suffix)
         if not target.exists():
             _mkdir(target.parent, exist_ok=True)
-            _write_atomic(target, data)
+            _write_atomic(target, data, executable=True)
             os.chmod(_unlinked(target), 0o555)
         entry.update(script=str(target), script_source=entry.get("script_source") or str(src))
 
@@ -1258,20 +1257,6 @@ def _open_record(path: Path):
     return os.fdopen(os.open(path, flags | os.O_EXCL, 0o644), "ab")
 
 
-def _start(cmd, **kwargs) -> subprocess.Popen:
-    """Start a process. A script written while another thread forks can be held open for writing by that child until
-    its own exec, and starting the script in that window fails with ETXTBSY ("Text file busy"); that error alone is
-    retried, briefly."""
-    for attempt in range(6):
-        try:
-            return subprocess.Popen(cmd, **kwargs)
-        except OSError as exc:
-            if exc.errno != errno.ETXTBSY or attempt == 5:
-                raise
-            time.sleep(0.05 * (attempt + 1))
-    raise AssertionError("unreachable")
-
-
 def _run(cmd, *, cwd, env, stdin_text, timeout, stdout_path, stderr_path, secrets=(), spool: Path | None = None):
     """Run `cmd` in its own process group, and end that group once it exits or times out: whatever it left running
     in the background ends with it, unconfined as under confinement (where its process namespace ends with it). With
@@ -1283,7 +1268,8 @@ def _run(cmd, *, cwd, env, stdin_text, timeout, stdout_path, stderr_path, secret
         if secrets:
             sout = spools.enter_context(tempfile.TemporaryFile(dir=spool))
             serr = sout if stderr_path == stdout_path else spools.enter_context(tempfile.TemporaryFile(dir=spool))
-        proc = _start(cmd, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=sout, stderr=serr, start_new_session=True)
+        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=sout,
+                                stderr=serr, start_new_session=True)
         try:
             proc.communicate(stdin_text.encode() if stdin_text is not None else None, timeout=timeout)
             code, timed_out = proc.returncode, False
@@ -1702,7 +1688,7 @@ def _launcher_files(arm: dict, job_dir: Path) -> tuple[Path, Path | None]:
     read-only when confined), so the run reaches them at fixed paths and nothing else of the trial directory."""
     own = _mkdir(job_dir / "launcher", exist_ok=True)
     script = own / "run"  # a name of its own, never the source's, which could name an arm
-    _write_atomic(script, Path(arm["script"]).read_bytes())
+    _write_atomic(script, Path(arm["script"]).read_bytes(), executable=True)
     os.chmod(script, 0o555)
     instructions = None
     if arm.get("instructions"):
@@ -3170,18 +3156,37 @@ def _mkdir(path: Path, parents: bool = False, exist_ok: bool = False) -> Path:
     return path
 
 
-def _write_atomic(path: Path, data: bytes):
+# How _write_atomic writes an executable, run as a child process: standard input into a new file, never through a link.
+_WRITE_NEW = ("import os, sys\n"
+              "with os.fdopen(os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'wb') as f:\n"
+              "    f.write(sys.stdin.buffer.read())\n")
+
+
+def _write_atomic(path: Path, data: bytes, *, executable: bool = False):
     """Write through a private temporary file, so a reader never sees a partial file; a link or directory an
-    agent left in the file's place is replaced, never followed, and one on the way to it refused (see _unlinked)."""
+    agent left in the file's place is replaced, never followed, and one on the way to it refused (see _unlinked).
+    A file to be executed is written by a child process: a process forked while this one holds a file open for writing
+    holds it too, until its own exec, and executing the file meanwhile fails with ETXTBSY ("Text file busy"), whether
+    the runtime executes it or bubblewrap does a moment later. Written so, it is never open here, whatever forks."""
     _unlinked(path)
     _own(path.parent)
     with contextlib.suppress(FileNotFoundError):
         if stat.S_ISDIR(os.lstat(path).st_mode):
             _remove(path)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    if executable:
+        tmp = str(path.parent / f"{path.name}.{os.urandom(8).hex()}.tmp")
+    else:
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
+        if executable:
+            done = subprocess.run([sys.executable, "-I", "-c", _WRITE_NEW, tmp], input=data, capture_output=True,
+                                  timeout=60)
+            if done.returncode:
+                why = done.stderr.decode(errors="replace").strip().splitlines() or ["the writer failed"]
+                raise OSError(errno.EIO, why[-1], tmp)
+        else:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
         os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):
