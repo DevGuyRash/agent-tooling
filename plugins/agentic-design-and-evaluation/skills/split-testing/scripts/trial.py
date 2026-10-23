@@ -105,6 +105,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 try:
@@ -1257,6 +1258,20 @@ def _open_record(path: Path):
     return os.fdopen(os.open(path, flags | os.O_EXCL, 0o644), "ab")
 
 
+def _start(cmd, **kwargs) -> subprocess.Popen:
+    """Start a process. A script written while another thread forks can be held open for writing by that child until
+    its own exec, and starting the script in that window fails with ETXTBSY ("Text file busy"); that error alone is
+    retried, briefly."""
+    for attempt in range(6):
+        try:
+            return subprocess.Popen(cmd, **kwargs)
+        except OSError as exc:
+            if exc.errno != errno.ETXTBSY or attempt == 5:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+    raise AssertionError("unreachable")
+
+
 def _run(cmd, *, cwd, env, stdin_text, timeout, stdout_path, stderr_path, secrets=(), spool: Path | None = None):
     """Run `cmd` in its own process group, and end that group once it exits or times out: whatever it left running
     in the background ends with it, unconfined as under confinement (where its process namespace ends with it). With
@@ -1268,8 +1283,7 @@ def _run(cmd, *, cwd, env, stdin_text, timeout, stdout_path, stderr_path, secret
         if secrets:
             sout = spools.enter_context(tempfile.TemporaryFile(dir=spool))
             serr = sout if stderr_path == stdout_path else spools.enter_context(tempfile.TemporaryFile(dir=spool))
-        proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=sout,
-                                stderr=serr, start_new_session=True)
+        proc = _start(cmd, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=sout, stderr=serr, start_new_session=True)
         try:
             proc.communicate(stdin_text.encode() if stdin_text is not None else None, timeout=timeout)
             code, timed_out = proc.returncode, False

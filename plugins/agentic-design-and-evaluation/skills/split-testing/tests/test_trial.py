@@ -58,6 +58,28 @@ def results_in(out: Path) -> dict:
     return found
 
 
+class ProcessStartTest(unittest.TestCase):
+    def test_a_launcher_written_while_another_thread_forks_still_starts(self):
+        # Writing a script while another thread forks lets the child hold its write handle until its own exec, and
+        # starting the script in that window fails with ETXTBSY ("Text file busy"); the start is retried, nothing else.
+        real = subprocess.Popen
+        attempts = []
+        def busy_once(*args, **kwargs):
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise OSError(errno.ETXTBSY, "Text file busy")
+            return real(*args, **kwargs)
+        with tempfile.TemporaryDirectory() as tmp:
+            out, err = Path(tmp) / "out", Path(tmp) / "err"
+            with mock.patch.object(trial.subprocess, "Popen", side_effect=busy_once):
+                code, timed_out = trial._run(["true"], cwd=tmp, env=dict(os.environ), stdin_text=None, timeout=30,
+                                             stdout_path=out, stderr_path=err)
+            self.assertEqual((0, False, 2), (code, timed_out, len(attempts)))
+            with mock.patch.object(trial.subprocess, "Popen", side_effect=OSError(errno.ENOENT, "missing")):
+                with self.assertRaises(OSError):
+                    trial._run(["true"], cwd=tmp, env=dict(os.environ), stdin_text=None, timeout=30, stdout_path=out, stderr_path=err)
+
+
 class LatestModelTest(unittest.TestCase):
     def test_the_newest_version_in_a_list_compares_each_version_number_numerically(self):
         with self.assertRaises(trial.TrialError):
