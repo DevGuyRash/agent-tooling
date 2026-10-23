@@ -4,7 +4,7 @@
  * input that would break a view or make it misread; a warning is input the
  * report does not use as written. report.py --check applies the same rules
  * without a browser; tests/test_validate.py keeps the two in agreement. */
-import { esc, entriesOf, blank, isId, keysIn, said, stripText, NUMERIC_TEXT, numberOf } from "./core";
+import { esc, entriesOf, blank, isId, keysIn, said, stripText, NUMERIC_TEXT, numberOf, calendarDay } from "./core";
 import type { ReportSpec } from "./model";
 import { blockTypes } from "./report";
 import { casePairs, trialArms, wellFormedPairs } from "./trial-model";
@@ -369,10 +369,10 @@ const memberTrial = (m: Obj): Obj | null => isObj(m.spec) ? (isObj(m.spec.trial)
 const trimmed = (v: unknown) => typeof v === "string" ? stripText(v) : isNumber(v) ? String(v) : "";
 /** A member the timeline places by day: its own date, or the day its trial's runs began. */
 function dated(m: Obj): boolean {
-  if (typeof m.date === "string" && isCalendarDate(m.date.slice(0, 10)) && /^\d{4}-\d{2}-\d{2}/.test(m.date)) return true;
+  // The one date rule (calendarDay), as the timeline reads a member's date and its runs' first time.
+  if (calendarDay(m.date)) return true;
   const t = memberTrial(m), ran = t && isObj(t.ran) ? t.ran : {};
-  const first = t ? trimmed(ran.first) || trimmed(t.generated_at) : "";
-  return /^\d{4}-\d{2}-\d{2}/.test(first) && isCalendarDate(first.slice(0, 10));
+  return !!t && calendarDay(trimmed(ran.first) || trimmed(t.generated_at)) !== null;
 }
 /** Whether a member draws a point on the cost-against-gain view: a setup measured against its reference on the same
  * model, both with valid runs, and the trial's own cost difference against that reference. */
@@ -390,13 +390,6 @@ function costShown(m: Obj): boolean {
   const pct = isObj(t.pct_vs_baseline) ? t.pct_vs_baseline : {};
   const change = (id: string) => { const e = isObj(pct[id]) ? pct[id] : {}; const v = isObj(e.cost_usd) && e.cost_usd.median !== undefined && e.cost_usd.median !== null ? e.cost_usd.median : isObj(e.total_cost_usd) ? e.total_cost_usd.median : undefined; return isNumber(v); };
   return valid(wanted) && [...ran].some(id => id !== wanted && lane(id) === lane(wanted) && valid(id) && change(id));
-}
-/** A real calendar day written YYYY-MM-DD: 2026-02-30 and 2026-99-99 are not. */
-function isCalendarDate(v: string): boolean {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-  if (!m) return false;
-  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
-  return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]);
 }
 function knownFrom(trial: unknown, comparison?: unknown, collection?: unknown): Known {
   // settings has no prototype, so an arm named like an Object member is an ordinary key.
@@ -1469,7 +1462,7 @@ export function validateCollection(collection: unknown): Problem[] {
     const sources = [hasTrial, hasComparison, hasSpec].filter(Boolean).length;
     if (sources > 1) c.add("error", at, 'has more than one of "trial", "comparison" and "spec"', "a report draws one trial, one comparison or one specification; make them separate reports");
     else if (!sources) c.add("error", at, 'missing "trial", "comparison" or "spec"', "give the report its trial data (trial.py report), its comparison data, or a specification of its own");
-    if (typeof m.date === "string" && !isCalendarDate(m.date)) c.add("warning", `${at}.date`, `"${clip(m.date)}" is not a calendar date written YYYY-MM-DD, so it is not used`, "write the day the runs began, such as 2026-10-15");
+    if (typeof m.date === "string" && !calendarDay(m.date)) c.add("warning", `${at}.date`, `"${clip(m.date)}" is not a calendar date written YYYY-MM-DD, so it is not used`, "write the day the runs began, such as 2026-10-15");
     const under = (problems: Problem[]) => { for (const p of problems) c.problems.push({ ...p, where: `${at}.${p.where}` }); };
     const narrated = m.narrative !== undefined && m.narrative !== null;
     if (hasSpec && sources === 1) {

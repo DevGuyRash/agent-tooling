@@ -5,7 +5,7 @@
  * members as ordinary specifications. Like the rest of the library it computes
  * only counts, pass rates with Wilson intervals and differences between rates
  * with Newcombe intervals; every decision shown is the one its narrative wrote. */
-import { fmtNum, fmtPct, isNum, median, stripText } from "./core";
+import { fmtNum, fmtPct, isNum, median, stripText, calendarDay } from "./core";
 import { newcombe } from "./stats";
 import { ArmRegistry } from "./model";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
@@ -175,13 +175,8 @@ export function usableMembers(data: Collection | undefined): CollectionMember[] 
   });
 }
 
-/** A calendar date written YYYY-MM-DD at the start of a value, or null (2026-02-30 is not one). */
-export function calendarDay(v: unknown): string | null {
-  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(text(v));
-  if (!m) return null;
-  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
-  return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]) ? m[0] : null;
-}
+/** A member's day, as the checks read it too (core.ts calendarDay). */
+export { calendarDay };
 
 const PASS_RATE: MemberMeasure = { id: "passed", label: "pass rate", kind: "binary", better: "higher", unit: "", percent: true, domain: [0, 1] };
 const goodness = (d: number | null, better: MemberMeasure["better"]): boolean | null =>

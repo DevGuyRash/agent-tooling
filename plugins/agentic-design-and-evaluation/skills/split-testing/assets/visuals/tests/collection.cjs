@@ -1148,4 +1148,27 @@ test("sweep (a selected matrix): every form of an unnamed case, missing, null, e
   }
 });
 
+test("a member's date is read one way by the timeline, the section it draws and both checks", () => {
+  // The reviewer's collection: two trials with no run times and no follow-up, dated with a leading space, with readings
+  // for every section but the timeline. Dated by the one rule, the timeline is drawn, so its reading is required.
+  const trial = { runs: [{ job: "j1", arm: "a", scenario: "c1", repeat: 1, passed: true, valid: true }] };
+  const story = { background: "b", intent: "i", questions: ["q"], covers: "c", notCovered: "n" };
+  const told = { story: { ...story, alternatives: { a: "A." }, cases: { c1: "C." } }, readings: { setup: "s", cases: "c", runs: "r" }, decision: { verdict: "adopt", headline: "H." } };
+  const collection = dates => ({ story, readings: { glance: "g", reports: "r", shifts: "s" }, members: dates.map((date, i) => ({ id: `m${i}`, date, trial, narrative: told })) });
+  const said = data => H.plain(V.validateCollection(data)).filter(p => p.where === "collection.readings" || /\.date$/.test(p.where)).map(p => `${p.level} ${p.where}: ${p.message}`);
+  for (const pad of [" ", "\u00a0", "\ufeff", "\t"]) {
+    const data = collection([`${pad}2026-01-01`, `2026-01-02${pad}`]);
+    H.equal(said(data), ['error collection.readings: no reading for the "timeline" section'], `padded with U+${pad.charCodeAt(0).toString(16)}: the timeline's reading is required, and no date is called unused`);
+    H.equal(H.plain(V.collectionModel(data).members.map(m => m.date)), ["2026-01-01", "2026-01-02"], "the days the timeline reads");
+    H.ok(V.collectionReport(data).sections.some(s => s.id === "timeline"), "and the timeline is drawn");
+  }
+  // A day with a time after it is the same day; anything else is not a date, is not drawn, and is said to be unused.
+  H.equal(H.plain(V.collectionModel(collection(["2026-01-01T09:30:00Z", "2026-01-02 10:00"])).members.map(m => m.date)), ["2026-01-01", "2026-01-02"], "a day with its time");
+  for (const odd of ["2026-02-30", "2026-01-011", "01/02/2026", "x 2026-01-01"]) {
+    const data = collection([odd, "2026-01-02"]);
+    H.equal(said(data), [`warning collection.members[0].date: "${odd}" is not a calendar date written YYYY-MM-DD, so it is not used`], `${odd}: unused, and said to be`);
+    H.ok(!V.collectionReport(data).sections.some(s => s.id === "timeline"), `${odd}: no timeline from one dated report`);
+  }
+});
+
 H.report();

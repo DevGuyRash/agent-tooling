@@ -309,6 +309,10 @@ def collection_corpus() -> list[dict]:
         s([{"type": "decisions"}, {"type": "report-compare"}], None),
         {"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "blocks": [{"type": "timeline", "members": ["m1"]}]}], "collection": COLLECTION}, "collection": None},
         {"kind": "spec", "input": {"title": "T", "sections": [], "collection": {"members": [member(), member()]}}, "collection": None},
+        # Member dates read by the one rule: padded with shared whitespace, or followed by a time, a date is used (and the
+        # timeline's reading is required); anything else is unused and said to be.
+        *[{"kind": "collection", "input": {**COLLECTION, "members": [{**COLLECTION["members"][0], "date": d1}, {**COLLECTION["members"][1], "date": d2}, COLLECTION["members"][2]]}}
+          for d1, d2 in ((" 2026-01-01", "2026-01-02\u00a0"), ("\ufeff2026-01-01", "\t2026-01-02"), ("2026-01-01T09:30:00Z", "2026-01-02 10:00"), ("2026-02-30", "2026-01-02"), ("2026-01-011", "x 2026-01-02"))],
         # The bad collection of the entry-path matrix, carried and supplied beside; and its trial and comparison as members.
         {"kind": "spec", "input": {"title": "T", "sections": [], "collection": BAD_COLLECTION}, "collection": None},
         {"kind": "spec", "input": {"title": "T", "sections": []}, "collection": "bad"},

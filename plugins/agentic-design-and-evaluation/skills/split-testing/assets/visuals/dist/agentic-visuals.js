@@ -79,6 +79,7 @@ define("core", ["require", "exports"], function (require, exports) {
     exports.hash = hash;
     exports.slug = slug;
     exports.stripText = stripText;
+    exports.calendarDay = calendarDay;
     exports.entriesOf = entriesOf;
     exports.valuesIn = valuesIn;
     exports.attrs = attrs;
@@ -166,6 +167,15 @@ define("core", ["require", "exports"], function (require, exports) {
     const WS_CLASS = [...exports.WHITESPACE].map(ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
     /** A run of WHITESPACE, for collapsing it to one space. */
     exports.WS_RUN = new RegExp(`[${WS_CLASS}]+`, "g");
+    /** The day a date names, as every view and both checks read one: WHITESPACE padding aside, a real calendar day written
+     * YYYY-MM-DD, alone or followed by a time ("T09:30:00Z" or " 10:00"); otherwise null (2026-02-30 is not a day). */
+    function calendarDay(v) {
+        const m = typeof v === "string" ? /^(\d{4})-(\d{2})-(\d{2})(?=$|[T ])/.exec(stripText(v)) : null;
+        if (!m)
+            return null;
+        const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+        return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]) ? `${m[1]}-${m[2]}-${m[3]}` : null;
+    }
     /** A number written as text, padded with any WHITESPACE: both checkers and every view read numeric text by this. */
     exports.NUMERIC_TEXT = new RegExp(`^[${WS_CLASS}]*-?(\\d+\\.?\\d*|\\.\\d+)([eE][-+]?\\d+)?[${WS_CLASS}]*$`);
     /** The number numeric text writes, its WHITESPACE padding removed first (Number alone knows a different set). */
@@ -8426,9 +8436,8 @@ define("comparison-compose", ["require", "exports", "sections", "core", "compari
 define("collection", ["require", "exports", "core", "stats", "model", "trial-model", "comparison-stats", "compose", "comparison-compose", "blocks/trial", "validate"], function (require, exports, core_20, stats_13, model_1, trial_model_11, comparison_stats_4, compose_1, comparison_compose_1, trial_1, validate_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.COLLECTION_SECTION_IDS = exports.relativeMeasure = exports.MEMBER_ID = void 0;
+    exports.COLLECTION_SECTION_IDS = exports.relativeMeasure = exports.calendarDay = exports.MEMBER_ID = void 0;
     exports.usableMembers = usableMembers;
-    exports.calendarDay = calendarDay;
     exports.measureDomain = measureDomain;
     exports.collectionModel = collectionModel;
     exports.selectMembers = selectMembers;
@@ -8443,6 +8452,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
     exports.collectionReport = collectionReport;
     exports.memberReport = memberReport;
     exports.compareReport = compareReport;
+    Object.defineProperty(exports, "calendarDay", { enumerable: true, get: function () { return core_20.calendarDay; } });
     exports.MEMBER_ID = /^[A-Za-z][\w.-]*$/;
     const isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
     const text = (v) => typeof v === "string" ? (0, core_20.stripText)(v) : (0, core_20.isNum)(v) ? String(v) : "";
@@ -8468,14 +8478,6 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             seen.add(m.id);
             return true;
         });
-    }
-    /** A calendar date written YYYY-MM-DD at the start of a value, or null (2026-02-30 is not one). */
-    function calendarDay(v) {
-        const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(text(v));
-        if (!m)
-            return null;
-        const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
-        return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]) ? m[0] : null;
     }
     const PASS_RATE = { id: "passed", label: "pass rate", kind: "binary", better: "higher", unit: "", percent: true, domain: [0, 1] };
     const goodness = (d, better) => d === null || Math.abs(d) < 1e-12 || better === "none" ? null : (d > 0) === (better === "higher");
@@ -8707,10 +8709,10 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             const costs = t.runs.map(r => isObject(r) ? (0, trial_model_11.costUsd)(r) : null).filter(core_20.isNum);
             const pct = (id) => { const v = t.pct_vs_baseline?.[id]?.cost_usd?.median ?? t.pct_vs_baseline?.[id]?.total_cost_usd?.median; return (0, core_20.isNum)(v) && t.baseline === baseline ? v : null; };
             const first = text(t.ran?.first) || text(t.generated_at);
-            const time = Date.parse(first), set = calendarDay(m.date);
+            const time = Date.parse(first), set = (0, core_20.calendarDay)(m.date);
             return {
                 ...base, ...own(text(t.name)), kind, question: custom ? "" : text(narrative.question),
-                date: set || calendarDay(first), time: set || Number.isNaN(time) ? null : time,
+                date: set || (0, core_20.calendarDay)(first), time: set || Number.isNaN(time) ? null : time,
                 dates: set ? (0, compose_1.fmtDates)(set) : (0, compose_1.fmtDates)(t.ran?.first || t.generated_at, t.ran?.last),
                 runs: all.runs, valid: all.valid, invalid: all.invalid, noun: "runs", evidence: [{ n: all.runs, noun: "run", invalid: all.invalid }],
                 models: listed || [...new Set(rows.map(r => r.lane).filter(Boolean))], judge: text(t.plan?.judge?.model) || null,
@@ -8718,7 +8720,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
                 cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null, cases, noCase,
             };
         }
-        const set = calendarDay(m.date);
+        const set = (0, core_20.calendarDay)(m.date);
         const common = { date: set, time: null, dates: set ? (0, compose_1.fmtDates)(set) : null, models: listed || [], judge: null, cost: null };
         if (!c) {
             return { ...base, ...own(""), ...common, kind, question: "", runs: 0, valid: 0, invalid: 0, noun: "observations", evidence: [], metric: "", measure: null, rows: [], baseline: null, gains: [], cases, noCase };
@@ -10046,11 +10048,11 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "sect
     const trimmed = (v) => typeof v === "string" ? (0, core_23.stripText)(v) : isNumber(v) ? String(v) : "";
     /** A member the timeline places by day: its own date, or the day its trial's runs began. */
     function dated(m) {
-        if (typeof m.date === "string" && isCalendarDate(m.date.slice(0, 10)) && /^\d{4}-\d{2}-\d{2}/.test(m.date))
+        // The one date rule (calendarDay), as the timeline reads a member's date and its runs' first time.
+        if ((0, core_23.calendarDay)(m.date))
             return true;
         const t = memberTrial(m), ran = t && isObj(t.ran) ? t.ran : {};
-        const first = t ? trimmed(ran.first) || trimmed(t.generated_at) : "";
-        return /^\d{4}-\d{2}-\d{2}/.test(first) && isCalendarDate(first.slice(0, 10));
+        return !!t && (0, core_23.calendarDay)(trimmed(ran.first) || trimmed(t.generated_at)) !== null;
     }
     /** Whether a member draws a point on the cost-against-gain view: a setup measured against its reference on the same
      * model, both with valid runs, and the trial's own cost difference against that reference. */
@@ -10070,14 +10072,6 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "sect
         const pct = isObj(t.pct_vs_baseline) ? t.pct_vs_baseline : {};
         const change = (id) => { const e = isObj(pct[id]) ? pct[id] : {}; const v = isObj(e.cost_usd) && e.cost_usd.median !== undefined && e.cost_usd.median !== null ? e.cost_usd.median : isObj(e.total_cost_usd) ? e.total_cost_usd.median : undefined; return isNumber(v); };
         return valid(wanted) && [...ran].some(id => id !== wanted && lane(id) === lane(wanted) && valid(id) && change(id));
-    }
-    /** A real calendar day written YYYY-MM-DD: 2026-02-30 and 2026-99-99 are not. */
-    function isCalendarDate(v) {
-        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
-        if (!m)
-            return false;
-        const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
-        return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]);
     }
     function knownFrom(trial, comparison, collection) {
         // settings has no prototype, so an arm named like an Object member is an ordinary key.
@@ -11457,7 +11451,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "sect
                 c.add("error", at, 'has more than one of "trial", "comparison" and "spec"', "a report draws one trial, one comparison or one specification; make them separate reports");
             else if (!sources)
                 c.add("error", at, 'missing "trial", "comparison" or "spec"', "give the report its trial data (trial.py report), its comparison data, or a specification of its own");
-            if (typeof m.date === "string" && !isCalendarDate(m.date))
+            if (typeof m.date === "string" && !(0, core_23.calendarDay)(m.date))
                 c.add("warning", `${at}.date`, `"${clip(m.date)}" is not a calendar date written YYYY-MM-DD, so it is not used`, "write the day the runs began, such as 2026-10-15");
             const under = (problems) => { for (const p of problems)
                 c.problems.push({ ...p, where: `${at}.${p.where}` }); };

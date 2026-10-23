@@ -1434,19 +1434,25 @@ def trimmed(v) -> str:
     return strip_ws(v) if isinstance(v, str) else number_text(v) if is_number(v) else ""
 
 
-DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+DAY = re.compile(r"(\d{4}-\d{2}-\d{2})(?=$|[T ])", re.ASCII)
+
+
+def calendar_day(v):
+    """The day a date names (src/core.ts calendarDay): WHITESPACE padding aside, a real calendar day written YYYY-MM-DD,
+    alone or followed by a time ("T09:30:00Z" or " 10:00"); otherwise None."""
+    m = DAY.match(strip_ws(v)) if isinstance(v, str) else None
+    return m.group(1) if m and is_calendar_date(m.group(1)) else None
 
 
 def dated(m: dict) -> bool:
-    """A member the timeline places by day: its own date, or the day its trial's runs began."""
-    if isinstance(m.get("date"), str) and DAY.match(m["date"]) and is_calendar_date(m["date"][:10]):
+    """A member the timeline places by day: its own date, or the day its trial's runs began, by the one date rule."""
+    if calendar_day(m.get("date")):
         return True
     t = member_trial(m)
     if not t:
         return False
     ran = t["ran"] if isinstance(t.get("ran"), dict) else {}
-    first = trimmed(ran.get("first")) or trimmed(t.get("generated_at"))
-    return bool(DAY.match(first)) and is_calendar_date(first[:10])
+    return calendar_day(trimmed(ran.get("first")) or trimmed(t.get("generated_at"))) is not None
 
 
 def cost_shown(m: dict) -> bool:
@@ -1621,7 +1627,7 @@ def validate_collection(collection) -> list[dict]:
             c.add("error", at, 'has more than one of "trial", "comparison" and "spec"', "a report draws one trial, one comparison or one specification; make them separate reports")
         elif not sources:
             c.add("error", at, 'missing "trial", "comparison" or "spec"', "give the report its trial data (trial.py report), its comparison data, or a specification of its own")
-        if isinstance(m.get("date"), str) and not is_calendar_date(m["date"]):
+        if isinstance(m.get("date"), str) and not calendar_day(m["date"]):
             c.add("warning", f"{at}.date", f'"{clip(m["date"])}" is not a calendar date written YYYY-MM-DD, so it is not used', "write the day the runs began, such as 2026-10-15")
         narrated = m.get("narrative") is not None
         found_problems: list[dict] = []

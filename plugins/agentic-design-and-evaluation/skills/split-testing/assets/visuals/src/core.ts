@@ -53,6 +53,14 @@ export const said = (v: unknown): boolean => (typeof v === "string" && !blank(v)
 const WS_CLASS = [...WHITESPACE].map(ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
 /** A run of WHITESPACE, for collapsing it to one space. */
 export const WS_RUN = new RegExp(`[${WS_CLASS}]+`, "g");
+/** The day a date names, as every view and both checks read one: WHITESPACE padding aside, a real calendar day written
+ * YYYY-MM-DD, alone or followed by a time ("T09:30:00Z" or " 10:00"); otherwise null (2026-02-30 is not a day). */
+export function calendarDay(v: unknown): string | null {
+  const m = typeof v === "string" ? /^(\d{4})-(\d{2})-(\d{2})(?=$|[T ])/.exec(stripText(v)) : null;
+  if (!m) return null;
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+  return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]) ? `${m[1]}-${m[2]}-${m[3]}` : null;
+}
 /** A number written as text, padded with any WHITESPACE: both checkers and every view read numeric text by this. */
 export const NUMERIC_TEXT = new RegExp(`^[${WS_CLASS}]*-?(\\d+\\.?\\d*|\\.\\d+)([eE][-+]?\\d+)?[${WS_CLASS}]*$`);
 /** The number numeric text writes, its WHITESPACE padding removed first (Number alone knows a different set). */
