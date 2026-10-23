@@ -464,7 +464,7 @@ BAD_IDS = [None, False, 0, {}, [], "", "  "]
 
 
 def id_base_trial() -> dict:
-    return {"plan": {"scenarios": [{"name": "c1"}]}, "runs": [{"job": "j1", "arm": "a", "scenario": "c1", "repeat": 1, "passed": True, "valid": True}, {"job": "j2", "arm": "b", "scenario": "c1", "repeat": 1, "passed": False, "valid": True}], "pairwise": {"a|b": {"arms": ["a", "b"], "scenarios": {"c1": {"a_wins": 1, "b_wins": 0}}}}}
+    return {"plan": {"scenarios": [{"name": "c1"}]}, "runs": [{"job": "j1", "arm": "a", "scenario": "c1", "repeat": 1, "passed": True, "valid": True}, {"job": "j2", "arm": "b", "scenario": "c1", "repeat": 1, "passed": False, "valid": True}], "pairwise": {"a|b": {"arms": ["a", "b"], "overall": {"a_wins": 1, "b_wins": 0}, "scenarios": {"c1": {"a_wins": 1, "b_wins": 0}}}}}
 
 
 def id_base_comparison() -> dict:
@@ -559,6 +559,87 @@ def identifier_failures() -> tuple[list[str], int]:
         if (want == [] and levels) or (want and want[0] not in levels):
             failures.append(f"{label}: expected {want or 'no problem'} at {at}, found {levels} in {json.dumps([p['where'] + ': ' + p['message'] for p in ours])[:400]}")
     return failures, len(entries)
+
+
+# Every record type the views read and the fields they rely on: each removed in turn must be refused, at the field or
+# at its record, alike in both checkers, and a page drawn from it says it has an error and invents nothing in its place.
+REQUIRED_FIELDS = {
+    "trial": (id_base_trial, [("runs",), ("runs", 1, "arm"), ("runs", 1, "scenario"), ("runs", 1, "passed"), ("plan", "scenarios", 0, "name"),
+                              ("pairwise", "a|b", "arms"), ("pairwise", "a|b", "overall"), ("pairwise", "a|b", "scenarios")]),
+    "comparison": (id_base_comparison, [("alternatives",), ("metrics",), ("alternatives", 0, "id"), ("cases", 0, "id"), ("metrics", 0, "id"), ("metrics", 0, "kind"),
+                                        ("observations", 0, "alternative"), ("observations", 0, "metric"), ("aggregates", 0, "alternative"), ("aggregates", 0, "metric"),
+                                        ("aggregates", 0, "k"), ("aggregates", 0, "n"), ("preferences", 0, "a"), ("preferences", 0, "b"), ("rankings", 0, "order")]),
+    "collection": (id_base_collection, [("members",), ("members", 0, "id"), ("members", 0, "trial"), ("themes", 0, "id"), ("pairs", 0, "a"), ("pairs", 0, "b")]),
+}
+
+
+def without(base: dict, path: tuple) -> dict:
+    data = json.loads(json.dumps(base))
+    node = data
+    for key in path[:-1]:
+        node = node[key]
+    del node[path[-1]]
+    return data
+
+
+def removal_failures() -> tuple[list[str], int]:
+    """Each required field removed, on each path, in both checkers: what fails, and how many were checked."""
+    entries, expected = [], []
+    for kind, (base, fields) in REQUIRED_FIELDS.items():
+        for path in fields:
+            data = without(base(), path)
+            spec = {"trial": {"title": "T", "sections": [{"title": "S", "reading": "r", "blocks": [{"type": "cases"}, {"type": "pairwise"}]}], "trial": data},
+                    "comparison": {"title": "T", "sections": [{"title": "S", "reading": "r", "blocks": [{"type": "scorecard"}]}], "comparison": data},
+                    "collection": {"title": "T", "sections": [{"title": "S", "reading": "r", "blocks": [{"type": "reports"}]}], "collection": data}}[kind]
+            paths = {"trial": [("spec", spec, "trial"), ("narrative", {}, "trial"), ("collection", {"members": [{"id": "m", "trial": data}]}, "collection.members[0].trial")],
+                     "comparison": [("comparison", data, "comparison"), ("spec", spec, "comparison"), ("collection", {"members": [{"id": "m", "comparison": data}]}, "collection.members[0].comparison")],
+                     "collection": [("collection", data, "collection"), ("spec", spec, "collection")]}[kind]
+            for which, input_, prefix in paths:
+                entries.append({"kind": which, "input": input_, **({"trial": data} if which == "narrative" else {}), **({"render": True} if which == "spec" else {})})
+                expected.append((kind, path, which, prefix))
+    with Scratch() as directory:
+        file = directory / "removed.json"
+        file.write_text(json.dumps(entries), encoding="utf-8")
+        result = run_node(TESTS / "validate.cjs", "--ids", file, "--out", directory / "page.json", timeout=300)
+        if result.returncode != 0:
+            return [f"validate.cjs --ids failed: {result.stderr[-2000:]}"], len(entries)
+        page = json.loads((directory / "page.json").read_text(encoding="utf-8"))
+    failures = []
+    for entry, theirs, (kind, field, which, prefix) in zip(entries, page, expected):
+        label = f"{kind} without {'.'.join(map(str, field))} via {which}"
+        try:
+            ours = R.validate_spec(entry["input"]) if which == "spec" else R.validate_narrative({}, entry["trial"]) if which == "narrative" else R.validate_collection(entry["input"]) if which == "collection" else R.validate_comparison(entry["input"])
+        except Exception as error:  # noqa: BLE001 - a crash is the finding
+            failures.append(f"{label}: report.py raised {type(error).__name__}: {error}")
+            continue
+        if isinstance(theirs, dict) and "exception" in theirs:
+            failures.append(f"{label}: the page's checker raised {theirs['exception'][:200]}")
+            continue
+        drawn = theirs if isinstance(theirs, dict) else None
+        problems = drawn["problems"] if drawn else theirs
+        if ours != problems:
+            failures.append(f"{label}: the checkers differ\n  report.py: {json.dumps(ours)[:500]}\n  page:      {json.dumps(problems)[:500]}")
+            continue
+        at, record, name = place(prefix, field), place(prefix, field[:-1]), field[-1]
+        # At the field, or at its record: a missing required field is named there, and a record without the list that
+        # makes it trial or comparison data is refused whole ("is not trial report data").
+        found = [p for p in ours if p["level"] == "error" and (p["where"] == at or p["where"].startswith(at + ".") or p["where"].startswith(at + "[") or p["where"] == record)]
+        if not found:
+            failures.append(f"{label}: no error at {at} or its record, in {json.dumps([p['where'] + ': ' + p['message'] for p in ours])[:400]}")
+        if drawn and not drawn["flagged"]:
+            failures.append(f"{label}: the page drawn from it does not say it has an error")
+        if drawn and kind == "trial" and field[0] == "pairwise" and drawn["duels"]:
+            failures.append(f"{label}: the pairwise view draws a judgment whose {name} is missing")
+    return failures, len(entries)
+
+
+class RequiredFieldSweepTest(unittest.TestCase):
+    """Every field the views rely on, removed from its record on each path: both checkers refuse it alike, neither raises,
+    and the page drawn from it says so and invents nothing in its place."""
+
+    def test_every_required_field_removed(self) -> None:
+        failures, checked = removal_failures()
+        self.assertFalse(failures, f"{len(failures)} of {checked} entries fail; the first:\n" + "\n".join(failures[:12]))
 
 
 class IdentifierSweepTest(unittest.TestCase):

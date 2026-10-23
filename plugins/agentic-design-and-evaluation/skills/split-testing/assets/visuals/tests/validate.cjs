@@ -22,6 +22,11 @@ if (ids >= 0) {
   const entries = JSON.parse(fs.readFileSync(process.argv[ids + 1], "utf8"));
   const out = entries.map(e => {
     try {
+      // A specification is also drawn: whether its page says it has an error, and what its pairwise view draws.
+      if (e.kind === "spec" && e.render) {
+        const html = V.renderReport(e.input);
+        return { problems: H.plain(V.validateSpec(e.input)), flagged: html.includes("av-problems--error"), duels: (html.match(/data-pair="/g) || []).length };
+      }
       if (e.kind === "spec") return H.plain(V.validateSpec(e.input));
       if (e.kind === "narrative") return H.plain(V.validateNarrative(e.input, e.trial));
       if (e.kind === "collection") return H.plain(V.validateCollection(e.input));
@@ -352,7 +357,7 @@ test("sweep (a selected matrix): each kind of data a report reads is checked ali
     for (const [name, found] of rest) H.equal(found, first[1], `${kind}: ${name} against ${first[0]}`);
   }
   // A scenario that is not text is refused as a missing one is.
-  H.equal(within(V.validateSpec({ title: "T", sections: [], trial: { runs: [{ arm: "a", scenario: 0 }, { arm: "a", scenario: false }, { arm: "a", scenario: {} }, { arm: "a", scenario: [] }, { arm: "a", scenario: "c1" }] } }), "trial"),
+  H.equal(within(V.validateSpec({ title: "T", sections: [], trial: { runs: [{ arm: "a", scenario: 0, passed: true }, { arm: "a", scenario: false, passed: true }, { arm: "a", scenario: {}, passed: true }, { arm: "a", scenario: [], passed: true }, { arm: "a", scenario: "c1", passed: true }] } }), "trial"),
     [0, 1, 2, 3].map(i => `error runs[${i}].scenario: a trial run must name its scenario`), "numbers, booleans, objects and lists");
 });
 
@@ -366,6 +371,19 @@ test("round 20: a trial run's arm must be text, and a view's data that is not a 
   }
   const once = H.plain(V.validateSpec({ title: "T", sections: [{ title: "S", reading: "r", blocks: [{ type: "metric", data: { rows: [] } }] }] })).filter(p => /is not comparison data/.test(p.message));
   H.equal(once.map(p => p.where), ["sections[0].blocks[0] (metric).data"], "one problem, in the view's place");
+});
+
+test("round 21: a pairwise judgment names two different arms this trial knows, with its counts", () => {
+  const story = { background: "b", intent: "i", questions: ["q"], rule: "r", covers: "c", notCovered: "n", alternatives: { a: "Setup a." }, cases: { c1: "Case 1." } };
+  const spec = arms => ({ title: "Probe", story, sections: [{ title: "Pairwise", reading: "a was preferred.", blocks: [{ type: "pairwise" }] }],
+    trial: { runs: [{ arm: "a", scenario: "c1", passed: true }], pairwise: { p: { ...(arms === undefined ? {} : { arms }), overall: { a_wins: 1, b_wins: 0 }, scenarios: { c1: { a_wins: 1, b_wins: 0 } } } } } });
+  const said = s => H.plain(V.validateSpec(s)).map(p => `${p.level} ${p.where}: ${p.message}`);
+  for (const arms of [undefined, null, [], ["a"], ["a", "a", "a"]]) {
+    H.equal(said(spec(arms)), ["error trial.pairwise.p.arms: a pairwise judgment must name its two arms"], `arms ${JSON.stringify(arms)}`);
+    H.excludes(V.renderReport(spec(arms)), 'data-pair="', `arms ${JSON.stringify(arms)}: no judgment drawn against invented arms`);
+  }
+  H.equal(said(spec(["a", "a"])), ["error trial.pairwise.p.arms: a pairwise judgment must name two different arms"], "the same arm twice");
+  H.equal(said(spec(["a", "z"])), ['error trial.pairwise.p.arms[1]: "z" is not an arm of this trial'], "an arm the trial does not know");
 });
 
 H.report();

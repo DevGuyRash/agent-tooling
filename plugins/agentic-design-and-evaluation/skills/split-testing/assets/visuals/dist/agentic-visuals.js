@@ -3042,7 +3042,11 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
     }
     function pairwise(input, ctx) {
         const data = trialOf(ctx, "pairwise");
-        const pairs = Object.entries(data.pairwise || {}).filter(([k, p]) => p && typeof p === "object" && (!input.pair || k === input.pair));
+        // Only judgments naming two different arms with their counts: a malformed one (refused by the checks) is not drawn
+        // against arms or counts it does not give.
+        const named = (a) => typeof a === "string" && !!a.trim();
+        const pairs = Object.entries(data.pairwise || {}).filter(([k, p]) => p && typeof p === "object" && Array.isArray(p.arms) && p.arms.length === 2 && p.arms.every(named) && p.arms[0] !== p.arms[1]
+            && !!p.overall && typeof p.overall === "object" && !!p.scenarios && typeof p.scenarios === "object" && (!input.pair || k === input.pair));
         if (!pairs.length)
             return (0, frame_1.frame)("pairwise", input, (0, frame_1.empty)("No pairwise judgments were run."));
         const segs = ["a_wins", "tie", "b_wins", "inconsistent", "invalid"];
@@ -10730,27 +10734,68 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
                 c.add("error", `${where}.runs[${i}].scenario`, "a trial run must name its scenario", ID_HINT);
             if (r.job !== undefined && r.job !== null && !isId(r.job))
                 c.add("error", `${where}.runs[${i}].job`, "a trial run's job, when given, must name its record", ID_HINT);
+            if (!isVerdict(r.passed))
+                c.add("error", `${where}.runs[${i}].passed`, "a trial run must say whether it passed: true, false, or null for no verdict", ID_HINT.replace("names each as text", "writes each run's verdict"));
         });
         if (isObj(trial.plan) && Array.isArray(trial.plan.scenarios))
             trial.plan.scenarios.forEach((sc, i) => { if (isObj(sc) && !isId(sc.name))
                 c.add("error", `${where}.plan.scenarios[${i}].name`, "a plan scenario must have a name", ID_HINT); });
-        if (isObj(trial.pairwise))
+        // A pairwise judgment names exactly two different arms this trial knows, with its overall counts and its counts by case.
+        if (isObj(trial.pairwise)) {
+            const known = trialArms(trial);
             for (const k of keysOf(trial.pairwise)) {
-                const p = trial.pairwise[k];
-                if (isObj(p) && Array.isArray(p.arms))
-                    p.arms.forEach((a, i) => { if (!isId(a))
-                        c.add("error", `${c.join(c.join(c.join(where, "pairwise"), k), "arms")}[${i}]`, "a pairwise judgment must name its arms", ID_HINT); });
+                const p = trial.pairwise[k], at = c.join(c.join(where, "pairwise"), k);
+                if (!isObj(p)) {
+                    c.add("error", at, "a pairwise judgment must be an object with its arms and counts", ID_HINT);
+                    continue;
+                }
+                if (!Array.isArray(p.arms) || p.arms.length !== 2)
+                    c.add("error", c.join(at, "arms"), "a pairwise judgment must name its two arms", ID_HINT);
+                else {
+                    p.arms.forEach((a, i) => {
+                        if (!isId(a))
+                            c.add("error", `${c.join(at, "arms")}[${i}]`, "a pairwise judgment must name its arms", ID_HINT);
+                        else if (!known.includes(a))
+                            c.add("error", `${c.join(at, "arms")}[${i}]`, `"${clip(a)}" is not an arm of this trial`, known.length ? `arms of this trial: ${listOf(known)}` : "this trial has no arms");
+                    });
+                    if (isId(p.arms[0]) && p.arms[0] === p.arms[1])
+                        c.add("error", c.join(at, "arms"), "a pairwise judgment must name two different arms", ID_HINT);
+                }
+                if (!isObj(p.overall))
+                    c.add("error", c.join(at, "overall"), "a pairwise judgment needs its overall counts", ID_HINT.replace("names each as text", "writes them"));
+                if (!isObj(p.scenarios))
+                    c.add("error", c.join(at, "scenarios"), "a pairwise judgment needs its counts by case", ID_HINT.replace("names each as text", "writes them"));
             }
+        }
         return true;
+    }
+    /** A run's verdict: passed, failed, or null for none (an invalid run). */
+    const isVerdict = (v) => v === true || v === false || v === null;
+    /** The arms a trial knows: those its well-formed runs ran and those its plan lists. */
+    function trialArms(trial) {
+        const out = [];
+        for (const r of Array.isArray(trial.runs) ? trial.runs : [])
+            if (isObj(r) && isId(r.arm) && isId(r.scenario) && !out.includes(r.arm))
+                out.push(r.arm);
+        if (isObj(trial.plan) && isObj(trial.plan.arms))
+            for (const a of Object.keys(trial.plan.arms))
+                if (isId(a) && !out.includes(a))
+                    out.push(a);
+        return out;
+    }
+    /** A pairwise judgment every view can read: two different arms the trial knows, with its overall counts and counts by case. */
+    function wellFormedPair(p, known) {
+        return isObj(p) && Array.isArray(p.arms) && p.arms.length === 2 && p.arms.every(a => isId(a) && known.includes(a)) && p.arms[0] !== p.arms[1] && isObj(p.overall) && isObj(p.scenarios);
     }
     /** The trial every check after checkTrial reads: only the runs, plan scenarios and pairwise judgments whose identifiers
      * are well formed, so no check descends into a record whose identifiers are malformed. */
     function wellFormedTrial(trial) {
         if (!isObj(trial) || !Array.isArray(trial.runs))
             return trial;
-        const runs = trial.runs.filter(r => !isObj(r) || (isId(r.arm) && isId(r.scenario) && (r.job === undefined || r.job === null || isId(r.job))));
+        const runs = trial.runs.filter(r => !isObj(r) || (isId(r.arm) && isId(r.scenario) && (r.job === undefined || r.job === null || isId(r.job)) && isVerdict(r.passed)));
         const plan = isObj(trial.plan) && Array.isArray(trial.plan.scenarios) ? { ...trial.plan, scenarios: trial.plan.scenarios.filter(sc => !isObj(sc) || isId(sc.name)) } : trial.plan;
-        const pairwise = isObj(trial.pairwise) ? Object.fromEntries(Object.entries(trial.pairwise).filter(([, p]) => !isObj(p) || !Array.isArray(p.arms) || p.arms.every(isId))) : trial.pairwise;
+        const known = trialArms(trial);
+        const pairwise = isObj(trial.pairwise) ? Object.fromEntries(Object.entries(trial.pairwise).filter(([, p]) => wellFormedPair(p, known))) : trial.pairwise;
         return { ...trial, runs, ...(plan !== undefined ? { plan } : {}), ...(pairwise !== undefined ? { pairwise } : {}) };
     }
     /** A check's problems, moved from the place it names its input (`from`, such as "comparison") to where the input

@@ -483,7 +483,11 @@ function checksByCase(input: ChecksInput, ctx: RenderContext, data: TrialReport,
 export interface PairwiseInput extends FrameInput { pair?: string }
 export function pairwise(input: PairwiseInput, ctx: RenderContext): string {
   const data = trialOf(ctx, "pairwise");
-  const pairs = Object.entries(data.pairwise || {}).filter(([k, p]) => p && typeof p === "object" && (!input.pair || k === input.pair));
+  // Only judgments naming two different arms with their counts: a malformed one (refused by the checks) is not drawn
+  // against arms or counts it does not give.
+  const named = (a: unknown) => typeof a === "string" && !!a.trim();
+  const pairs = Object.entries(data.pairwise || {}).filter(([k, p]) => p && typeof p === "object" && Array.isArray(p.arms) && p.arms.length === 2 && p.arms.every(named) && p.arms[0] !== p.arms[1]
+    && !!p.overall && typeof p.overall === "object" && !!p.scenarios && typeof p.scenarios === "object" && (!input.pair || k === input.pair));
   if (!pairs.length) return frame("pairwise", input, empty("No pairwise judgments were run."));
   const segs = ["a_wins", "tie", "b_wins", "inconsistent", "invalid"] as const;
   const clean = (st: Partial<Record<string, unknown>> | undefined) => {

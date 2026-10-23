@@ -352,13 +352,17 @@ test("a decision matrix's own alternatives need describing, listed or named only
   ], "alternatives inferred from cells");
 });
 
-test("arms and cases a trial's pairwise judgments name need describing, even when no run names them", () => {
-  // The reviewer's probe: pairwise data introducing an arm and a case absent from the run list.
-  const odd = { ...trial, pairwise: { fast__ghost: { arms: ["fast", "ghost"], overall: { a_wins: 1, b_wins: 0, tie: 0 }, scenarios: { quick: { a_wins: 1 }, nowhere: { b_wins: 0 } } } } };
+test("cases a trial's pairwise judgments name need describing, even when no run names them, and its arms must be the trial's", () => {
+  // The reviewer's probe: pairwise data introducing a case absent from the run list. Its arms are the trial's own.
+  const odd = { ...trial, pairwise: { fast__careful: { arms: ["fast", "careful"], overall: { a_wins: 1, b_wins: 0, tie: 0 }, scenarios: { quick: { a_wins: 1 }, nowhere: { b_wins: 0 } } } } };
   H.equal(lines(V.validateNarrative({ story: STORY, readings: { ...READINGS, pairwise: "Fast won its one pair." } }, odd)), [
-    'error narrative.story.alternatives: does not describe arm "ghost"',
     'error narrative.story.cases: does not describe case "nowhere"',
-  ], "the pairwise arm and case");
+  ], "the pairwise case");
+  // An arm no run ran and the plan does not list is refused, not described: the judgment is not drawn.
+  const ghost = { ...trial, pairwise: { fast__ghost: { arms: ["fast", "ghost"], overall: { a_wins: 1, b_wins: 0, tie: 0 }, scenarios: { quick: { a_wins: 1 } } } } };
+  H.equal(lines(V.validateNarrative({ story: STORY, readings: { ...READINGS, pairwise: "Fast won its one pair." } }, ghost)), [
+    'error trial.pairwise.fast__ghost.arms[1]: "ghost" is not an arm of this trial',
+  ], "the arm the trial does not know");
 });
 
 test("an empty override of what a view shows or how to read it keeps the library's words", () => {

@@ -905,19 +905,62 @@ def check_trial_data(c, trial, where: str) -> bool:
             c.add("error", f"{where}.runs[{i}].scenario", "a trial run must name its scenario", ID_HINT)
         if r.get("job") is not None and not is_id(r.get("job")):
             c.add("error", f"{where}.runs[{i}].job", "a trial run's job, when given, must name its record", ID_HINT)
+        if not is_verdict(r, "passed"):
+            c.add("error", f"{where}.runs[{i}].passed", "a trial run must say whether it passed: true, false, or null for no verdict", ID_HINT.replace("names each as text", "writes each run's verdict"))
     plan = trial.get("plan")
     if isinstance(plan, dict) and isinstance(plan.get("scenarios"), list):
         for i, sc in enumerate(plan["scenarios"]):
             if isinstance(sc, dict) and not is_id(sc.get("name")):
                 c.add("error", f"{where}.plan.scenarios[{i}].name", "a plan scenario must have a name", ID_HINT)
+    # A pairwise judgment names exactly two different arms this trial knows, with its overall counts and its counts by case.
     if isinstance(trial.get("pairwise"), dict):
+        known = trial_arms(trial)
         for k in keys_of(trial["pairwise"]):
-            p = trial["pairwise"][k]
-            if isinstance(p, dict) and isinstance(p.get("arms"), list):
-                for i, a in enumerate(p["arms"]):
+            p, at = trial["pairwise"][k], c.join(c.join(where, "pairwise"), k)
+            if not isinstance(p, dict):
+                c.add("error", at, "a pairwise judgment must be an object with its arms and counts", ID_HINT)
+                continue
+            arms = p.get("arms")
+            if not isinstance(arms, list) or len(arms) != 2:
+                c.add("error", c.join(at, "arms"), "a pairwise judgment must name its two arms", ID_HINT)
+            else:
+                for i, a in enumerate(arms):
                     if not is_id(a):
-                        c.add("error", f"{c.join(c.join(c.join(where, 'pairwise'), k), 'arms')}[{i}]", "a pairwise judgment must name its arms", ID_HINT)
+                        c.add("error", f"{c.join(at, 'arms')}[{i}]", "a pairwise judgment must name its arms", ID_HINT)
+                    elif a not in known:
+                        c.add("error", f"{c.join(at, 'arms')}[{i}]", f'"{clip(a)}" is not an arm of this trial', f"arms of this trial: {list_of(known)}" if known else "this trial has no arms")
+                if is_id(arms[0]) and arms[0] == arms[1]:
+                    c.add("error", c.join(at, "arms"), "a pairwise judgment must name two different arms", ID_HINT)
+            if not isinstance(p.get("overall"), dict):
+                c.add("error", c.join(at, "overall"), "a pairwise judgment needs its overall counts", ID_HINT.replace("names each as text", "writes them"))
+            if not isinstance(p.get("scenarios"), dict):
+                c.add("error", c.join(at, "scenarios"), "a pairwise judgment needs its counts by case", ID_HINT.replace("names each as text", "writes them"))
     return True
+
+
+def is_verdict(r: dict, key: str) -> bool:
+    """A run's verdict: passed, failed, or null for none (an invalid run); the field must be there."""
+    return key in r and (r[key] is True or r[key] is False or r[key] is None)
+
+
+def trial_arms(trial: dict) -> list:
+    """The arms a trial knows: those its well-formed runs ran and those its plan lists (as src/validate.ts trialArms)."""
+    out: list = []
+    for r in trial.get("runs") if isinstance(trial.get("runs"), list) else []:
+        if isinstance(r, dict) and is_id(r.get("arm")) and is_id(r.get("scenario")) and r["arm"] not in out:
+            out.append(r["arm"])
+    plan = trial.get("plan")
+    if isinstance(plan, dict) and isinstance(plan.get("arms"), dict):
+        for a in plan["arms"]:
+            if is_id(a) and a not in out:
+                out.append(a)
+    return out
+
+
+def well_formed_pair(p, known: list) -> bool:
+    """A pairwise judgment every view can read (as src/validate.ts wellFormedPair)."""
+    return (isinstance(p, dict) and isinstance(p.get("arms"), list) and len(p["arms"]) == 2 and all(is_id(a) and a in known for a in p["arms"])
+            and p["arms"][0] != p["arms"][1] and isinstance(p.get("overall"), dict) and isinstance(p.get("scenarios"), dict))
 
 
 def well_formed_trial(trial):
@@ -925,12 +968,13 @@ def well_formed_trial(trial):
     identifiers are well formed, so no check descends into a record whose identifiers are malformed (as src/validate.ts wellFormedTrial)."""
     if not isinstance(trial, dict) or not isinstance(trial.get("runs"), list):
         return trial
-    out = {**trial, "runs": [r for r in trial["runs"] if not isinstance(r, dict) or (is_id(r.get("arm")) and is_id(r.get("scenario")) and (r.get("job") is None or is_id(r.get("job"))))]}
+    out = {**trial, "runs": [r for r in trial["runs"] if not isinstance(r, dict) or (is_id(r.get("arm")) and is_id(r.get("scenario")) and (r.get("job") is None or is_id(r.get("job"))) and is_verdict(r, "passed"))]}
     plan = trial.get("plan")
     if isinstance(plan, dict) and isinstance(plan.get("scenarios"), list):
         out["plan"] = {**plan, "scenarios": [sc for sc in plan["scenarios"] if not isinstance(sc, dict) or is_id(sc.get("name"))]}
     if isinstance(trial.get("pairwise"), dict):
-        out["pairwise"] = {k: p for k, p in trial["pairwise"].items() if not isinstance(p, dict) or not isinstance(p.get("arms"), list) or all(is_id(a) for a in p["arms"])}
+        known = trial_arms(trial)
+        out["pairwise"] = {k: p for k, p in trial["pairwise"].items() if well_formed_pair(p, known)}
     return out
 
 
