@@ -74,6 +74,10 @@
 .av-heatmap thead th .av-arm-label { overflow-wrap: break-word; word-break: normal; }
 /* Arm names wrap inside their own column instead of running into the next one. */
 .av-heatmap thead th:not(:first-child) { white-space: normal; vertical-align: bottom; }
+/* The heading over the names may wrap too, so the name column can give way to the arms; its width is measured against
+   the box the table scrolls in (colgroup in blocks/trial.ts). */
+.av-heatmap thead th:first-child { white-space: normal; }
+.av-ck-box { container-type: inline-size; }
 /* An arm's glyph sits above its name, so the name has the column's whole width. */
 .av-heatmap thead th .av-arm { flex-direction: column; align-items: flex-start; gap: 5px; }
 .av-heatmap tbody th, .av-heatmap thead th:first-child { position: sticky; left: 0; z-index: 1; background: var(--av-raised); }

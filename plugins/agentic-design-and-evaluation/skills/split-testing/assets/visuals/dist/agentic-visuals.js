@@ -3052,8 +3052,8 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
         return (input.by === "case" || (input.by !== "check" && autoByCase)) && cases.length ? checksByCase(input, ctx, data, arms, cases, only) : checksByCheck(input, ctx, data, arms, only);
     }
     /** One case's measures: true/false shares, and medians with their range for numbers. */
-    function measuresTable(t, arms, armHead) {
-        return `<div class="av-scroll-x"><table class="av-heatmap av-heatmap--measures" style="--arms:${arms.length}">${colgroup(arms)}<thead><tr><th scope="col">Measure</th>${armHead}</tr></thead><tbody>${t.measures.map(m => `<tr><th scope="row">${checkName(m.name)}</th>${arms.map(a => {
+    function measuresTable(ctx, t, arms, armHead) {
+        return `<div class="av-scroll-x av-ck-box"><table class="av-heatmap av-heatmap--measures" style="--arms:${arms.length}">${colgroup(ctx, arms, "Measure", t.measures.map(m => ({ code: m.name })))}<thead><tr><th scope="col">Measure</th>${armHead}</tr></thead><tbody>${t.measures.map(m => `<tr><th scope="row">${checkName(m.name)}</th>${arms.map(a => {
             const c = m.cells[a];
             if (!c || !c.n)
                 return `<td class="av-heat av-heat--none"><span>—</span></td>`;
@@ -3074,17 +3074,50 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
             const v = variantOf.get(cs), label = caseLabel(ctx, cs);
             const bools = t.measures.filter(m => m.kind === "boolean").length, nums = t.measures.length - bools;
             const what = [bools ? plural(bools, "true or false measure") : "", nums ? plural(nums, "number") : ""].filter(Boolean).join(" and ");
-            return `<section class="av-ck-case${v ? " av-ck-case--variant" : ""}"${(0, core_7.attrs)({ "data-case": cs })}><header class="av-ck-head"><h4 class="av-ck-title">${v ? `<span class="av-ck-variant"${(0, core_7.attrs)({ title: v.note })}>↳ ${(0, core_7.esc)(v.label)}</span>` : ""}<span class="av-case-name">${(0, core_7.esc)(label)}</span>${label !== cs ? ` <code>${(0, core_7.esc)(cs)}</code>` : ""}</h4></header><details class="av-ck-measures"${t.measures.length <= 4 ? " open" : ""}><summary>${(0, core_7.esc)(what)} <span class="av-muted">· recorded, not required for a pass</span></summary>${measuresTable(t, arms, armHead)}</details></section>`;
+            return `<section class="av-ck-case${v ? " av-ck-case--variant" : ""}"${(0, core_7.attrs)({ "data-case": cs })}><header class="av-ck-head"><h4 class="av-ck-title">${v ? `<span class="av-ck-variant"${(0, core_7.attrs)({ title: v.note })}>↳ ${(0, core_7.esc)(v.label)}</span>` : ""}<span class="av-case-name">${(0, core_7.esc)(label)}</span>${label !== cs ? ` <code>${(0, core_7.esc)(cs)}</code>` : ""}</h4></header><details class="av-ck-measures"${t.measures.length <= 4 ? " open" : ""}><summary>${(0, core_7.esc)(what)} <span class="av-muted">· recorded, not required for a pass</span></summary>${measuresTable(ctx, t, arms, armHead)}</details></section>`;
         }).join("");
         if (!panels)
             return (0, frame_1.frame)("checks", input, (0, frame_1.empty)("No measures were recorded beyond the required checks."));
         const legend = `<p class="av-legend"><span>True or false: runs where it was true / valid runs, shaded by share, not by merit.</span><span>Numbers: the median, with the range beneath.</span></p>`;
         return (0, frame_1.frame)("checks", input, `${legend}<div class="av-ck-cases" style="--arms:${arms.length}">${panels}</div>`, { "data-by": "measures" });
     }
-    /** The name column gives way as arms are added, so each arm's column keeps room for its name. */
-    function colgroup(arms) {
-        const name = Math.max(18, 44 - Math.max(0, arms.length - 2) * 6.5);
-        return `<colgroup><col class="av-ck-col-name" style="width:${name}%">${arms.map(() => '<col class="av-ck-col-arm">').join("")}</colgroup>`;
+    /** Generous widths in rem, enough for a wide font such as DejaVu Sans: a character of a check name (monospace, 0.6em of
+     * code at .86em of the table's .86rem, plus the code's .35em padding each side), of other row-head text (0.6em of
+     * .86rem), of a column heading (capitals, 0.85em of .7rem plus .08em spacing), of a chip (0.62em of .7rem plus 8px
+     * each side) and of an arm's name (0.6em of .82rem); every cell has 10px of padding each side. */
+    const EST = { mono: 0.6 * 0.86 * 0.86, code: 0.7 * 0.86 * 0.86, text: 0.6 * 0.86, head: 0.93 * 0.7, chip: 0.62 * 0.7, chipPad: 1, arm: 0.6 * 0.82, cell: 1.25 };
+    const words = (text) => text.split(" ").filter(Boolean);
+    const longest = (pieces) => Math.max(0, ...pieces.map(p => p.length));
+    /** The fewest characters per line that set these words on at most `lines` lines. */
+    function lineChars(pieces, lines) {
+        for (let width = longest(pieces);; width++) {
+            let n = 1, used = 0;
+            for (const p of pieces)
+                if (used && used + 1 + p.length > width) {
+                    n++;
+                    used = p.length;
+                }
+                else
+                    used += (used ? 1 : 0) + p.length;
+            if (n <= lines)
+                return width;
+        }
+    }
+    /** The checks tables' columns. Each arm's column wants room for its name on three lines. The name column takes its
+     * heading and row heads on one line while the arms keep that room, and otherwise gives way to them, down to its longest
+     * piece that cannot break (a check name breaks after its underscores, a chip not at all), and never takes more than 44%
+     * of the box. The widths are estimates for a wide font, measured against the box (container units), so a wider font
+     * cannot crush the arms' names; the arms share whatever the name column leaves. */
+    function colgroup(ctx, arms, heading, rows) {
+        const chip = (r) => r.chip ? r.chip.length * EST.chip + EST.chipPad : 0;
+        const oneLine = (r) => "text" in r ? r.text.length * EST.text : r.code.length * EST.mono + EST.code + (r.chip ? 0.3 + chip(r) : 0);
+        const least = (r) => "text" in r ? longest(words(r.text)) * EST.text : Math.max(longest(r.code.split(/(?<=_)/)) * EST.mono + EST.code, chip(r));
+        const floor = EST.cell + Math.max(longest(words(heading)) * EST.head, ...rows.map(least));
+        const full = EST.cell + Math.max(heading.length * EST.head, ...rows.map(oneLine));
+        const armRoom = Math.max(0, ...arms.map(a => EST.cell + lineChars(words(ctx.arms.label(a)), 3) * EST.arm));
+        const rem = (v) => `${Math.round(v * 100) / 100}rem`;
+        const name = `min(44cqw, clamp(${rem(floor)}, calc(100cqw - ${rem(arms.length * armRoom)}), ${rem(Math.max(floor, full))}))`;
+        return `<colgroup><col class="av-ck-col-name" style="width:${name}">${arms.map(() => '<col class="av-ck-col-arm">').join("")}</colgroup>`;
     }
     function checksByCheck(input, ctx, data, arms, only) {
         let rows = (0, trial_model_3.checkTable)(data, arms);
@@ -3095,7 +3128,8 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
             return (0, frame_1.frame)("checks", input, (0, frame_1.empty)("No pass/fail checks were recorded."));
         const head = `<thead><tr><th scope="col" class="av-heat-corner">Check</th>${arms.map(a => `<th scope="col">${ctx.arms.tag(a, { id: false })}</th>`).join("")}</tr></thead>`;
         const caseCount = new Set(data.runs.map(r => r.scenario)).size;
-        const line = (r) => `<tr><th scope="row">${checkName(r.name)}${r.required && r.requiredIn.length < caseCount ? ` <span class="av-chip av-chip--req" title="${(0, core_7.esc)(r.requiredIn.join(", "))}">in ${r.requiredIn.length} of ${(0, stats_2.casesWords)(caseCount, false)}</span>` : ""}</th>${arms.map(a => heat(r.cells[a].k, r.cells[a].n, !r.required)).join("")}</tr>`;
+        const chipOf = (r) => r.required && r.requiredIn.length < caseCount ? `in ${r.requiredIn.length} of ${(0, stats_2.casesWords)(caseCount, false)}` : undefined;
+        const line = (r) => `<tr><th scope="row">${checkName(r.name)}${chipOf(r) ? ` <span class="av-chip av-chip--req" title="${(0, core_7.esc)(r.requiredIn.join(", "))}">${chipOf(r)}</span>` : ""}</th>${arms.map(a => heat(r.cells[a].k, r.cells[a].n, !r.required)).join("")}</tr>`;
         const span = arms.length + 1;
         const fold = (summary, names) => names.length ? `<tr class="av-ck-fold"><td colspan="${span}"><details><summary>${(0, core_7.esc)(summary)}</summary>${chipList(names)}</details></td></tr>` : "";
         const group = (label, note, items, folded = "") => items.length || folded ? `<tr class="av-heat-group"><th scope="rowgroup" colspan="${span}">${(0, core_7.esc)(label)} <span class="av-muted">· ${(0, core_7.esc)(note)}</span></th></tr>${items.map(line).join("")}${folded}` : "";
@@ -3109,7 +3143,8 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
         const body = group("Required checks", "true is a pass; counted over the cases that require each one", reqShown, fold(`${plural(reqHeld.length, "more required check")} held in every valid run, in every arm`, reqHeld.map(r => r.name)))
             + judgeRow
             + group("Recorded measures", "recorded true or false, not required for a pass; shaded by share, not by merit", measShown, fold(`${plural(steady.length, "measure")} never changed: ${steady.filter(always).length} always true, ${steady.filter(never).length} never true`, steady.map(r => `${r.name} ${always(r) ? "true" : "false"}`)));
-        return (0, frame_1.frame)("checks", input, `<div class="av-scroll-x"><table class="av-heatmap" style="--arms:${arms.length}">${colgroup(arms)}${head}<tbody>${body}</tbody></table></div>`, { "data-by": "check" });
+        const heads = [...[...reqShown, ...measShown].map(r => ({ code: r.name, chip: chipOf(r) })), ...(judged.length ? [{ text: "verdict = pass" }] : [])];
+        return (0, frame_1.frame)("checks", input, `<div class="av-scroll-x av-ck-box"><table class="av-heatmap" style="--arms:${arms.length}">${colgroup(ctx, arms, "Check", heads)}${head}<tbody>${body}</tbody></table></div>`, { "data-by": "check" });
     }
     function checksByCase(input, ctx, data, arms, cases, only) {
         const pairs = pairsOf(input.pairs), variantOf = new Map(pairs.map(p => [p.variant, p]));
@@ -3132,7 +3167,7 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
             const head = `<header class="av-ck-head">${title}<div class="av-ck-outcome"><span class="av-ck-outcome-label">passed</span>${outcome}</div></header>`;
             const row = (name, cells, cls = "") => `<tr${cls ? ` class="${cls}"` : ""}><th scope="row">${name}</th>${arms.map(a => heat(cells[a]?.k ?? 0, cells[a]?.n ?? 0)).join("")}</tr>`;
             const judgeRow = t.judge ? row(`<span class="av-ck-judge">Judge says pass</span>${(0, trial_model_3.judgePassWhen)(plan) ? `<span class="av-ck-when"${(0, core_7.attrs)({ title: (0, trial_model_3.judgePassWhen)(plan) })}>${(0, core_7.esc)(clip((0, trial_model_3.judgePassWhen)(plan), 140))}</span>` : ""}`, t.judge, "av-ck-judgerow") : "";
-            const measures = t.measures.length ? `<details class="av-ck-measures"><summary>${plural(t.measures.length, "recorded measure")} <span class="av-muted">· recorded, not required for a pass</span></summary>${measuresTable(t, arms, armHead)}</details>` : "";
+            const measures = t.measures.length ? `<details class="av-ck-measures"><summary>${plural(t.measures.length, "recorded measure")} <span class="av-muted">· recorded, not required for a pass</span></summary>${measuresTable(ctx, t, arms, armHead)}</details>` : "";
             if (clean) {
                 const what = required.length ? `${required.length === 1 ? "The required check" : `All ${required.length} required checks`} held in every valid run${t.judge ? ", and the judge said pass" : ""}.` : t.judge ? "The judge said pass in every valid run." : "Every valid run passed.";
                 const none = arms.every(a => !t.outcome[a].n);
@@ -3140,7 +3175,8 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
             }
             const rows = failing.map(r => row(`${checkName(r.name)}`, r.cells, "av-ck-failing")).join("");
             const fold = held.length ? `<tr class="av-ck-fold"><td colspan="${span}"><details><summary>${plural(held.length, "more required check")} held in every valid run</summary>${chipList(held.map(r => r.name))}</details></td></tr>` : "";
-            const table = `<div class="av-scroll-x"><table class="av-heatmap av-heatmap--case" style="--arms:${arms.length}">${colgroup(arms)}<thead><tr><th scope="col">Must hold</th>${armHead}</tr></thead><tbody>${rows}${judgeRow}${fold}</tbody></table></div>`;
+            const heads = [...failing.map(r => ({ code: r.name })), ...(t.judge ? [{ text: "Judge says pass" }] : [])];
+            const table = `<div class="av-scroll-x av-ck-box"><table class="av-heatmap av-heatmap--case" style="--arms:${arms.length}">${colgroup(ctx, arms, "Must hold", heads)}<thead><tr><th scope="col">Must hold</th>${armHead}</tr></thead><tbody>${rows}${judgeRow}${fold}</tbody></table></div>`;
             return `<section class="av-ck-case${v ? " av-ck-case--variant" : ""}"${(0, core_7.attrs)({ "data-case": cs })}>${head}${table}${measures}</section>`;
         }).join("");
         const legend = `<p class="av-legend"><span>Each case's required checks and judge, over its valid runs; checks that failed somewhere come first.</span><span>Cells: runs where the check held / valid runs.</span></p>`;
