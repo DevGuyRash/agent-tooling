@@ -380,6 +380,30 @@ class PluginPortTests(unittest.TestCase):
             plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
         self.assertEqual(locked, (source / "agents/locked/review.md").read_text())
 
+    def test_converter_state_is_never_written_through_a_package_link(self) -> None:
+        for shape in ("report-link", "archive-folder-link"):
+            with self.subTest(shape=shape):
+                # The Codex case needs a convertible agent; the link, not the restriction, is what it tests.
+                locked = "---\nname: review\ndescription: Locked.\n" + ("tools: Read\n" if shape == "report-link" else "") + "---\nRead only.\n"
+                source = self.root / f"state-{shape}"
+                write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+                write(source / "agents/locked/review.md", locked)
+                if shape == "report-link":
+                    (source / ".plugin-portability").mkdir()
+                    (source / ".plugin-portability/report.json").symlink_to("../agents/locked/review.md")
+                    target, host = "claude", None
+                else:
+                    write(source / ".codex/agents/old.toml", 'name="retired"\ndescription="Old."\ndeveloper_instructions="Old."\n')
+                    (source / ".plugin-portability").mkdir()
+                    (source / ".plugin-portability/original-agents").symlink_to("../agents/locked")
+                    target, host = "codex", None
+                output = self.root / f"state-out-{shape}"
+                plugin_port.convert_plugin(source, target, output, mode="strict", overwrite=False, explicit_host=host)
+                self.assertEqual(locked, (output / "agents/locked/review.md").read_text())
+                self.assertEqual(["review.md"], sorted(path.name for path in (output / "agents/locked").iterdir()))
+                self.assertFalse((output / ".plugin-portability").is_symlink())
+                plugin_port.validate_symlink_tree(output)
+
     def test_marketplace_child_without_a_manifest_takes_the_catalogs_host(self) -> None:
         market = self.root / "codex-market-src"
         child = market / "plugins/kit"

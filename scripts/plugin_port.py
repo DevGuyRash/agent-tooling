@@ -431,9 +431,16 @@ def load_json(path: Path, *, exit_code: int = EXIT_USER_ERROR) -> dict[str, Any]
     return data
 
 
-def write_json(path: Path, data: dict[str, Any]) -> None:
+def write_generated_text(path: Path, text: str) -> None:
+    """Write a file the converter produces as a regular file, replacing a link a package left there, never following it."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    if path.is_symlink():
+        path.unlink()
+    path.write_text(text, encoding="utf-8")
+
+
+def write_json(path: Path, data: dict[str, Any]) -> None:
+    write_generated_text(path, json.dumps(data, indent=2, sort_keys=False) + "\n")
 
 
 def slugify(value: str, *, fallback: str = "plugin") -> str:
@@ -543,7 +550,7 @@ def split_component_frontmatter(
 
 def write_frontmatter(path: Path, data: dict[str, Any], body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"---\n{dump_yaml_data(data)}\n---\n\n{body.lstrip()}", encoding="utf-8")
+    write_generated_text(path, f"---\n{dump_yaml_data(data)}\n---\n\n{body.lstrip()}")
 
 
 # A command already written against the dual-host fallback is correct on BOTH
@@ -1069,6 +1076,13 @@ def prepare_output(source: Path, output: Path, *, overwrite: bool) -> None:
         symlinks=True,
         ignore=copytree_generated_junk_ignore(source),
     )
+    # The portability folder is the converter's own state; a package link there would steer its writes elsewhere.
+    portability = output / PORTABILITY_DIR
+    if portability.is_symlink():
+        portability.unlink()
+    elif portability.is_dir():
+        for link in [path for path in portability.rglob("*") if path.is_symlink()]:
+            link.unlink()
     # A copied link can still reach the source: absolute, spelled through ../source, or chained through another link.
     # Every source link resolves inside the source (validate_symlink_tree), so each copied link is pointed, relatively,
     # at the output path matching its source link's final destination, and no later write can leave the output.
@@ -1131,7 +1145,7 @@ def merge_openai_yaml_policy(skill_dir: Path, *, allow_implicit: bool, name: str
     data.setdefault("policy", {})
     data["policy"]["allow_implicit_invocation"] = allow_implicit
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(dump_yaml_data(data) + "\n", encoding="utf-8")
+    write_generated_text(path, dump_yaml_data(data) + "\n")
 
 
 def normalize_skill_entrypoint_filenames(root: Path, report: Report) -> None:
