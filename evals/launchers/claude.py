@@ -50,8 +50,9 @@ WRITING_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 #                                   SendMessage and ListAgents", docs/en/cross-session-messaging); SendFile, which
 #                                   resolves names against them. SendMessage stays: denying it "also removes messaging
 #                                   to subagents", which a run under test may use.
-# No control covers SendMessage's name resolution, which can suggest the account's cloud session names for a name that
-# matches nothing, nor the account's identity (its email in Claude Code's own context, its organization in the transcript)
+# No documented control blocks SendMessage's name resolution while keeping messaging to the run's own subagents (denying
+# SendMessage would also remove that), so a name that matches nothing can still be answered with the account's cloud
+# session names. No control covers the account's identity (its email in Claude Code's own context, its organization in the transcript)
 # or the settings its organization delivers (server-managed settings, which outrank every local source).
 ACCOUNT_OFF = {
     "settings": {"syncClaudeAiSkills": False, "syncClaudeAiPlugins": False, "disableClaudeAiConnectors": True,
