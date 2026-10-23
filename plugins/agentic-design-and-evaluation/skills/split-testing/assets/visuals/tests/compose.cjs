@@ -358,6 +358,22 @@ test("invalid reasons are explained in plain words with the remedy for that reas
   H.includes(ledger, '<code class="av-why-code">judge-missing</code>', "the reason code in the ledger");
 });
 
+test("a run whose credentials could not be verified removed says to remove them by hand before rerunning", () => {
+  // references/trials.md: a clearing that cannot be verified makes the run invalid (credential-kept); while it stays noted,
+  // `run` leaves it as it is and exits 3, until what credentials.jsonl lists as unremoved is removed by hand.
+  const data = F.gridTrial({ a: { c: "PP-" }, b: { c: "PPP" } }, run => run.passed === null ? { status: "credential-kept", invalid_reason: "credential-kept" } : {});
+  const html = V.renderReport(V.trialReport(data));
+  const group = html.slice(html.indexOf('<code class="av-inv-reason">credential-kept</code>'));
+  H.ok(group.length < html.length, "the invalid view names the credential-kept runs");
+  const own = group.slice(0, group.indexOf('<div class="av-inv-arms">'));
+  H.includes(own, "could not be verified removed", "what happened");
+  H.includes(own, "no check, evidence extractor or judge read it", "why the run has no result");
+  H.includes(own, "Remove by hand the paths <code>RUN_DIR/credentials.jsonl</code> lists as <code>unremoved</code>", "the cleanup the run waits on");
+  H.includes(own, "exits 3", "what run does until then");
+  const clean = own.indexOf("Remove by hand"), retry = own.indexOf("<code>trial.py run PLAN --out RUN_DIR --retry-invalid</code>");
+  H.ok(clean >= 0 && retry > clean, "the rerun comes only after the cleanup");
+});
+
 test("cost shows no empty panel when only invalid runs recorded usage", () => {
   const data = F.gridTrial({ a: { c: "--" } }, () => ({ seconds: 0.1, usage: {} }));
   H.ok(!ids(V.trialReport(data)).includes("cost"), "a cost section without a valid run");

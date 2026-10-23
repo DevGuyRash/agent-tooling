@@ -232,7 +232,7 @@ export function repeatRange(data: TrialReport): { min: number; max: number } | n
 
 /** An invalid reason in plain words, with the remedy for that reason. The codes
  * are those trial.py records: a run status other than ok (timeout, setup-failed,
- * exit-N, ...), or judge-missing, judge-stale, judge-error and check-error. */
+ * credential-kept, exit-N, ...), or judge-missing, judge-stale, judge-error and check-error. */
 export interface InvalidReason { code: string; text: string; remedy: string }
 export function invalidReason(code: string | null | undefined): InvalidReason {
   const c = String(code || "unknown");
@@ -246,6 +246,8 @@ export function invalidReason(code: string | null | undefined): InvalidReason {
     "setup-failed": ["The run's setup did not finish, so the executor never started.", retry],
     "no-thread-for-followup": ["The executor gave no conversation to continue, so the follow-up turn could not be sent.", retry],
     "skipped": ["The run was not attempted.", retry],
+    // references/trials.md, Keys: an unverified clearing keeps the run noted, and `run` exits 3 until it is cleaned by hand.
+    "credential-kept": ["The credentials the run was given could not be verified removed, so no check, evidence extractor or judge read it.", `Remove by hand the paths \`RUN_DIR/credentials.jsonl\` lists as \`unremoved\`; until then \`trial.py run\` leaves the run as it is and exits 3, and judging or pairing it is refused too. Then ${retry.charAt(0).toLowerCase()}${retry.slice(1)}`],
   };
   if (known[c]) return { code: c, text: known[c][0], remedy: known[c][1] };
   const exit = /^exit-(-?\d+)$/.exec(c);
