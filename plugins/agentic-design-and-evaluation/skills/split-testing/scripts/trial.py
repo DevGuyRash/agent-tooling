@@ -1865,7 +1865,8 @@ def _check_off_copies(paths, root: Path, what: str):
     runs' credentials there, whatever confinement hides."""
     for given in paths:
         for q in {Path(os.path.abspath(given)), Path(os.path.realpath(given))}:
-            how = "is" if q == root else "holds" if root.is_relative_to(q) else "lies inside" if q.is_relative_to(root) else ""
+            how = ("is" if q == root else "holds" if root.is_relative_to(q)
+                   else "lies inside" if q.is_relative_to(root) else "")
             if how:
                 raise TrialError(f"{what} gives a run {given}, which {how} {root}, where the runtime keeps every run's "
                                  "copied credentials, so the run could read other runs' credentials; give it a path apart "
@@ -1877,7 +1878,8 @@ def _given_paths(entry: dict) -> list[str]:
     of its resources and copies."""
     return [*(str(Path(p).expanduser()) for p in entry.get("readable") or []),
             *([entry["binary"]] if isinstance(entry.get("binary"), str) else []),
-            *(str(v) for v in (entry.get("resources") or {}).values()), *(str(v) for v in (entry.get("copy") or {}).values())]
+            *(str(v) for v in (entry.get("resources") or {}).values()),
+            *(str(v) for v in (entry.get("copy") or {}).values())]
 
 
 def _holds_credentials(arm: dict) -> bool:
@@ -2056,7 +2058,8 @@ def _transcript_chain(job_dir: Path, name) -> list[Path] | None:
 def _clear_home(out: Path, home_rel: str, keep: list[str]) -> list[str]:
     """Empty a run's private home (out/home_rel), keeping only what is evidence or the runtime's own (see _kept): every
     link and file a transcript its record names rests on, whole, each directory it passes through, as a directory
-    emptied of anything else, and `keep`, the arm's resources and stub skills, which exposure is read against. Whatever a tool cached there, or the agent moved or copied there, goes. Returns what could not be
+    emptied of anything else, and `keep`, the arm's resources and stub skills, which exposure is read against.
+    Whatever a tool cached there, or the agent moved or copied there, goes. Returns what could not be
     removed (the home itself, when a link on the way keeps it from being reached), relative to the run directory."""
     st = _reach(out, home_rel)
     if st is None:
