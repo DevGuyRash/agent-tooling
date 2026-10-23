@@ -3104,15 +3104,16 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
         }
     }
     /** A checks table in the box it scrolls in. The name column's sizes go on the table as custom properties, which
-     * trial-views.css combines in a fixed priority (.av-ck-col-name there): `--ck-hard`, its widest piece that cannot
-     * break (a chip, a word of the heading), which always gets its room; `--ck-soft`, its widest piece of a check name
-     * between underscores or word of other text; `--ck-full`, its heading and row heads each on one line; and `--ck-arms`,
-     * the room the arms want, each for its name on three lines. The arms share what the name column leaves. */
+     * trial-views.css combines in a fixed priority (.av-ck-col-name there): `--ck-hard`, its widest word that cannot break
+     * (of a chip or of the heading); `--ck-soft`, its widest piece of a check name between underscores or word of other
+     * text; `--ck-full`, its heading and row heads each on one line; and `--ck-arms`, the room the arms want, each for its
+     * name on three lines. The arms share what the name column leaves. */
     function heatTable(ctx, cls, arms, heading, rows, inner) {
-        const chip = (r) => "chip" in r && r.chip ? r.chip.length * EST.chip + EST.chipPad : 0;
-        const oneLine = (r) => "text" in r ? r.text.length * EST.text : r.code.length * EST.mono + EST.code + (r.chip ? 0.3 + chip(r) : 0);
+        const chip = (r, piece) => "chip" in r && r.chip ? piece(r.chip) * EST.chip + EST.chipPad : 0;
+        const whole = (text) => text.length, word = (text) => longest(words(text));
+        const oneLine = (r) => "text" in r ? r.text.length * EST.text : r.code.length * EST.mono + EST.code + (r.chip ? 0.3 + chip(r, whole) : 0);
         const piece = (r) => "text" in r ? longest(words(r.text)) * EST.text : longest(r.code.split(/(?<=_)/)) * EST.mono + EST.code;
-        const hard = EST.cell + Math.max(longest(words(heading)) * EST.head, ...rows.map(chip));
+        const hard = EST.cell + Math.max(word(heading) * EST.head, ...rows.map(r => chip(r, word)));
         const soft = EST.cell + Math.max(0, ...rows.map(piece));
         const full = EST.cell + Math.max(heading.length * EST.head, ...rows.map(oneLine));
         const armRoom = Math.max(0, ...arms.map(a => EST.cell + lineChars(words(ctx.arms.label(a)), 3) * EST.arm));

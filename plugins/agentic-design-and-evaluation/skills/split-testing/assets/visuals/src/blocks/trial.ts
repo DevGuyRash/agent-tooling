@@ -413,7 +413,7 @@ function measuresByCase(input: ChecksInput, ctx: RenderContext, data: TrialRepor
 }
 
 /** A row head of a checks table, for sizing the name column: a check's name (with the chip saying in how many cases it
- * is required), or other text. */
+ * is required, which wraps at its spaces), or other text. */
 type RowHead = { code: string; chip?: string } | { text: string };
 /** Generous widths in rem, enough for a wide font such as DejaVu Sans: a character of a check name (monospace, 0.6em of
  * code at .86em of the table's .86rem, plus the code's .35em padding each side), of other row-head text (0.6em of
@@ -431,15 +431,16 @@ function lineChars(pieces: string[], lines: number): number {
   }
 }
 /** A checks table in the box it scrolls in. The name column's sizes go on the table as custom properties, which
- * trial-views.css combines in a fixed priority (.av-ck-col-name there): `--ck-hard`, its widest piece that cannot
- * break (a chip, a word of the heading), which always gets its room; `--ck-soft`, its widest piece of a check name
- * between underscores or word of other text; `--ck-full`, its heading and row heads each on one line; and `--ck-arms`,
- * the room the arms want, each for its name on three lines. The arms share what the name column leaves. */
+ * trial-views.css combines in a fixed priority (.av-ck-col-name there): `--ck-hard`, its widest word that cannot break
+ * (of a chip or of the heading); `--ck-soft`, its widest piece of a check name between underscores or word of other
+ * text; `--ck-full`, its heading and row heads each on one line; and `--ck-arms`, the room the arms want, each for its
+ * name on three lines. The arms share what the name column leaves. */
 function heatTable(ctx: RenderContext, cls: string, arms: string[], heading: string, rows: RowHead[], inner: string): string {
-  const chip = (r: RowHead) => "chip" in r && r.chip ? r.chip.length * EST.chip + EST.chipPad : 0;
-  const oneLine = (r: RowHead) => "text" in r ? r.text.length * EST.text : r.code.length * EST.mono + EST.code + (r.chip ? 0.3 + chip(r) : 0);
+  const chip = (r: RowHead, piece: (text: string) => number) => "chip" in r && r.chip ? piece(r.chip) * EST.chip + EST.chipPad : 0;
+  const whole = (text: string) => text.length, word = (text: string) => longest(words(text));
+  const oneLine = (r: RowHead) => "text" in r ? r.text.length * EST.text : r.code.length * EST.mono + EST.code + (r.chip ? 0.3 + chip(r, whole) : 0);
   const piece = (r: RowHead) => "text" in r ? longest(words(r.text)) * EST.text : longest(r.code.split(/(?<=_)/)) * EST.mono + EST.code;
-  const hard = EST.cell + Math.max(longest(words(heading)) * EST.head, ...rows.map(chip));
+  const hard = EST.cell + Math.max(word(heading) * EST.head, ...rows.map(r => chip(r, word)));
   const soft = EST.cell + Math.max(0, ...rows.map(piece));
   const full = EST.cell + Math.max(heading.length * EST.head, ...rows.map(oneLine));
   const armRoom = Math.max(0, ...arms.map(a => EST.cell + lineChars(words(ctx.arms.label(a)), 3) * EST.arm));

@@ -63,6 +63,38 @@ for (const t of tables) for (const cell of t.querySelectorAll("tbody th, thead t
 }
 return { chips: [...document.querySelectorAll(".av-heatmap .av-chip--req")].map(c => c.textContent), variants: [...new Set(tables.map(t => t.className))].sort(), spills: [...new Set(out)].slice(0, 8) };
 """
+# Each value in a checks table's arm cells, scrolled so that it starts at the sticky name column's edge: a value that
+# still runs under that column or past the box's right edge can never be read in full, even by scrolling.
+READABLE = """
+const out = []; let cells = 0, scrolled = 0;
+const textBox = td => {
+  let left = Infinity, right = -Infinity;
+  const walk = document.createTreeWalker(td, NodeFilter.SHOW_TEXT);
+  for (let n; (n = walk.nextNode());) {
+    if (!n.textContent.trim() || n.parentElement.closest("[aria-hidden]")) continue;
+    const range = document.createRange(); range.selectNodeContents(n);
+    const r = range.getBoundingClientRect();
+    if (r.width) { left = Math.min(left, r.left); right = Math.max(right, r.right); }
+  }
+  return left < right ? { left, right } : null;
+};
+for (const table of [...document.querySelectorAll(".av-heatmap")].filter(t => t.getBoundingClientRect().width)) {
+  const box = table.closest(".av-scroll-x");
+  for (const row of table.querySelectorAll("tbody tr")) {
+    const head = row.querySelector("th");
+    if (!head || head.colSpan > 1) continue;
+    for (const td of row.querySelectorAll("td")) {
+      if (td.colSpan > 1 || !textBox(td)) continue;
+      box.scrollTo({ left: box.scrollLeft + textBox(td).left - head.getBoundingClientRect().right, behavior: "instant" });
+      cells++; scrolled = Math.max(scrolled, box.scrollLeft);
+      const v = textBox(td), h = head.getBoundingClientRect(), b = box.getBoundingClientRect();
+      if (v.left < h.right - 0.5 || v.right > b.right + 0.5) out.push('"' + td.textContent.trim() + '" beside ' + head.textContent.trim().slice(0, 30) + ": " + Math.round(v.right - v.left) + " px of value, " + Math.round(b.right - h.right) + " px beside the sticky column");
+    }
+    box.scrollTo({ left: 0, behavior: "instant" });
+  }
+}
+return { cells, scrolled: Math.round(scrolled), hidden: [...new Set(out)].slice(0, 8) };
+"""
 
 def kinds_trial(*, invalid: bool, hostile: bool = False) -> dict:
     """Two arms, two cases, three repeats: a required check that fails with a
@@ -365,29 +397,37 @@ class BrowserRenderTest(unittest.TestCase):
         glyphs = self.drive(checks, width=1440, script='return [...document.querySelectorAll(".av-heatmap thead .av-glyph")].map(g => Math.round(g.getBoundingClientRect().width));')["result"]
         self.assertTrue(glyphs and all(w >= 10 for w in glyphs), f"each arm's glyph in the table head is drawn: {glyphs}")
 
-    def test_phone_width_keeps_each_row_head_inside_its_cell(self) -> None:
-        # Two arms and twenty cases, one check required in ten of them: its pooled row head carries the chip "in 10 of 20
-        # cases", which cannot wrap. At 320 px a cap of 44% of the box once squeezed the name column below the chip, which
-        # ran into the first arm's cell under the sticky row head. Every checks table (pooled, by case, and the recorded
-        # measures) keeps each row head and its heading inside its cell.
-        cases = [f"c{i:02d}" for i in range(1, 21)]
-        runs = []
-        for i, case in enumerate(cases):
-            for j, arm in enumerate(("a", "b")):
-                cites = (i + j) % 3 != 0
-                runs.append({"job": f"{case}__{arm}__r1", "scenario": case, "arm": arm, "repeat": 1, "status": "ok", "valid": True, "passed": cites or i >= 10,
-                             "checks": {"reply_written": True, "cites_the_source": cites, "under_budget": (i + j) % 2 == 0}})
-        trial = {"name": "chips", "plan": {"arms": {a: {"executor": "command", "model": "m"} for a in ("a", "b")},
-                                           "scenarios": [{"name": c, "prompt": "Reply.", "required": ["reply_written", "cites_the_source"] if i < 10 else ["reply_written"]} for i, c in enumerate(cases)]}, "runs": runs}
-        spec = {"title": "Row heads", "sections": [{"title": "Pooled", "blocks": [{"type": "checks", "by": "check"}]}, {"title": "By case", "blocks": [{"type": "checks", "by": "case"}]},
-                                                   {"title": "Measures", "blocks": [{"type": "checks", "required": False}]}]}
-        spec_file = self.dir / "row-heads.json"
-        spec_file.write_text(json.dumps(spec), encoding="utf-8")
-        page = self.build("--trial", self.trial_file(trial), "--spec", spec_file)
-        out = self.drive(page, width=320, script=SPILL)["result"]
-        self.assertIn("in 10 of 20 cases", out["chips"], "the pooled row head carries its chip")
-        self.assertEqual(out["variants"], ["av-heatmap", "av-heatmap av-heatmap--case", "av-heatmap av-heatmap--measures"], "each checks table drawn")
-        self.assertEqual(out["spills"], [], "a row head running into the first arm's cell at 320 px")
+    def test_phone_width_keeps_row_heads_in_their_cells_and_every_value_readable(self) -> None:
+        # A check required in only some cases carries a chip such as "in 10 of 20 cases" in its pooled row head. At 320 px
+        # the chip once ran into the first arm's cell; kept whole instead, "in 9999 of 10,000 cases" widened the sticky
+        # name column until the 58 px left beside it could never show "9999/9999", however far the table scrolled. Every
+        # checks table (pooled, by case, and the recorded measures) keeps each row head inside its cell, and each value
+        # can be scrolled to sit in full beside the sticky column.
+        def chips_trial(count: int, required_in: int, measures: bool) -> dict:
+            cases = [f"c{i:05d}" for i in range(1, count + 1)]
+            runs = []
+            for i, case in enumerate(cases):
+                for j, arm in enumerate(("a", "b")):
+                    cites = (i + j) % 3 != 0 if measures else True
+                    checks = {"reply_written": True, "cites_the_source": cites, "under_budget": (i + j) % 2 == 0} if measures else {"cites_the_source": True}
+                    runs.append({"job": f"{case}__{arm}__r1", "scenario": case, "arm": arm, "repeat": 1, "status": "ok", "valid": True, "passed": cites or i >= required_in, "checks": checks})
+            required = (lambda i: ["reply_written", "cites_the_source"] if i < required_in else ["reply_written"]) if measures else (lambda i: ["cites_the_source"] if i < required_in else [])
+            return {"name": "chips", "plan": {"arms": {a: {"executor": "command", "model": "m"} for a in ("a", "b")},
+                                              "scenarios": [{"name": c, "prompt": "Reply.", "required": required(i)} for i, c in enumerate(cases)]}, "runs": runs}
+        variants = {"av-heatmap": {"type": "checks", "by": "check"}, "av-heatmap av-heatmap--case": {"type": "checks", "by": "case"}, "av-heatmap av-heatmap--measures": {"type": "checks", "required": False}}
+        fixtures = {"twenty cases": (chips_trial(20, 10, True), "in 10 of 20 cases", list(variants)), "ten thousand cases": (chips_trial(10_000, 9_999, False), "in 9999 of 10,000 cases", ["av-heatmap"])}
+        for name, (trial, chip, drawn) in fixtures.items():
+            with self.subTest(fixture=name):
+                spec_file = self.dir / "row-heads.json"
+                spec_file.write_text(json.dumps({"title": "Row heads", "sections": [{"title": v, "blocks": [variants[v]]} for v in drawn]}), encoding="utf-8")
+                page = self.build("--trial", self.trial_file(trial), "--spec", spec_file)
+                out = self.drive(page, width=320, script=SPILL)["result"]
+                self.assertIn(chip, out["chips"], "the pooled row head carries its chip")
+                self.assertEqual(out["variants"], sorted(drawn), "each checks table drawn")
+                self.assertEqual(out["spills"], [], "a row head running into the first arm's cell at 320 px")
+                seen = self.drive(page, width=320, script=READABLE)["result"]
+                self.assertGreater(seen["scrolled"], 0, "the tables scroll sideways at 320 px")
+                self.assertEqual(seen["hidden"], [], f"a value that cannot be shown in full beside the sticky column at 320 px ({seen['cells']} values)")
 
     def test_phone_width_never_scrolls_the_page_sideways(self) -> None:
         reports = {

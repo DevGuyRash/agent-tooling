@@ -2286,14 +2286,16 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
 
 /* ----------------------------------------------------------------- checks */
 /* Each arm's column keeps room for its name; past the box, the table scrolls with its check names held. */
-.av-heatmap { table-layout: fixed; min-width: calc(max(12rem, var(--ck-hard, 0rem)) + var(--arms, 1) * 7rem); }
-/* The name column, from the sizes heatTable (blocks/trial.ts) sets on the table, in priority order: what cannot break
-   (--ck-hard) always gets its room; within that, at most 44% of the box; within that, at least its check names' pieces
-   between underscores (--ck-soft); within that, what the arms leave once each has room for its name on three lines
-   (--ck-arms), and no more than its one-line width (--ck-full). */
+.av-heatmap { table-layout: fixed; min-width: calc(12rem + var(--arms, 1) * 7rem); }
+/* The name column, from the sizes heatTable (blocks/trial.ts) sets on the table, in priority order: a word that cannot
+   break (--ck-hard) gets its room; within that, at most 44% of the box, so the sticky column always leaves the values
+   most of it; within that, at least its check names' pieces between underscores (--ck-soft); within that, what the
+   arms leave once each has room for its name on three lines (--ck-arms), and no more than its one-line width
+   (--ck-full). A requirement chip wraps at its spaces, so its words are all that cannot break. */
 .av-heatmap .av-ck-col-name { width: max(var(--ck-hard), min(44cqw, clamp(var(--ck-soft), calc(100cqw - var(--ck-arms)), var(--ck-full)))); }
 .av-heatmap--case, .av-heatmap--measures, .av-ck-head { max-width: calc(24rem + var(--arms, 1) * 11rem); }
 .av-heatmap tbody th { white-space: normal; overflow-wrap: anywhere; }
+.av-heatmap tbody th .av-chip { white-space: normal; overflow-wrap: normal; }
 .av-heatmap thead th .av-arm-label { overflow-wrap: break-word; word-break: normal; }
 /* Arm names wrap inside their own column instead of running into the next one. */
 .av-heatmap thead th:not(:first-child) { white-space: normal; vertical-align: bottom; }
@@ -2367,10 +2369,10 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
   .av-ladder-row--variant .av-ladder-label { padding-left: 10px; }
   .av-ck-case--variant { margin-left: 8px; padding-left: 10px; }
   /* Each arm column fits a two-word label on its own lines; the table scrolls sideways instead of overlapping headers. */
-  .av-heatmap { min-width: calc(max(9rem, var(--ck-hard, 0rem)) + var(--arms, 1) * 6.5rem); }
-  /* The name column keeps to the 9rem the minimum width budgets for it (its one-line width, if less), and what cannot
-     break still gets its room. */
-  .av-heatmap .av-ck-col-name { width: max(var(--ck-hard), min(9rem, var(--ck-full))); }
+  .av-heatmap { min-width: calc(9rem + var(--arms, 1) * 6.5rem); }
+  /* The name column keeps to 44% of the box and to the 9rem the minimum width budgets for it (its one-line width, if
+     less); a word that cannot break still gets its room. */
+  .av-heatmap .av-ck-col-name { width: max(var(--ck-hard), min(44cqw, 9rem, var(--ck-full))); }
   .av-heatmap thead th .av-arm-label { overflow-wrap: anywhere; hyphens: auto; }
   .av-mention-list { grid-template-columns: 1fr; }
 }
