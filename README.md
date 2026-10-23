@@ -6,7 +6,7 @@ After cloning for contributor work, run `just bootstrap` to enable the Git hooks
 
 ## Repository layout
 
-Top-level `plugins/` contains plugin packages that may bundle skills, hooks, MCP servers, apps, and host manifests. Top-level `skills/` is kept with `.gitkeep` for future standalone, host-agnostic skill packages that are not distributed as plugins.
+Top-level `plugins/` contains plugin packages that may bundle skills, hooks, MCP servers, apps, and host manifests. Top-level `skills/` contains standalone, host-agnostic skill packages that are not distributed as plugins; each skill directory carries everything it needs.
 
 WHEN adding a plugin package to this repository THEN you SHALL place it under `plugins/<plugin-name>/`. WHEN adding reusable skill content that is not a plugin package THEN you SHALL place it under `skills/<skill-name>/`. WHEN a plugin bundles skill instructions THEN you SHALL keep those bundled skills inside the plugin package's own `skills/` directory.
 
@@ -33,6 +33,11 @@ Current local plugins:
 
 Agentic Design & Evaluation is distributed as a complete plugin. Its task skills depend on the public shared resources listed in its package guide; a copied task-skill directory is not a supported standalone installation. This package boundary is distinct from a launcher or standalone skill that promises to carry all of its dependencies inside one skill directory.
 - `plugins/software-development/` replaces `rust-development` and `gitops-workflow` with a shared development catalog for both Codex and Claude Code.
+
+Current standalone skills, installable with any Agent Skills installer that reads a GitHub source:
+
+- `skills/app-verification/` proves that something works for its users by driving the real app the way they do, using a repository's own verification skill when it has one, and keeps the evidence outside the repository.
+- `skills/formal-verification/` verifies one property of a repository's code in every case within a stated scope, with the tool the question calls for, and shows the check can fail before trusting a pass.
 
 ## Archived packages
 
