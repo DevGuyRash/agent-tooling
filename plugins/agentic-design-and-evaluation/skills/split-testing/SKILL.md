@@ -17,74 +17,99 @@ Who does what, stage by stage, from the decision to the answer; a choice that ex
 ```mermaid
 sequenceDiagram
   actor D as Decider
-  participant Y as You
+  participant Y as Lead (you)
   participant S as Second contributor
-  participant W as Workers
+  participant W as Executors (new each run)
   participant K as Checks
   participant J as Judges or raters
-  participant R as Reviewer
+  participant R as Independent reviewer
+  Note over S,R: Each starts fresh with only its role's inputs.<br/>Costly: design, execution, and judging each<br/>draw on more than one model family.
 
   rect rgba(128, 128, 128, 0.12)
     Note over D,Y: Frame
-    D->>Y: the choice, its use, how far the claim must reach
-    Note over Y: price the observations, scale safeguards to the stakes
+    D->>Y: the choice, its use,<br/>how far the claim must reach
+    Note over Y: price the observations,<br/>scale safeguards to the stakes
   end
 
   rect rgba(70, 130, 180, 0.14)
     Note over Y,S: Design, before any result
-    Note over Y: discover concerns, ground criteria, draw real cases
+    Note over Y: alternatives and groups, measures,<br/>cases, units of observation
+    Note over Y: discover concerns widely,<br/>ground each criterion
     alt costly or hard to reverse
       Y->>S: the draft criteria and the originals
-      S-->>Y: pass yet fail real use? fail for an irrelevant reason? missing?
+      S-->>Y: false passes? false failures?<br/>missing concerns?
     else small and reversible
-      Note over Y: ask the same three questions of your own draft
+      Note over Y: ask the same three questions<br/>of your own draft
     end
     Note over Y: choose the evidence the decision needs
   end
 
-  opt existing evidence or reasoning settles it
-    Note over Y: skip Prepare and Observe, never Decide
-  end
-
-  rect rgba(46, 139, 87, 0.14)
-    Note over Y,J: Prepare
-    Y->>S: each setup item and its grounds (default: none)
-    S-->>Y: checked, then probed live under scored conditions
-    Y->>K: known-good and known-bad cases, real outputs
-    K-->>Y: counts only if every verdict is right
-    Y->>J: the same qualification
-    J-->>Y: qualified (costly: another model family)
-    Note over Y: fix the decision rule
-  end
-
-  rect rgba(218, 165, 32, 0.16)
-    Note over Y,J: Observe, blind and repeated
-    loop every alternative × case × repeat, interleaved
-      Y->>W: fresh workspace, its instructions, the task only
-      Note right of W: blind to checks, rivals, and your hypothesis
-      W-->>Y: output, actions, final state
-      Y->>K: the resulting state
-      K-->>Y: true, false, or cannot tell
-      Y->>J: the output, its producer unnamed
-      J-->>Y: pass, fail, or unclear
-      Note over Y: valid (passed or failed) or invalid (not observed)
+  alt existing evidence or reasoning settles it
+    Note over Y: skip Prepare and Observe
+  else new observations are needed
+    rect rgba(46, 139, 87, 0.14)
+      Note over Y,J: Prepare
+      alt small choice, item copied unchanged from an alternative's spec
+        Note over Y: check it against that source
+      else any other setup item (default: none)
+        Y->>S: the item and its grounds
+        S-->>Y: grounds and scope checked
+      end
+      Note over Y: probe each item live under scored conditions,<br/>a step under test is scored, not pre-run
+      Y->>K: known-good and known-bad cases,<br/>real outputs read by hand
+      K-->>Y: counts only if every verdict is right
+      alt verdicts have grounded right answers
+        Y->>J: the same reference cases and real outputs
+        J-->>Y: qualified (costly model judging:<br/>a family the executors don't use)
+      else a preference with no right answer
+        Y->>J: the attribute, the scale,<br/>presentation tests
+        J-->>Y: understood, disagreement is an outcome
+      end
+      Note over Y: fix the decision rule
     end
-    opt both pass and which is better matters
-      Y->>J: both outputs, unnamed, in both orders
-      J-->>Y: decisive, tie, or order-inconsistent
+
+    rect rgba(218, 165, 32, 0.16)
+      Note over Y,J: Observe, blind and repeated
+      loop every alternative × case × repeat, interleaved
+        alt agents do the work (trial runtime)
+          Y->>W: fresh workspace,<br/>its instructions, the task only
+          W-->>Y: output, actions, final state
+        else people, measurements, or a ready artifact
+          Note over Y: obtain it, with its source
+        end
+        opt deterministic checks apply
+          Y->>K: the resulting state
+          K-->>Y: true, false, or cannot tell
+        end
+        opt a judge or rater assesses it
+          Y->>J: the output, its producer unnamed,<br/>one judge or panel for all alternatives
+          J-->>Y: verdict, rating, or choice
+        end
+        Note over Y: record it, or mark it invalid<br/>when what decides it was not observed
+      end
+      opt both pass and which is better matters
+        loop each matched case and repeat
+          Y->>J: both outputs, unnamed, in both orders
+          J-->>Y: consistent winner, tie,<br/>or order-inconsistent
+        end
+      end
     end
   end
 
   rect rgba(178, 34, 34, 0.12)
-    Note over Y,R: Decide and review
-    Note over Y: count results with intervals, adequacy before rank
-    Note over Y: apply the rule fixed in Prepare
-    Y->>R: the original evidence
-    R-->>Y: adversarial findings, or a verdict that it is sound
-    Y->>D: decision, grounds, limits, what would change it
+    Note over D,Y: Decide
+    Note over Y: adequacy, trade-offs, uncertainty,<br/>then rank the survivors
+    Note over Y: counts, with intervals<br/>where the sample supports them
+    Note over Y: within and between groups<br/>before any pooled result
+    Note over Y: apply any rule fixed before observing
+    opt a review of the conclusion is organized
+      Y->>R: the original evidence
+      R-->>Y: adversarial findings,<br/>or a verdict that it is sound
+    end
+    Y->>D: decision, grounds, limits,<br/>what would change it
   end
 
-  Note over D,R: A material gap or new concern returns to Design, findings kept
+  Note over D,R: A material gap or new material concern: keep the findings, revise scope or design
 ```
 
 When you observe, the comparison SHALL hold these properties:
