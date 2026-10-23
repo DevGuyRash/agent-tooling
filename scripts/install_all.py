@@ -382,7 +382,7 @@ def receipt_identity(receipt: Mapping[str, object], host: str, plugin_id: str, *
     value = plugins.get(plugin_id) if isinstance(plugins, dict) else None
     if value is None:
         return None
-    if not isinstance(value, dict) or not isinstance(value.get("version"), str) or not isinstance(value.get("digest"), str) or len(value["digest"]) != 64:
+    if not isinstance(value, dict) or not isinstance(value.get("version"), str) or not value["version"].strip() or not isinstance(value.get("digest"), str) or len(value["digest"]) != 64:
         raise InstallError(f"invalid installer receipt identity: {host} {plugin_id}")
     return Identity(value["version"], value["digest"])
 
