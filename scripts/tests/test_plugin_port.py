@@ -205,14 +205,38 @@ class PluginPortTests(unittest.TestCase):
         source = self.root / "source"
         write(source / ".claude-plugin/plugin.json", '{"name":"inspectors"}')
         write(source / "agents/review/security.md", "---\nname: internal-label\ndescription: Review security.\n---\nReview.\n")
+        # Claude 2.1.299 registers this agent as inspectors:review:internal-label (subdirectories, then the
+        # frontmatter name) and reports "Agent type 'inspectors:review:security' not found"; Codex must match.
         document, = plugin_port.agent_documents(source, "codex", namespace="inspectors")
-        self.assertEqual("inspectors:review:security", document.name)
+        self.assertEqual("inspectors:review:internal-label", document.name)
         codex = self.root / "codex"
         plugin_port.convert_plugin(source, "codex", codex, mode="strict", overwrite=False)
         claude = self.root / "claude"
         plugin_port.convert_plugin(codex, "claude", claude, mode="strict", overwrite=False, explicit_host="codex")
-        self.assertTrue((claude / "agents/review/security.md").is_file())
-        self.assertNotIn(":", plugin_port.split_frontmatter(claude / "agents/review/security.md")[0]["name"])
+        (claude_agent,) = (claude / "agents").rglob("*.md")
+        self.assertEqual(Path("review"), claude_agent.parent.relative_to(claude / "agents"))
+        self.assertEqual("internal-label", plugin_port.split_frontmatter(claude_agent)[0]["name"])
+
+    def test_claude_frontmatter_name_is_the_codex_name(self) -> None:
+        source = self.root / "source"
+        write(source / "agents/filename.md", "---\nname: frontname\ndescription: Review.\n---\nReview.\n")
+        document, = plugin_port.agent_documents(source, "codex", namespace="probe")
+        self.assertEqual("probe:frontname", tomllib.loads(document.content)["name"])
+        self.assertFalse(any("frontmatter label" in warning for warning in document.warnings))
+
+    def test_codex_colon_name_becomes_claude_subdirectory_and_label(self) -> None:
+        source = self.root / "source"
+        write(source / ".codex/agents/team.toml", 'name="team:review"\ndescription="Review."\ndeveloper_instructions="Review."\n')
+        document, = plugin_port.agent_documents(source, "claude")
+        self.assertEqual(Path("agents/team/review.md"), document.path)
+        self.assertIn("name: review\n", document.content)
+
+    def test_agent_text_with_toml_forbidden_characters_stays_valid(self) -> None:
+        source = self.root / "source"
+        body = "Delete\x7fmarker, bell\x07, tab\t, nul-free.\n"
+        write(source / "agents/reviewer.md", "---\nname: reviewer\ndescription: Review.\n---\n" + body)
+        document, = plugin_port.agent_documents(source, "codex")
+        self.assertEqual(body, tomllib.loads(document.content)["developer_instructions"])
 
     def test_codex_to_claude_filename_uses_declared_agent_identity(self) -> None:
         source = self.root / "source"

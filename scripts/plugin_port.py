@@ -266,9 +266,14 @@ def _agent_frontmatter(path: Path) -> tuple[dict[str, Any], str]:
     return load_yaml_text(match.group(1), path=path), text[match.end():]
 
 
+def _toml_string(value: str) -> str:
+    # JSON escapes every control character TOML forbids except DEL, which a TOML basic string must escape too.
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
 def _toml_value(value: Any) -> str:
     if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
+        return _toml_string(value)
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
@@ -276,7 +281,7 @@ def _toml_value(value: Any) -> str:
     if isinstance(value, list):
         return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     if isinstance(value, dict):
-        return "{ " + ", ".join(f"{json.dumps(key)} = {_toml_value(item)}" for key, item in value.items()) + " }"
+        return "{ " + ", ".join(f"{_toml_string(key)} = {_toml_value(item)}" for key, item in value.items()) + " }"
     die(f"unsupported agent TOML value: {type(value).__name__}")
 
 
@@ -352,12 +357,11 @@ def agent_documents(
             fields = dict(metadata)
             fields.update(name=name, description=description)
             if target == "codex":
+                # Claude registers a plugin agent as its subdirectories under agents/ followed by its frontmatter name
+                # (agents/review/security.md named internal-label is plugin:review:internal-label), so Codex uses the same.
                 agent_root = root / "agents"
-                identity_path = path.relative_to(agent_root) if path.is_relative_to(agent_root) else Path(path.name)
-                invocation_name = ":".join(identity_path.with_suffix("").parts)
-                if name != invocation_name:
-                    warnings.append(f"{source_path}: Claude plugin invocation {invocation_name!r} supplies the Codex name instead of frontmatter label {name!r}")
-                name = invocation_name
+                subdirectories = path.parent.relative_to(agent_root).parts if path.is_relative_to(agent_root) else ()
+                name = ":".join((*subdirectories, name))
                 fields["name"] = name
         else:
             try:
@@ -411,10 +415,9 @@ def agent_documents(
         else:
             if origin == "codex" and any(part in {"", ".", ".."} or any(character in part for character in ("/", "\\", "\x00")) for part in source_name.split(":")):
                 die(f"{source_path}: cannot preserve agent name {source_name!r} as a Claude filename")
-            if origin == "codex" and ":" in name:
-                identity_path = path.relative_to(root / ".codex/agents")
-                if name == ":".join(identity_path.with_suffix("").parts):
-                    name = path.stem
+            if origin == "codex":
+                # Claude derives plugin:team:review from agents/team/review.md named review.
+                name = source_name.split(":")[-1]
             if ":" in name or name.startswith("-") or len(name) > 256:
                 die(f"{source_path}: cannot preserve agent name {name!r} in Claude; use a name without colons, at most 256 characters")
             fields.pop("developer_instructions", None)
@@ -427,11 +430,12 @@ def agent_documents(
                 destination = Path("agents", *identity[:-1], identity[-1] + ".md")
             else:
                 destination = Path("agents") / relative.with_suffix(".md")
-        if name in names or destination in outputs:
-            die(f"{root}: duplicate agent name or output path: {name}")
-        names.add(name)
+        invocation = name if target == "codex" else ":".join((*destination.parent.relative_to("agents").parts, name))
+        if invocation in names or destination in outputs:
+            die(f"{root}: duplicate agent name or output path: {invocation}")
+        names.add(invocation)
         outputs.add(destination)
-        documents.append(AgentDocument(name, source_name, source_path, destination, content, tuple(warnings)))
+        documents.append(AgentDocument(invocation, source_name, source_path, destination, content, tuple(warnings)))
     return documents
 
 

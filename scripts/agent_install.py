@@ -13,6 +13,8 @@ from typing import Mapping
 
 
 RECEIPT = '.plugin-portability.json'
+LOCK = '.plugin-portability.lock'
+OWNED_PREFIX = 'plugin-port-'
 
 
 class AgentInstallError(RuntimeError):
@@ -27,6 +29,10 @@ class AgentPlan:
     config_digest: str | None = None
 
 
+def owned_path(path: Path) -> bool:
+    return path.name in {RECEIPT, LOCK} or path.name.startswith(OWNED_PREFIX)
+
+
 def snapshot(root: Path) -> dict[str, bytes]:
     if root.is_symlink():
         raise AgentInstallError(f'agent directory must not be a symlink: {root}')
@@ -35,7 +41,13 @@ def snapshot(root: Path) -> dict[str, bytes]:
     result = {}
     for path in sorted(root.rglob('*')):
         if path.is_symlink():
-            raise AgentInstallError(f'agent path must not be a symlink: {path}')
+            if owned_path(path):
+                raise AgentInstallError(f'agent path must not be a symlink: {path}')
+            # A user's own agent linked in by a dotfile manager: read it to avoid name collisions, never write it.
+            # A link that resolves to no regular file is skipped, as Codex discovery skips it.
+            if path.suffix == '.toml' and path.is_file():
+                result[path.relative_to(root).as_posix()] = path.read_bytes()
+            continue
         if path.is_dir():
             continue
         if path.suffix != '.toml' and path.name != RECEIPT:
@@ -48,6 +60,15 @@ def snapshot(root: Path) -> dict[str, bytes]:
 
 def digest(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+def existing_agent_name(content: bytes) -> str | None:
+    """The name Codex would register for an agent file this installer does not own, or None when Codex would ignore it."""
+    try:
+        value = tomllib.loads(content.decode('utf-8')).get('name')
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def agent_name(content: bytes, path: str) -> str:
@@ -107,7 +128,7 @@ def _plan(root: Path, before: dict[str, bytes], owner: str, documents: Mapping[s
     for filename, sha in previous.items():
         if filename in before and digest(before[filename]) != sha:
             raise AgentInstallError(f'owned agent was modified; preserve or move it before retrying: {root / filename}')
-    prefix = 'plugin-port-' + hashlib.sha256(owner.encode()).hexdigest()[:16] + '-'
+    prefix = OWNED_PREFIX + hashlib.sha256(owner.encode()).hexdigest()[:16] + '-'
     desired = {}
     names = set()
     for filename, content in documents.items():
@@ -124,8 +145,8 @@ def _plan(root: Path, before: dict[str, bytes], owner: str, documents: Mapping[s
         desired[target] = raw
     for filename, content in before.items():
         if filename.endswith('.toml') and filename not in previous:
-            name = agent_name(content, filename)
-            if name in names:
+            name = existing_agent_name(content)
+            if name is not None and name in names:
                 raise AgentInstallError(f'agent name {name!r} already exists: {root / filename}')
     changes: dict[str, bytes | None] = {filename: None for filename in previous if filename in before and filename not in desired}
     changes.update({filename: content for filename, content in desired.items() if before.get(filename) != content})
@@ -141,6 +162,9 @@ def _plan(root: Path, before: dict[str, bytes], owner: str, documents: Mapping[s
 
 def plan_many(home: Path, owners: Mapping[str, Mapping[str, str]]) -> AgentPlan:
     root = home / 'agents'
+    if root.is_symlink() and not any(owners.values()):
+        # Nothing to project, and nothing was ever written through a linked directory: leave it alone.
+        return AgentPlan(root, {}, {})
     before = snapshot(root)
     after = dict(before)
     legacy_names, config_digest = legacy_agents(home)
@@ -184,7 +208,7 @@ def apply(planned: AgentPlan) -> None:
     if not planned.changes:
         return
     planned.root.mkdir(parents=True, exist_ok=True)
-    lock = planned.root / '.plugin-portability.lock'
+    lock = planned.root / LOCK
     if lock.is_symlink():
         raise AgentInstallError(f'agent lock must not be a symlink: {lock}')
     import fcntl
