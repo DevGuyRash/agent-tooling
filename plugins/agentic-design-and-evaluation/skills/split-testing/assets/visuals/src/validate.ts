@@ -180,7 +180,6 @@ const DEFAULT_SECTIONS = ["verdict", "setup", "arms", "cases", "grid", "failures
 const OPT_IN_SECTIONS = ["grid"];
 const SECTION_ALIASES = TRIAL_SECTION_ALIASES;
 const SECTION_NAMES = [...DEFAULT_SECTIONS, ...Object.keys(SECTION_ALIASES)];
-const sectionKey = trialSection;
 const NARRATIVE: Shape = {
   fields: {
     title: "text", question: "text", summary: "prose", kicker: "text",
@@ -224,7 +223,6 @@ const COMPARISON: Shape = {
 const COMPARISON_SECTIONS = ["verdict", "compared", "results", "differences", "groups", "cases", "judgments", "decision", "observations", "sources"];
 const COMPARISON_ALIASES = COMPARISON_SECTION_ALIASES;
 const COMPARISON_NAMES = [...COMPARISON_SECTIONS, ...Object.keys(COMPARISON_ALIASES)];
-const comparisonKey = comparisonSection;
 const COMPARISON_NARRATIVE: Shape = {
   fields: {
     title: "text", question: "text", summary: "prose", kicker: "text",
@@ -1134,9 +1132,9 @@ export function validateNarrative(narrative: unknown, given?: unknown): Problem[
   // The trial the narrative is told against: a narrative needs trial data to be read against.
   if (given !== undefined && given !== null && !checkTrial(c, given, "trial")) return order(c.problems);
   const strings = (v: unknown) => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null;
-  const include = strings(narrative.include)?.map(sectionKey) || null, exclude = (strings(narrative.exclude) || []).map(sectionKey);
+  const include = strings(narrative.include)?.map(trialSection) || null, exclude = (strings(narrative.exclude) || []).map(trialSection);
   const kept = DEFAULT_SECTIONS.filter(s => (include ? include.includes(s) : !OPT_IN_SECTIONS.includes(s)) && !exclude.includes(s));
-  const leftOut = (id: string) => OPT_IN_SECTIONS.includes(sectionKey(id)) && !exclude.includes(sectionKey(id)) ? `is drawn only when include names it` : "is left out by include or exclude";
+  const leftOut = (id: string) => OPT_IN_SECTIONS.includes(trialSection(id)) && !exclude.includes(trialSection(id)) ? `is drawn only when include names it` : "is left out by include or exclude";
   const sectionIds = (value: unknown, where: string) => (Array.isArray(value) ? value : []).forEach((id, i) => {
     if (typeof id !== "string" || SECTION_NAMES.includes(id)) return;
     const s = suggest(id, DEFAULT_SECTIONS);
@@ -1198,7 +1196,7 @@ export function validateNarrative(narrative: unknown, given?: unknown): Problem[
       value.forEach((s, i) => {
         if (!isObj(s)) return;
         const after = s.after;
-        if (typeof after === "string" && !before.includes(sectionKey(after))) {
+        if (typeof after === "string" && !before.includes(trialSection(after))) {
           const at = c.join(c.join(where, i), "after");
           if (SECTION_NAMES.includes(after)) c.add("warning", at, `section "${after}" ${leftOut(after)}, so this section goes at the end`, "keep that section, or name another one to follow");
           else {
@@ -1218,14 +1216,14 @@ export function validateNarrative(narrative: unknown, given?: unknown): Problem[
         if (!SECTION_NAMES.includes(k)) {
           const s = suggest(k, DEFAULT_SECTIONS);
           c.add("error", at, `"${clip(k)}" is not a section of the trial report, so these blocks do not appear`, s ? `did you mean "${s}"?` : `sections: ${DEFAULT_SECTIONS.join(", ")}`);
-        } else if (!kept.includes(sectionKey(k))) c.add("warning", at, `section "${k}" ${leftOut(k)}, so these blocks do not appear`, "keep that section, or append the blocks to another one");
+        } else if (!kept.includes(trialSection(k))) c.add("warning", at, `section "${k}" ${leftOut(k)}, so these blocks do not appear`, "keep that section, or append the blocks to another one");
       }
     },
   });
   viewData(c, narrative, "narrative");
   storyChecks(c, narrative, "narrative", storyObligations(c.known, trial, undefined, blocksOf(narrative), {}, true));
   pointedRule(c, narrative, isObj(trial) && isObj(trial.plan) ? trial.plan.decision_rule : undefined, "the plan's");
-  readingsChecks(c, narrative, "narrative", trialSectionsShown(trial, narrative, kept), SECTION_NAMES, sectionKey);
+  readingsChecks(c, narrative, "narrative", trialSectionsShown(trial, narrative, kept), SECTION_NAMES, trialSection);
   sectionReadings(c, narrative.sections, "narrative");
   appendReadings(c, narrative.append, "narrative");
   if (isObj(narrative.decision)) for (const k of ["headline", "detail", "conditions", "limits", "changes"]) fileRefs(c, narrative.decision[k], `narrative.decision.${k}`);
@@ -1354,7 +1352,7 @@ function comparisonNarrative(narrative: unknown, known: Known, data: Obj): Probl
   if (!isObj(narrative)) return [{ level: "error", where: "narrative", message: `expected an object, found ${found(narrative)}`, hint: 'a narrative is an object such as {"title": "…", "decision": { … }}' }];
   const c = new Checker(known, registered(), "narrative");
   const strings = (v: unknown) => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null;
-  const include = strings(narrative.include)?.map(comparisonKey) || null, exclude = (strings(narrative.exclude) || []).map(comparisonKey);
+  const include = strings(narrative.include)?.map(comparisonSection) || null, exclude = (strings(narrative.exclude) || []).map(comparisonSection);
   const kept = COMPARISON_SECTIONS.filter(s => (!include || include.includes(s)) && !exclude.includes(s));
   const sectionIds = (value: unknown, where: string) => (Array.isArray(value) ? value : []).forEach((id, i) => {
     if (typeof id !== "string" || COMPARISON_NAMES.includes(id)) return;
@@ -1394,7 +1392,7 @@ function comparisonNarrative(narrative: unknown, known: Known, data: Obj): Probl
       value.forEach((s, i) => {
         if (!isObj(s)) return;
         const after = s.after;
-        if (typeof after === "string" && !before.includes(comparisonKey(after))) {
+        if (typeof after === "string" && !before.includes(comparisonSection(after))) {
           const at = c.join(c.join(where, i), "after");
           if (COMPARISON_NAMES.includes(after)) c.add("warning", at, `section "${after}" is left out by include or exclude, so this section goes at the end`, "keep that section, or name another one to follow");
           else {
@@ -1414,14 +1412,14 @@ function comparisonNarrative(narrative: unknown, known: Known, data: Obj): Probl
         if (!COMPARISON_NAMES.includes(k)) {
           const s = suggest(k, COMPARISON_SECTIONS);
           c.add("error", at, `"${clip(k)}" is not a section of the comparison report, so these blocks do not appear`, s ? `did you mean "${s}"?` : `sections: ${COMPARISON_SECTIONS.join(", ")}`);
-        } else if (!kept.includes(comparisonKey(k))) c.add("warning", at, `section "${k}" is left out by include or exclude, so these blocks do not appear`, "keep that section, or append the blocks to another one");
+        } else if (!kept.includes(comparisonSection(k))) c.add("warning", at, `section "${k}" is left out by include or exclude, so these blocks do not appear`, "keep that section, or append the blocks to another one");
       }
     },
   });
   viewData(c, narrative, "narrative");
   storyChecks(c, narrative, "narrative", storyObligations(known, undefined, data, blocksOf(narrative), {}, true));
   pointedRule(c, narrative, data.decision_rule, "the comparison's");
-  readingsChecks(c, narrative, "narrative", comparisonSectionsShown(data, narrative, kept), COMPARISON_NAMES, comparisonKey);
+  readingsChecks(c, narrative, "narrative", comparisonSectionsShown(data, narrative, kept), COMPARISON_NAMES, comparisonSection);
   sectionReadings(c, narrative.sections, "narrative");
   appendReadings(c, narrative.append, "narrative");
   if (isObj(narrative.decision)) for (const k of ["headline", "detail", "conditions", "limits", "changes"]) fileRefs(c, narrative.decision[k], `narrative.decision.${k}`);
