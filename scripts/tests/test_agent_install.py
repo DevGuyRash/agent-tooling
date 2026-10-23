@@ -53,6 +53,42 @@ class AgentInstallTests(unittest.TestCase):
             agent_install.plan(self.home, 'example@market', {})
         self.assertEqual(external.read_text(), '{}')
 
+    def test_symlinked_user_agents_are_read_never_refused_or_touched(self):
+        # Dotfile managers link a user's own agents into CODEX_HOME/agents; projection must read them, not refuse.
+        root = self.home / 'agents'
+        root.mkdir(parents=True)
+        dotfiles = Path(self.temp.name) / 'dotfiles'
+        dotfiles.mkdir()
+        (dotfiles / 'auditor.toml').write_text('name = "auditor"\ndescription = "Mine."\ndeveloper_instructions = "Audit."\n')
+        (root / 'auditor.toml').symlink_to(dotfiles / 'auditor.toml')
+        (root / 'gone.toml').symlink_to(dotfiles / 'missing.toml')
+        self.assertEqual(agent_install.plan(self.home, 'example@market', {}).changes, {})
+        agent_install.apply(agent_install.plan(self.home, 'example@market', {'reviewer.toml': 'name = "example:reviewer"\n'}))
+        self.assertTrue((root / 'auditor.toml').is_symlink())
+        self.assertEqual((dotfiles / 'auditor.toml').read_text(), 'name = "auditor"\ndescription = "Mine."\ndeveloper_instructions = "Audit."\n')
+        with self.assertRaisesRegex(agent_install.AgentInstallError, 'name.*already'):
+            agent_install.plan(self.home, 'other@market', {'auditor.toml': 'name = "auditor"\n'})
+
+    def test_malformed_user_agent_does_not_block_projection(self):
+        # Codex ignores a malformed role file with a warning, so it cannot collide and must not stop installation.
+        root = self.home / 'agents'
+        root.mkdir(parents=True)
+        (root / 'broken.toml').write_text('name = [unclosed\n')
+        (root / 'nameless.toml').write_text('description = "No name."\n')
+        agent_install.apply(agent_install.plan(self.home, 'example@market', {'reviewer.toml': 'name = "example:reviewer"\n'}))
+        self.assertEqual((root / 'broken.toml').read_text(), 'name = [unclosed\n')
+        self.assertEqual(len(list(root.glob('plugin-port-*.toml'))), 1)
+
+    def test_symlinked_owned_agent_is_rejected(self):
+        agent_install.apply(agent_install.plan(self.home, 'example@market', {'reviewer.toml': 'name = "example:reviewer"\n'}))
+        owned = next((self.home / 'agents').glob('plugin-port-*.toml'))
+        external = Path(self.temp.name) / 'external.toml'
+        external.write_text(owned.read_text())
+        owned.unlink()
+        owned.symlink_to(external)
+        with self.assertRaises(agent_install.AgentInstallError):
+            agent_install.plan(self.home, 'example@market', {})
+
     def test_failure_rolls_back_agent_files_and_receipt(self):
         original = {'reviewer.toml': 'name = "example:reviewer"\n'}
         agent_install.apply(agent_install.plan(self.home, 'example@market', original))

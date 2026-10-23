@@ -856,7 +856,7 @@ def selected_agent_plan(root: Path, selected: Mapping[str, Identity], args: argp
         if owner not in selected:
             continue
         plugin_root = source_path(root, entry['source'])
-        documents = plugin_port.agent_documents(plugin_root, 'codex', models, namespace=entry['name'])
+        documents = plugin_port.agent_documents(plugin_root, 'codex', models, namespace=entry['name'], source_host=plugin_port.detect_plugin(plugin_root).host)
         owners[owner] = {agent_install.document_filename(doc.path): doc.content for doc in documents}
         for doc in documents:
             for warning in doc.warnings:
