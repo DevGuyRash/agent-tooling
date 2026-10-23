@@ -22,6 +22,13 @@ from pathlib import Path
 from typing import Iterator, Mapping, Sequence
 
 
+if __package__:
+    from . import agent_install, plugin_port
+else:
+    import agent_install
+    import plugin_port
+
+
 MARKETPLACE = "agent-tooling"
 CANONICAL_SOURCE = "DevGuyRash/agent-tooling"
 SEMVER = re.compile(
@@ -96,6 +103,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--replace-marketplace", action="store_true")
     parser.add_argument("--force", action="store_true", help="Reinstall every selected plugin, including downgrades and installed content that changed after its receipt.")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--agent-model", action="append", default=[], metavar="SOURCE=TARGET", help="Explicit cross-host custom-agent model mapping; repeat for each source model.")
     args = parser.parse_args(argv)
     if args.codex_only and args.claude_only:
         parser.error("--codex-only and --claude-only are mutually exclusive")
@@ -839,6 +847,24 @@ def resolved_source(
         yield root
 
 
+def selected_agent_plan(root: Path, selected: Mapping[str, Identity], args: argparse.Namespace, environment: Mapping[str, str]) -> agent_install.AgentPlan:
+    models = plugin_port.agent_model_map(args.agent_model)
+    catalog = json.loads((root / '.agents/plugins/marketplace.json').read_text())
+    owners = {}
+    for entry in catalog['plugins']:
+        owner = entry['name'] + '@' + MARKETPLACE
+        if owner not in selected:
+            continue
+        plugin_root = source_path(root, entry['source'])
+        documents = plugin_port.agent_documents(plugin_root, 'codex', models, namespace=entry['name'])
+        owners[owner] = {agent_install.document_filename(doc.path): doc.content for doc in documents}
+        for doc in documents:
+            for warning in doc.warnings:
+                log(f'{owner}: {warning}')
+    home = Path(environment.get('CODEX_HOME') or Path.home() / '.codex').expanduser()
+    return agent_install.plan_many(home, owners)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     try:
         args = parse_args(argv)
@@ -864,6 +890,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                         raise InstallError(f"missing required command: {command_name}")
                     state = discover(host, str(Path(command).resolve()), environment, claude_scope=args.claude_scope, claude_project_path=args.claude_project_path)
                     plans.append(plan_host(host, state, plugins, receipt, args))
+                agents = selected_agent_plan(root, selected["codex"], args, environment) if selected.get("codex") else None
+                if agents and agents.changes:
+                    log(f"Codex custom agents: {len(agents.changes) - (agent_install.RECEIPT in agents.changes)} owned file change(s)")
                 with contextlib.ExitStack() as protections:
                     for plan in plans:
                         protections.enter_context(preserve_claude_registry(plan, args, environment, transaction_mutates=any(p.mutates for p in plans)))
@@ -891,9 +920,17 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "projectPath": str(args.claude_project_path) if plan.host == "claude" and args.claude_project_path is not None else None,
                         "plugins": {plugin_id: dataclasses.asdict(identity) for plugin_id, identity in sorted(plan.selected.items())},
                     }
+                if agents is not None:
+                    try:
+                        agent_install.apply(agents)
+                    except (agent_install.AgentInstallError, OSError) as exc:
+                        raise InstallError(f'native plugins were verified, but custom-agent synchronization failed: {exc}; resolve the reported agent conflict and rerun the same command; native plugin changes were not rolled back') from exc
                 next_receipt = {"schema_version": 1, "marketplace": MARKETPLACE, "hosts": next_hosts}
                 if receipt != next_receipt:
-                    write_receipt(receipt_file, next_receipt)
+                    try:
+                        write_receipt(receipt_file, next_receipt)
+                    except OSError as exc:
+                        raise InstallError(f'native plugins and custom agents were verified, but the installer receipt could not be saved: {exc}; rerun the same command; installed changes were not rolled back') from exc
                 for plan in plans:
                     complete_claude_activation(plan, args, environment)
                 if any(plan.install or plan.update for plan in plans):
@@ -901,10 +938,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else:
                     log("all selected plugins are current")
         return 0
-    except (InstallError, OSError, subprocess.TimeoutExpired) as exc:
+    except (InstallError, agent_install.AgentInstallError, plugin_port.PluginPortError, OSError, subprocess.TimeoutExpired) as exc:
         log(f"error: {exc}")
         return 1
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

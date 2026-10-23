@@ -6,9 +6,11 @@ import io
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import textwrap
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -31,6 +33,202 @@ def read_json(path: Path) -> dict[str, object]:
 
 
 class PluginPortTests(unittest.TestCase):
+    def test_agent_conversion_preserves_body_and_requires_registration(self) -> None:
+        source = self.root / "agent-plugin"
+        write(source / ".claude-plugin/plugin.json", '{"name":"inspectors","version":"1.0.0"}')
+        body = '\n  Keep indentation.\n\nLiteral "quotes", \\paths, and trailing spaces.  \n'
+        write(source / "agents/reviewer.md", "---\nname: reviewer\ndescription: Review changes.\nis_background: true\n---\n" + body)
+        output = self.root / "converted"
+        report = plugin_port.convert_plugin(source, "codex", output, mode="strict", overwrite=False)
+        path = output / ".codex/agents/reviewer.toml"
+        self.assertTrue(path.is_file(), "Claude agents must become discoverable Codex definitions")
+        definition = tomllib.loads(path.read_text())
+        self.assertEqual(body, definition["developer_instructions"])
+        self.assertEqual("reviewer", definition["name"])
+        self.assertNotIn("model", definition)
+        self.assertTrue(any("is_background" in warning for warning in report.warnings))
+        self.assertTrue(any("registration" in warning for warning in report.warnings))
+        self.assertNotIn("agents", read_json(output / ".codex-plugin/plugin.json"))
+
+    def test_agent_documents_namespace_without_mutating_source(self) -> None:
+        source = self.root / "source"
+        write(source / "agents/reviewer.md", "---\nname: reviewer\ndescription: Review.\n---\n\nReview exactly.\n")
+        before = (source / "agents/reviewer.md").read_bytes()
+        document, = plugin_port.agent_documents(source, "codex", namespace="inspectors")
+        self.assertEqual("inspectors:reviewer", document.name)
+        self.assertEqual("reviewer", document.source_name)
+        self.assertEqual("inspectors:reviewer", tomllib.loads(document.content)["name"])
+        self.assertEqual(before, (source / "agents/reviewer.md").read_bytes())
+
+    def test_agent_model_conversion_requires_explicit_mapping(self) -> None:
+        source = self.root / "source"
+        write(source / "agents/reviewer.md", "---\nname: reviewer\ndescription: Review.\nmodel: opus\neffort: xhigh\n---\nReview.\n")
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "model.*explicit"):
+            plugin_port.agent_documents(source, "codex")
+        document, = plugin_port.agent_documents(source, "codex", {"opus": "gpt-6.1-sol"})
+        definition = tomllib.loads(document.content)
+        self.assertEqual("gpt-6.1-sol", definition["model"])
+        self.assertEqual("xhigh", definition["model_reasoning_effort"])
+
+    def test_agent_restrictions_fail_closed_even_best_effort(self) -> None:
+        source = self.root / "source"
+        write(source / ".claude-plugin/plugin.json", '{"name":"inspectors"}')
+        for field in ("tools: Read, Grep", "disallowedTools: Bash", "permissionMode: plan", "isolation: worktree", "unknownPolicy: true"):
+            with self.subTest(field=field):
+                write(source / "agents/reviewer.md", "---\nname: reviewer\ndescription: Review.\n" + field + "\n---\nReview.\n")
+                with self.assertRaisesRegex(plugin_port.PluginPortError, "cannot preserve"):
+                    plugin_port.convert_plugin(source, "codex", self.root / "out", mode="best-effort", overwrite=True)
+
+    def test_native_agent_restrictions_remain_native(self) -> None:
+        source = self.root / "source"
+        write(source / "agents/reviewer.md", "---\nname: reviewer\ndescription: Review.\ntools: Read, Grep\n---\nReview.\n")
+        document, = plugin_port.agent_documents(source, "claude")
+        self.assertIn("tools: Read, Grep", document.content)
+
+    def test_codex_agent_converts_to_claude_without_stale_body(self) -> None:
+        source = self.root / "source"
+        write(source / ".codex-plugin/plugin.json", '{"name":"inspectors","version":"1.0.0"}')
+        body = "\n  Current instructions.\n\n"
+        write(source / ".codex/agents/reviewer.toml", 'name = "reviewer"\ndescription = "Review."\ndeveloper_instructions = ' + json.dumps(body) + '\n')
+        write(source / "agents/reviewer.md", "---\nname: reviewer\ndescription: Old.\n---\nStale instructions.\n")
+        output = self.root / "converted"
+        plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
+        metadata, actual, _, _ = plugin_port.split_frontmatter(output / "agents/reviewer.md")
+        self.assertEqual(body, actual)
+        self.assertEqual("reviewer", metadata["name"])
+
+    def test_codex_restrictions_are_not_weakened_for_claude(self) -> None:
+        source = self.root / "source"
+        write(source / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Review."\n[features]\nshell_tool=false\n')
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "cannot preserve"):
+            plugin_port.agent_documents(source, "claude")
+        document, = plugin_port.agent_documents(source, "codex", namespace="inspectors")
+        self.assertFalse(tomllib.loads(document.content)["features"]["shell_tool"])
+
+    def test_agent_manifest_paths_and_duplicate_names_are_checked(self) -> None:
+        source = self.root / "source"
+        write(source / ".claude-plugin/plugin.json", '{"name":"inspectors","agents":["./custom/reviewer.md"]}')
+        write(source / "custom/reviewer.md", "---\nname: reviewer\ndescription: Review.\n---\nReview.\n")
+        document, = plugin_port.agent_documents(source, "codex")
+        self.assertEqual(Path("custom/reviewer.md"), document.source_path)
+        write(source / "agents/reviewer.md", "---\nname: reviewer\ndescription: Duplicate.\n---\nReview.\n")
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "duplicate.*agent"):
+            plugin_port.agent_documents(source, "codex")
+
+    def test_agent_body_preserves_crlf_and_non_ascii_bytes(self) -> None:
+        source = self.root / "source"
+        path = source / "agents/reviewer.md"
+        path.parent.mkdir(parents=True)
+        body = "\r\n  Réviser.\r\n\r\n"
+        path.write_bytes(("---\r\nname: reviewer\r\ndescription: Review.\r\n---\r\n" + body).encode())
+        document, = plugin_port.agent_documents(source, "codex")
+        self.assertEqual(body.encode(), tomllib.loads(document.content)["developer_instructions"].encode())
+
+    def test_model_mapping_cli_reaches_conversion(self) -> None:
+        source = self.root / "source"
+        write(source / ".claude-plugin/plugin.json", '{"name":"inspectors","version":"1.0.0"}')
+        write(source / "agents/reviewer.md", "---\nname: reviewer\ndescription: Review.\nmodel: opus\n---\nReview.\n")
+        output = self.root / "out"
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = plugin_port.main(["convert", str(source), "--to", "codex", "--out", str(output), "--agent-model", "opus=gpt-6.1-sol"])
+        self.assertEqual(0, result)
+        self.assertEqual("gpt-6.1-sol", tomllib.loads((output / ".codex/agents/reviewer.toml").read_text())["model"])
+
+    def test_agent_parse_failure_never_replaces_existing_output(self) -> None:
+        source = self.root / "source"
+        write(source / ".claude-plugin/plugin.json", '{"name":"inspectors"}')
+        write(source / "agents/reviewer.md", "---\nname: reviewer\ntools: [Read\n---\nReview.\n")
+        output = self.root / "out"
+        write(output / "keep.txt", "existing output")
+        with self.assertRaises(plugin_port.PluginPortError):
+            plugin_port.convert_plugin(source, "codex", output, mode="best-effort", overwrite=True)
+        self.assertEqual("existing output", (output / "keep.txt").read_text())
+
+    def test_dual_plugin_prefers_the_target_native_agent(self) -> None:
+        source = self.root / "source"
+        for host in ("codex", "claude"):
+            write(source / f".{host}-plugin/plugin.json", '{"name":"inspectors","version":"1.0.0"}')
+        write(source / "agents/reviewer.md", "---\nname: reviewer\ndescription: Review.\n---\nClaude instructions.\n")
+        write(source / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Codex instructions."\n')
+        output = self.root / "out"
+        plugin_port.convert_plugin(source, "codex", output, mode="strict", overwrite=False)
+        self.assertEqual("Codex instructions.", tomllib.loads((output / ".codex/agents/reviewer.toml").read_text())["developer_instructions"])
+
+    def test_native_codex_ignored_restrictions_are_rejected(self) -> None:
+        source = self.root / "source"
+        for setting in ('sandbox_mode="read-only"', 'unknownPolicy=true', '[features]\nshell_tool=true'):
+            with self.subTest(setting=setting):
+                write(source / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Review."\n' + setting + '\n')
+                with self.assertRaisesRegex(plugin_port.PluginPortError, "cannot preserve"):
+                    plugin_port.agent_documents(source, "codex")
+
+    def test_codex_projection_rejects_relative_skill_disable_paths(self) -> None:
+        source = self.root / "source"
+        path = source / ".codex/agents/reviewer.toml"
+        definition = 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Review."\n'
+        write(path, definition + 'skills.config=[{path="../../skills/restricted",enabled=false}]\n')
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "cannot preserve.*relative.*skills.config"):
+            plugin_port.agent_documents(source, "codex", namespace="inspectors")
+        absolute = str(source / "skills/restricted")
+        write(path, definition + 'skills.config=[{path=' + json.dumps(absolute) + ',enabled=false}]\n')
+        document, = plugin_port.agent_documents(source, "codex", namespace="inspectors")
+        self.assertEqual(absolute, tomllib.loads(document.content)["skills"]["config"][0]["path"])
+
+    def test_install_agents_remove_accepts_options_without_package(self) -> None:
+        result = subprocess.run([sys.executable, str(MODULE_PATH), "install-agents", "--owner", "fixture@tests", "--remove", "--codex-home", str(self.root / "isolated-home")], capture_output=True, text=True, timeout=10)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(0, json.loads(result.stdout)["agent_file_changes"])
+
+    def test_custom_agent_paths_roundtrip_do_not_register_stale_duplicates(self) -> None:
+        source = self.root / "source"
+        write(source / ".claude-plugin/plugin.json", '{"name":"inspectors","agents":["./custom/reviewer.md"]}')
+        write(source / "custom/reviewer.md", "---\nname: reviewer\ndescription: Review.\n---\nOriginal instructions.\n")
+        codex = self.root / "codex"
+        plugin_port.convert_plugin(source, "codex", codex, mode="strict", overwrite=False)
+        write(codex / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Current instructions."\n')
+        claude = self.root / "claude"
+        plugin_port.convert_plugin(codex, "claude", claude, mode="strict", overwrite=False, explicit_host="codex")
+        document, = plugin_port.agent_documents(claude, "claude")
+        self.assertIn("Current instructions.", document.content)
+
+    def test_portable_root_manifest_preserves_plugin_identity(self) -> None:
+        source = self.root / "checkout-with-unrelated-name"
+        write(source / "plugin.json", '{"$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json","name":"real-package","version":"9.8.7","description":"Portable source package."}')
+        write(source / "agents/reviewer.md", "---\nname: reviewer\ndescription: Review.\n---\nReview.\n")
+        output = self.root / "converted"
+        plugin_port.convert_plugin(source, "codex", output, mode="strict", overwrite=False)
+        manifest = read_json(output / ".codex-plugin/plugin.json")
+        self.assertEqual("real-package", manifest["name"])
+        self.assertEqual("9.8.7", manifest["version"])
+
+    def test_nested_claude_plugin_invocation_names_survive_conversion(self) -> None:
+        source = self.root / "source"
+        write(source / ".claude-plugin/plugin.json", '{"name":"inspectors"}')
+        write(source / "agents/review/security.md", "---\nname: internal-label\ndescription: Review security.\n---\nReview.\n")
+        document, = plugin_port.agent_documents(source, "codex", namespace="inspectors")
+        self.assertEqual("inspectors:review:security", document.name)
+        codex = self.root / "codex"
+        plugin_port.convert_plugin(source, "codex", codex, mode="strict", overwrite=False)
+        claude = self.root / "claude"
+        plugin_port.convert_plugin(codex, "claude", claude, mode="strict", overwrite=False, explicit_host="codex")
+        self.assertTrue((claude / "agents/review/security.md").is_file())
+        self.assertNotIn(":", plugin_port.split_frontmatter(claude / "agents/review/security.md")[0]["name"])
+
+    def test_codex_to_claude_filename_uses_declared_agent_identity(self) -> None:
+        source = self.root / "source"
+        write(source / ".codex/agents/audit.toml", 'name="reviewer.v2"\ndescription="Review."\ndeveloper_instructions="Review."\n')
+        document, = plugin_port.agent_documents(source, "claude")
+        self.assertEqual("reviewer.v2", document.name)
+        self.assertEqual(Path("agents/reviewer.v2.md"), document.path)
+
+    def test_codex_to_claude_rejects_unsafe_filename_identity(self) -> None:
+        source = self.root / "source"
+        for name in ("../escape", "/absolute", "nested/name", "nested\\name", ".", "..", "null\x00name"):
+            with self.subTest(name=name):
+                write(source / ".codex/agents/audit.toml", 'name=' + json.dumps(name) + '\ndescription="Review."\ndeveloper_instructions="Review."\n')
+                with self.assertRaisesRegex(plugin_port.PluginPortError, "cannot preserve agent name"):
+                    plugin_port.agent_documents(source, "claude")
+
     def test_private_operational_state_is_outside_converted_payload(self) -> None:
         source = self.root / 'source'
         self.write_codex_plugin(source)
@@ -916,3 +1114,4 @@ class DualHostRootPreservationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

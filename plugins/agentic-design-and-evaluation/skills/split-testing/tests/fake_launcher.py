@@ -36,12 +36,30 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
     judge-two           as a judge, prints two JSON objects
     judge-prose         as a judge, prints its verdict inside a sentence
     judge-transient-once  as a judge, exits 75 the first time (FAKE_LAUNCHER_MARK names a file it creates)
+    signed-in           every call, arm or judge: unless ~/.fake-sign-in holds FAKE_LAUNCHER_MARK, prints what it held
+                        and refuses (exit 77), or as a judge answers outside the verdict schema; and writes the
+                        permission bits of what it was copied into $TRIAL_HARNESS/sign-in-modes-<turn>.json, and
+                        whether each is inside its run's directory into $TRIAL_HARNESS/sign-in-where-<turn>.json
+    signed-in-stash     as signed-in, and a scenario's first turn copies its sign-in to ~/.config/stash/sign-in
+    leak                every call prints the key variable's value, FAKE_LAUNCHER_MARK, and ~/.fake-sign-in on
+                        standard error, and an arm's on standard output too
+    matrix              every call prints every credential it holds (its key, FAKE_SECRET, its copied files) on
+                        standard error, an arm's on standard output too, caches them in ~/.tool-cache as a tool keeps
+                        its sign-in, refreshes ~/.fake-sign-in by replacing it, names a transcript reached through a
+                        link, and writes what it can see of FAKE_COPIES_ROOT and FAKE_SIBLING into
+                        $TRIAL_HARNESS/visible-<turn>.json; while the file FAKE_SLOW_FLAG names exists, a scenario's
+                        first turn waits a minute, and while FAKE_JUDGE_SLOW_FLAG's does, a judge's call on a scenario's
+                        run does ($TRIAL_HARNESS/started marks either)
+    signed-in-slow      as signed-in, and a scenario's first turn waits a minute ($TRIAL_HARNESS/started marks it)
+    signed-in-slow-probe  as signed-in, and the probe's first turn waits a minute
 """
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 MODE = os.environ.get("FAKE_LAUNCHER_MODE", "")
@@ -71,6 +89,65 @@ def judge():
 
 
 def main():
+    if MODE.startswith("signed-in"):  # a tool that needs its own sign-in file in its home
+        sign_in = HOME / ".fake-sign-in"
+        held = sign_in.read_text().strip() if sign_in.is_file() else ""
+        if held != os.environ.get("FAKE_LAUNCHER_MARK", ""):
+            print(f"sign-in rejected for {held}", file=sys.stderr)  # as a careless tool might: the credential itself
+            if os.environ.get("TRIAL_SCHEMA_FILE"):  # a judge, answering anyway
+                if TURN:
+                    print(json.dumps({"verdict": "signed-out", "reason": "sign in again"}))
+                Path(os.environ["TRIAL_RECORD"]).write_text(json.dumps({"finished": True}))
+                return 0
+            return 77
+        harness = Path(os.environ["TRIAL_HARNESS"])
+        modes = {rel: oct(stat.S_IMODE((HOME / rel).stat().st_mode))
+                 for rel in (".fake-sign-in", ".fake-auth", ".fake-auth/token") if (HOME / rel).exists()}
+        (harness / f"sign-in-modes-{TURN}.json").write_text(json.dumps(modes))
+        job = os.environ["TRIAL_JOB_DIR"] + os.sep
+        where = {rel: "inside the run" if os.path.realpath(HOME / rel).startswith(job) else "outside the run"
+                 for rel in (".fake-sign-in", ".fake-auth") if (HOME / rel).exists()}
+        (harness / f"sign-in-where-{TURN}.json").write_text(json.dumps(where))
+        prompt = Path(os.environ["TRIAL_PROMPT_FILE"]).read_text() if TURN else ""
+        slow = (MODE == "signed-in-slow" and "create out.txt" in prompt) or (MODE == "signed-in-slow-probe" and "short check" in prompt)
+        if slow and TURN == 1 and not os.environ.get("TRIAL_SCHEMA_FILE"):
+            (harness / "started").write_text("")
+            time.sleep(60)
+    if MODE == "leak":  # as a careless tool might: every credential it holds, where its output is kept
+        sign_in = HOME / ".fake-sign-in"
+        held = " ".join([os.environ.get(os.environ.get("TRIAL_API_KEY_VAR", ""), ""), os.environ.get("FAKE_LAUNCHER_MARK", ""),
+                         sign_in.read_text() if sign_in.is_file() else ""])
+        print(f"leaked {held}", file=sys.stderr)
+        if not os.environ.get("TRIAL_SCHEMA_FILE"):
+            print(json.dumps({"leaked": held}))
+    if MODE.startswith("matrix"):  # every credential it holds, wherever a careless tool might put it
+        key = os.environ.get("TRIAL_API_KEY_VAR")
+        held = [v for v in (os.environ.get(key) if key else None, os.environ.get("FAKE_SECRET")) if v]
+        held += [(HOME / rel).read_text() for rel in (".fake-sign-in", ".fake-auth/token") if (HOME / rel).is_file()]
+        print("leaked", *held, file=sys.stderr)
+        judging = bool(os.environ.get("TRIAL_SCHEMA_FILE"))
+        if not judging:
+            print(json.dumps({"leaked": held}))
+        (HOME / ".tool-cache").mkdir(exist_ok=True)
+        (HOME / ".tool-cache" / f"sign-in-{TURN}").write_text(" ".join(held))
+        if (HOME / ".fake-sign-in").is_file():  # refreshed, as a tool does: a new file in the old one's place
+            (HOME / ".fake-sign-in.new").write_text((HOME / ".fake-sign-in").read_text())
+            os.replace(HOME / ".fake-sign-in.new", HOME / ".fake-sign-in")
+        try:
+            listing = sorted(os.listdir(os.environ["FAKE_COPIES_ROOT"]))
+        except OSError:
+            listing = None
+        try:
+            sibling = bool(Path(os.environ["FAKE_SIBLING"]).read_text())
+        except OSError:
+            sibling = False
+        harness = Path(os.environ["TRIAL_HARNESS"])
+        (harness / f"visible-{TURN}.json").write_text(json.dumps({"root": listing, "sibling": sibling}))
+        prompt = Path(os.environ["TRIAL_PROMPT_FILE"]).read_text() if TURN else ""
+        flag = os.environ.get("FAKE_JUDGE_SLOW_FLAG" if judging else "FAKE_SLOW_FLAG")
+        if flag and Path(flag).exists() and TURN == 1 and ("out.txt written" if judging else "create out.txt") in prompt:
+            (harness / "started").write_text(os.environ.get("TRIAL_MODEL", ""))  # which holder it is
+            time.sleep(60)
     if MODE == "show-env":  # what an executor it started would see: its environment and working directory
         (HOME / f"seen-env-{TURN}.json").write_text(json.dumps({"env": dict(os.environ), "cwd": os.getcwd(), "argv": sys.argv}))
     if os.environ.get("TRIAL_SCHEMA_FILE"):  # called as a judge
@@ -126,6 +203,9 @@ def main():
         (STATE / "profile.json").write_text(json.dumps({"model": "changed through the link"}))
     if MODE == "two-models" and TURN > 1:
         model = "some-other-model"
+    if MODE == "signed-in-stash" and scenario and TURN == 1:  # its own copy, under another name in its home
+        (HOME / ".config" / "stash").mkdir(parents=True, exist_ok=True)
+        (HOME / ".config" / "stash" / "sign-in").write_text((HOME / ".fake-sign-in").read_text())
     if MODE == "swap-harness" and scenario and TURN == 1:
         job = Path(os.environ["TRIAL_JOB_DIR"])
         os.rename(job / "harness", job / "harness-moved")
@@ -197,6 +277,11 @@ def main():
             record["limits"] = ["a pretend agent whose home does not stay in its run"]
         elif MODE != "no-transcripts":
             record["transcripts"] = ["harness/home/.fake/state.json"]
+        if MODE.startswith("matrix"):  # a transcript named through a link to it, as a tool's "current session" link is,
+            if not (STATE / "current").is_symlink():  # and one named through its home's cache directory
+                os.symlink("state.json", STATE / "current")
+            (HOME / ".cache").mkdir(exist_ok=True)
+            record["transcripts"] += ["harness/home/.fake/current", "harness/home/.cache/../.fake/state.json"]
         Path(os.environ["TRIAL_RECORD"]).write_text(json.dumps(record))
     if MODE == "plant-links" and "create out.txt" in message:
         subprocess.run(["sh", "-c", 'rm -f out.txt && mkfifo out.txt && cd "$1" && rm -rf harness final-0.md && '
