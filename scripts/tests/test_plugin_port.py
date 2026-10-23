@@ -291,6 +291,24 @@ class PluginPortTests(unittest.TestCase):
         self.assertFalse(Path(os.readlink(output / "agents")).is_absolute())
         self.assertTrue((output / "agents").resolve().is_relative_to(output.resolve()))
 
+    def test_relative_and_chained_links_never_reach_back_into_the_source(self) -> None:
+        for shape in ("relative-escape", "chain"):
+            with self.subTest(shape=shape):
+                base = self.root / shape
+                source = base / "source"
+                write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+                write(source / "definitions/reviewer.md", '---\nname: reviewer\ndescription: "Review.  "\n---\nReview.\n')
+                if shape == "relative-escape":
+                    (source / "agents").symlink_to("../source/definitions")
+                else:
+                    (source / "alias").symlink_to(source / "definitions")
+                    (source / "agents").symlink_to("../source/alias")
+                before = (source / "definitions/reviewer.md").read_bytes()
+                output = base / "output"
+                plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
+                self.assertEqual(before, (source / "definitions/reviewer.md").read_bytes())
+                self.assertTrue((output / "agents").resolve().is_relative_to(output.resolve()))
+
     def test_marketplace_child_without_a_manifest_takes_the_catalogs_host(self) -> None:
         market = self.root / "codex-market-src"
         child = market / "plugins/kit"

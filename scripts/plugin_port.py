@@ -1063,15 +1063,14 @@ def prepare_output(source: Path, output: Path, *, overwrite: bool) -> None:
         symlinks=True,
         ignore=copytree_generated_junk_ignore(source),
     )
-    # A copied absolute link still names the source, so a later write through it would change the source package.
-    # The source's links all resolve inside it (validate_symlink_tree), so each becomes the same link inside the output.
+    # A copied link can still reach the source: absolute, spelled through ../source, or chained through another link.
+    # Every source link resolves inside the source (validate_symlink_tree), so each copied link is pointed, relatively,
+    # at the output path matching its source link's final destination, and no later write can leave the output.
     for link in [path for path in output.rglob("*") if path.is_symlink()]:
-        target = Path(os.readlink(link))
-        if target.is_absolute():
-            resolved = target.resolve()
-            if resolved == source or resolved.is_relative_to(source):
-                link.unlink()
-                link.symlink_to(os.path.relpath(output / resolved.relative_to(source), link.parent))
+        resolved = (source / link.relative_to(output)).resolve()
+        if resolved == source or resolved.is_relative_to(source):
+            link.unlink()
+            link.symlink_to(os.path.relpath(output / resolved.relative_to(source), link.parent))
     # Conversion rewrites active target-host surfaces. Frozen evaluation inputs
     # and release artifacts may legitimately be read-only, but preserving that
     # mode in the staging copy makes normalization fail before conversion can
