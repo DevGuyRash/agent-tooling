@@ -4,7 +4,7 @@
  * is complete without it; this only adds ways to move through the data. Each
  * browser feature is used only where present, so a partial document (or a test
  * double) gets the behaviors it can support and never an error. */
-import { esc, fmtNum, fmtSeconds, inline, isNum, outcomeBadge, outcomeLabel, outcomeMark } from "./core";
+import { esc, fmtNum, fmtSeconds, inline, isNum, outcomeBadge, outcomeLabel, outcomeMark, entriesOf, keysIn } from "./core";
 import { failureCause, invalidReason } from "./failure";
 import { attachMermaid, DiagramController } from "./mermaid";
 import { createContext, RenderContext, ReportSpec } from "./model";
@@ -53,7 +53,7 @@ export function runsCsv(data: TrialReport, indexes?: number[], labels: { arm?: (
   const picked = (indexes || runs.map((_, i) => i)).filter(i => Number.isInteger(i) && !!runs[i]);
   const checkNames: string[] = [];
   const seen = new Set<string>();
-  for (const i of picked) for (const k of Object.keys(runs[i].checks && typeof runs[i].checks === "object" ? runs[i].checks! : {})) if (!seen.has(k)) { seen.add(k); checkNames.push(k); }
+  for (const i of picked) for (const k of keysIn(runs[i].checks && typeof runs[i].checks === "object" ? runs[i].checks! : {})) if (!seen.has(k)) { seen.add(k); checkNames.push(k); }
   const usage = (r: TrialRun, k: string) => { const v = r.usage && typeof r.usage === "object" ? r.usage[k] : undefined; return isNum(v) ? v : null; };
   const head = ["n", "job", "case", "case_label", "arm", "arm_label", "repeat", "outcome", "cause", "invalid_reason", "judge_verdict", "judge_reason",
     "seconds", "output_tokens", "input_tokens", "total_cost_usd", "commands", "record_path", ...checkNames.map(k => `check.${k}`)];
@@ -901,7 +901,7 @@ function drawerHtml(data: TrialReport, i: number, ctx: RenderContext, seq: numbe
     const held = checks[k] === true || !decides;
     return `<tr class="av-req${held ? "" : " av-req--unmet"}"><th scope="row"><code>${esc(k).replace(/_/g, "_<wbr>")}</code> <span class="av-chip av-chip--req">required</span></th><td>${has(k) ? value(checks[k]) : value(undefined)}</td></tr>`;
   }).join("");
-  const others = Object.entries(checks).filter(([k]) => !required.has(k));
+  const others = entriesOf(checks).filter(([k]) => !required.has(k));
   const bools = others.filter(([, v]) => typeof v === "boolean"), values = others.filter(([, v]) => typeof v !== "boolean");
   const unmet = requiredList.filter(k => checks[k] !== true).length;
   const table = (body: string) => `<table class="av-table av-table--compact av-drawer-checks"><tbody>${body}</tbody></table>`;
@@ -912,7 +912,7 @@ function drawerHtml(data: TrialReport, i: number, ctx: RenderContext, seq: numbe
     values.length ? `<details class="av-drawer-sec av-drawer-values"${values.length <= 4 ? " open" : ""}><summary>${values.length} recorded value${values.length === 1 ? "" : "s"} <span class="av-muted">· text and numbers the checks wrote</span></summary>${table(plainRows(values))}</details>` : "",
   ].join("");
 
-  const usage = Object.entries(r.usage && typeof r.usage === "object" ? r.usage : {}).filter(([, v]) => isNum(v) && v !== 0);
+  const usage = entriesOf(r.usage && typeof r.usage === "object" ? r.usage : {}).filter(([, v]) => isNum(v) && v !== 0);
   const path = recordPath(data, r);
   const q = judgeQuestion(scenario);
   return `<header class="av-drawer-head"><div class="av-drawer-id"><p class="av-eyebrow">Run ${i + 1} of ${total}${r.job ? ` · <code>${esc(r.job)}</code>` : ""}${esc(view)}</p><h2 id="av-drawer-title" class="av-drawer-title">${esc(caseName)}</h2><p class="av-drawer-sub">${ctx.arms.tag(r.arm)}<span>repeat ${esc(r.repeat ?? "?")}</span>${outcomeBadge(o)}</p></div><div class="av-drawer-actions"><button type="button" class="av-btn av-btn--small" data-av-copy-link aria-label="Copy a link to this run"><span data-av-word>Copy link</span></button><button type="button" class="av-drawer-close" aria-label="Close run record">✕</button></div></header>

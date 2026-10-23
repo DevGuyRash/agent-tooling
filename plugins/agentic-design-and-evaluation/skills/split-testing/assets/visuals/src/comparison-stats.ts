@@ -23,7 +23,7 @@
  * never enter a rate as failures. Summaries come from observations when an
  * alternative has any on that metric, and from supplied aggregates otherwise. */
 import type { Aggregate, Comparison, ComparisonFilter, Metric, MetricDifference, MetricKind, MetricSummary, Observation, Preference, Ranking } from "./comparison-model";
-import { isNum, quantile, wilson } from "./core";
+import { isNum, quantile, wilson, entriesOf, keysIn, valuesIn } from "./core";
 import { caseKey, caseSplit, casesWords, NO_CASE, newcombe, pooledCases, validCount, Z95 } from "./stats";
 export { caseKey, caseSplit, casesWords, eachWeighted, NO_CASE, NO_CASE_WORDS } from "./stats";
 
@@ -243,7 +243,7 @@ export function ordinalLevels(data: Comparison, metric: Metric): string[] {
   }
   for (const a of items<Aggregate>(data?.aggregates)) {
     if (a.metric !== metric.id || !isObj(a.counts)) continue;
-    for (const k of Object.keys(a.counts)) { if (NUMERIC_TEXT.test(k)) found.add(Number(k)); else return []; }
+    for (const k of keysIn(a.counts)) { if (NUMERIC_TEXT.test(k)) found.add(Number(k)); else return []; }
   }
   return [...found].sort((a, b) => a - b).map(String);
 }
@@ -378,7 +378,7 @@ function summaryFrom(data: Comparison, metric: Metric, alt: string, r: Read, fil
   if (metric.kind === "preference" && !s.fromAggregate) for (const [c, n] of judgedPerCase || []) add(c, n);
   else if (r.seen.has(alt) && metric.kind !== "preference") for (const [c, n] of r.cases.get(alt) || []) add(c, n);
   else for (const a of aggregatesFor(data, metric.id, alt, filter)) {
-    const levelsCounted = isObj(a.counts) ? Object.values(a.counts).filter(isNum).reduce((t, x) => t + x, 0) : 0;
+    const levelsCounted = isObj(a.counts) ? valuesIn(a.counts).filter(isNum).reduce((t, x) => t + x, 0) : 0;
     add(a.case, metric.kind === "ordinal" ? levelsCounted : isNum(a.n) && a.n > 0 ? a.n : 1);
   }
   // Every case the alternative's evidence names, whether or not it gave a value: invalid observations, ties and
@@ -425,7 +425,7 @@ function summaryOf(data: Comparison, metric: Metric, alt: string, r: Read, filte
   if (kind === "ordinal") {
     const counts = levels.map(() => 0);
     if (fromObs) for (const i of r.valid.get(alt) || []) counts[i]++;
-    else for (const a of aggs) if (isObj(a.counts)) for (const [name, c] of Object.entries(a.counts)) {
+    else for (const a of aggs) if (isObj(a.counts)) for (const [name, c] of entriesOf(a.counts)) {
       const i = levels.indexOf(name);
       if (i >= 0 && isNum(c) && Number.isInteger(c) && c >= 0) counts[i] += c;
     }

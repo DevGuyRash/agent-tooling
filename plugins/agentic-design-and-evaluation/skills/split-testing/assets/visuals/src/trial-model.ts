@@ -1,6 +1,6 @@
 /** The document `trial.py report RUN_DIR` writes, and derivations from it.
  * Fields are read defensively: older run directories omit some of them. */
-import { isNum, median, Outcome, wilson } from "./core";
+import { isNum, median, Outcome, wilson, entriesOf, keysIn } from "./core";
 import { caseKey, caseSplit, casesWords, pooledCases } from "./stats";
 
 export interface TrialRun {
@@ -94,7 +94,7 @@ export function countsText(t: Tally): string {
 /** Arms and cases in a reading order: the plan's order where it has one. */
 export function trialAxes(data: TrialReport): { arms: string[]; cases: string[] } {
   const seenArms = new Set<string>(), seenCases = new Set<string>();
-  for (const a of Object.keys(data.plan?.arms || {})) seenArms.add(a);
+  for (const a of keysIn(data.plan?.arms || {})) seenArms.add(a);
   for (const s of data.plan?.scenarios || []) if (s?.name) seenCases.add(s.name);
   for (const r of data.runs || []) { seenArms.add(r.arm); seenCases.add(r.scenario); }
   const ran = new Set((data.runs || []).map(r => r.arm)), ranCases = new Set((data.runs || []).map(r => r.scenario));
@@ -155,7 +155,7 @@ export function checkTable(data: TrialReport, arms: string[]): CheckRow[] {
   const names = new Map<string, boolean>();
   for (const r of data.runs || []) {
     if (r.passed === null) continue;
-    for (const [k, v] of Object.entries(r.checks || {})) {
+    for (const [k, v] of entriesOf(r.checks || {})) {
       if (typeof v === "boolean") { if (!names.has(k)) names.set(k, true); }
       else names.set(k, false);
     }
@@ -348,7 +348,7 @@ export function caseChecks(data: TrialReport, scenario: string, arms: string[]):
   const decides = plan ? !!plan.judge && plan.judge_required !== false : judged.length > 0;
   const judge = decides ? Object.fromEntries(arms.map(a => { const js = judged.filter(r => r.arm === a); return [a, { k: js.filter(r => r.judge!.verdict === "pass").length, n: js.length }]; })) : null;
   const kinds = new Map<string, "boolean" | "number" | "other">();
-  for (const r of valid) for (const [k, v] of Object.entries(r.checks || {})) {
+  for (const r of valid) for (const [k, v] of entriesOf(r.checks || {})) {
     if (required.includes(k)) continue;
     const t = typeof v === "boolean" ? "boolean" : isNum(v) ? "number" : "other";
     const prev = kinds.get(k);
@@ -366,4 +366,20 @@ export function caseChecks(data: TrialReport, scenario: string, arms: string[]):
   measures.sort((x, y) => (x.kind === y.kind ? 0 : x.kind === "boolean" ? -1 : 1) || x.name.localeCompare(y.name));
   const outcome = Object.fromEntries(arms.map(a => { const t = tally(runs.filter(r => r.arm === a)); return [a, { k: t.pass, n: t.valid, invalid: t.invalid }]; }));
   return { required: req, judge, measures, outcome };
+}
+
+const isIdText = (v: unknown): v is string => typeof v === "string" && !!v.trim();
+const isPlain = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
+/** The arms a trial knows: those its runs with an arm and a scenario ran, and those its plan lists (entriesOf). */
+export function trialArms(trial: unknown): string[] {
+  const out: string[] = [];
+  if (!isPlain(trial)) return out;
+  for (const r of Array.isArray(trial.runs) ? trial.runs : []) if (isPlain(r) && isIdText(r.arm) && isIdText(r.scenario) && !out.includes(r.arm)) out.push(r.arm);
+  if (isPlain(trial.plan)) for (const a of keysIn(trial.plan.arms)) if (isIdText(a) && !out.includes(a)) out.push(a);
+  return out;
+}
+/** A pairwise judgment every check and every view reads: two different arms the trial knows, with its overall counts
+ * and its counts by case, each an object. The checks refuse any other, and the pairwise view draws none. */
+export function wellFormedPair(p: unknown, known: string[]): boolean {
+  return isPlain(p) && Array.isArray(p.arms) && p.arms.length === 2 && p.arms.every(a => isIdText(a) && known.includes(a)) && p.arms[0] !== p.arms[1] && isPlain(p.overall) && isPlain(p.scenarios);
 }

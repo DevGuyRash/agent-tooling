@@ -35,6 +35,23 @@ export function slug(value: string, prefix = "av"): string {
   return `${prefix}-${base || "x"}-${hash(String(value))}`;
 }
 
+/** The entries of a keyed map in data, in its own order, as every check and every view lists them: a trial's pairwise
+ * judgments, a judgment's counts by case, a plan's arms, a run's checks and usage, a total's level counts, an
+ * alternative's attributes, a criterion's scores, and a narrative's or story's records. A key starting with "$" is a
+ * note, not an entry, for every check and every view alike. */
+export function entriesOf<T>(map: { [key: string]: T } | null | undefined): Array<[string, T]>;
+export function entriesOf(map: unknown): Array<[string, unknown]>;
+export function entriesOf(map: unknown): Array<[string, unknown]> {
+  if (!map || typeof map !== "object" || Array.isArray(map)) return [];
+  return Object.keys(map).filter(k => !k.startsWith("$")).map(k => [k, (map as Record<string, unknown>)[k]]);
+}
+/** The keys entriesOf lists. */
+export const keysIn = (map: unknown): string[] => entriesOf(map).map(e => e[0]);
+/** The values entriesOf lists. */
+export function valuesIn<T>(map: { [key: string]: T } | null | undefined): T[];
+export function valuesIn(map: unknown): unknown[];
+export function valuesIn(map: unknown): unknown[] { return entriesOf(map).map(e => e[1]); }
+
 export type AttrValue = string | number | boolean | null | undefined;
 /** Attribute text; false, null and undefined omit the attribute, true writes it bare. */
 export function attrs(map: Record<string, AttrValue>): string {

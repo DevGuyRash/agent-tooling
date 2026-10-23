@@ -3,7 +3,7 @@
  * Variants of one case (the same prompt with an added turn, say) sit side by
  * side with the difference per arm. For a single-arm trial this is the main
  * result view, so it opens with the pass rate of every case. */
-import { count, esc, fmtInt, fmtPct, inline, num, outcomeLabel, outcomeMark, prose, slug } from "../core";
+import { count, esc, fmtInt, fmtPct, inline, num, outcomeLabel, outcomeMark, prose, slug, entriesOf, keysIn } from "../core";
 import { failureCause, failureDetail, oneLine } from "../failure";
 import type { RenderContext } from "../model";
 import { casesWords, newcombe } from "../stats";
@@ -87,7 +87,7 @@ export function caseVariants(data: TrialReport, cases: string[], pairs: CasesInp
         const vs: Array<[string, string | undefined]> = [];
         if (typeof o.variant === "string") vs.push([o.variant, str(o.label) || undefined]);
         if (Array.isArray(o.variants)) for (const v of strs(o.variants)) vs.push([v, str(o.label) || undefined]);
-        else if (o.variants && typeof o.variants === "object") for (const [v, l] of Object.entries(o.variants as Record<string, unknown>)) vs.push([v, str(l) || undefined]);
+        else if (o.variants && typeof o.variants === "object") for (const [v, l] of entriesOf(o.variants as Record<string, unknown>)) vs.push([v, str(l) || undefined]);
         if (vs.length) add(o.base, vs, str(o.baseLabel) || undefined); else notes.push(`Variant set ${i + 1} names no variant.`);
       } else notes.push(`Variant set ${i + 1} is not [base, variant], {base, variants} or {suffix}.`);
     });
@@ -449,7 +449,7 @@ export function cases(input: CasesInput, ctx: RenderContext): string {
   const notes: string[] = [];
   const told = input.descriptions && typeof input.descriptions === "object" ? input.descriptions as Record<string, unknown> : {};
   const about = (c: string) => { const v = Object.prototype.hasOwnProperty.call(told, c) ? told[c] : undefined; return typeof v === "string" ? v : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").join("\n\n") : ""; };
-  const knownArms = new Set([...axes.arms, ...Object.keys(data.plan?.arms || {})]);
+  const knownArms = new Set([...axes.arms, ...keysIn(data.plan?.arms || {})]);
   let arms = Array.isArray(input.arms) ? strs(input.arms).filter(a => knownArms.has(a)) : axes.arms;
   if (Array.isArray(input.arms) && arms.length < input.arms.length) notes.push(`Arms not in this trial were left out: ${strs(input.arms).filter(a => !knownArms.has(a)).join(", ") || "entries that are not text"}.`);
   arms = [...new Set(arms)].sort((a, b) => ctx.arms.index(a) - ctx.arms.index(b));

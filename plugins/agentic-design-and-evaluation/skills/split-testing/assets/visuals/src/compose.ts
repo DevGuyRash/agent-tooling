@@ -12,7 +12,7 @@
  * left out, and no view repeats another. The run grid ("grid") is drawn only
  * when a narrative's include names it, since the case dossiers already place
  * every run. */
-import { fmtInt, fmtPct } from "./core";
+import { fmtInt, fmtPct, entriesOf, keysIn } from "./core";
 import { casesWords } from "./stats";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
 import { armTally, CasePair, caseChecks, casePairs, checkTable, costMeasures, displayPath, judgeFor, pairedOrder, repeatRange, ruleMentions, tally, TrialReport, trialAxes } from "./trial-model";
@@ -93,7 +93,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   catch (error) { problems = [{ level: "warning", where: "narrative", message: `The narrative could not be checked: ${error instanceof Error ? error.message : String(error)}` }]; }
 
   const axes = trialAxes(data);
-  const rawArms: unknown[] = Array.isArray(narrative.arms) ? narrative.arms : isObject(narrative.arms) ? Object.entries(narrative.arms).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
+  const rawArms: unknown[] = Array.isArray(narrative.arms) ? narrative.arms : isObject(narrative.arms) ? entriesOf(narrative.arms).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
   const armSpecs = rawArms.filter((a): a is ArmSpec => isObject(a) && typeof a.id === "string");
   // Narrative arms set the identity order, but only arms that ran enter it: a misspelled id must not shift every color.
   const order = [...new Set([...armSpecs.map(a => a.id).filter(id => axes.arms.includes(id)), ...axes.arms])];
@@ -160,10 +160,10 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
       : undefined;
 
   const appended = new Map<string, BlockSpec[]>();
-  for (const [k, blocks] of Object.entries(isObject(narrative.append) ? narrative.append : {})) if (Array.isArray(blocks)) appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
+  for (const [k, blocks] of entriesOf(isObject(narrative.append) ? narrative.append : {})) if (Array.isArray(blocks)) appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
   const sections: Array<{ key: string; section: SectionSpec }> = [];
   // What each section's views say for this data, from the narrative's readings (keyed by section id or an earlier name).
-  const readings = new Map<string, unknown>(isObject(narrative.readings) ? Object.entries(narrative.readings).map(([k, v]) => [alias(k), v]) : []);
+  const readings = new Map<string, unknown>(isObject(narrative.readings) ? entriesOf(narrative.readings).map(([k, v]) => [alias(k), v]) : []);
   const add = (key: string, s: SectionSpec) => sections.push({ key, section: { ...s, id: key, ...(readings.has(key) ? { reading: readings.get(key) as string | string[] } : {}), blocks: [...s.blocks, ...(appended.get(key) || [])] } });
 
   // ---------------------------------------------------------------- verdict
@@ -268,7 +268,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   else if (anyValid && !multiArm && cases.some(c => caseChecks(data, c, axes.arms).measures.length))
     // One arm: each dossier already shows its required checks and judge, so this section keeps only the measures.
     add("checks", { title: "Recorded measures", label: "Measures", lead: "What each case's checks recorded besides pass and fail, over valid runs: values the plan records but does not require, so they never decide a pass. The required checks and the judge are in each case's dossier above.", blocks: [{ type: "checks", required: false, ...(pairs.length ? { pairs } : {}) }] });
-  if (isObject(data.pairwise) && Object.keys(data.pairwise).length)
+  if (isObject(data.pairwise) && keysIn(data.pairwise).length)
     add("pairwise", { title: "Pairwise judgments", label: "Pairwise", lead: "A judge saw matched runs side by side in both orders. Only pairs decided the same way in both orders count toward a win rate.", blocks: [{ type: "pairwise" }] });
   if (anyValid && costMeasures(data).length)
     add("cost", { title: "Cost and time", label: "Cost", lead: "Every valid run's usage as its executor reported it. Executors report different fields, so compare like with like.", blocks: [{ type: "cost" }] });

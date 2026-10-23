@@ -362,8 +362,15 @@ def is_whole(v) -> bool:
     return is_number(v) and float(v).is_integer()
 
 
+def entries_of(m) -> list:
+    """The entries of a keyed map in data, in its own order, as every check lists them and every view of the page does
+    (src/core.ts entriesOf): a key starting with "$" is a note, not an entry."""
+    return [(k, v) for k, v in m.items() if not (isinstance(k, str) and k.startswith("$"))] if isinstance(m, dict) else []
+
+
 def keys_of(v: dict) -> list[str]:
-    return sorted(k for k in v if not k.startswith("$"))
+    """A map's keys as entries_of lists them, sorted so both checkers list problems in one order."""
+    return sorted(k for k, _ in entries_of(v))
 
 
 def clip(value: str, limit: int = 60) -> str:
@@ -537,7 +544,7 @@ def known_from(trial, comparison=None, collection=None) -> dict:
 
     plan = trial.get("plan") if isinstance(trial.get("plan"), dict) else {}
     if isinstance(plan.get("arms"), dict):
-        for arm, entry in plan["arms"].items():
+        for arm, entry in entries_of(plan["arms"]):
             add("arms", arm)
             if isinstance(entry, dict):
                 known["settings"][arm] = entry
@@ -553,11 +560,11 @@ def known_from(trial, comparison=None, collection=None) -> dict:
         add("ran_arms", run.get("arm"))
         add("ran_cases", run.get("scenario"))
         if isinstance(run.get("passed"), bool) and isinstance(run.get("checks"), dict):
-            for key, value in run["checks"].items():
+            for key, value in entries_of(run["checks"]):
                 if isinstance(value, bool):
                     add("checks", key)
     if isinstance(trial.get("pairwise"), dict):
-        for key in trial["pairwise"]:
+        for key, _ in entries_of(trial["pairwise"]):
             add("pairs", key)
     return known
 
@@ -951,7 +958,7 @@ def trial_arms(trial: dict) -> list:
             out.append(r["arm"])
     plan = trial.get("plan")
     if isinstance(plan, dict) and isinstance(plan.get("arms"), dict):
-        for a in plan["arms"]:
+        for a, _ in entries_of(plan["arms"]):
             if is_id(a) and a not in out:
                 out.append(a)
     return out
@@ -974,7 +981,7 @@ def well_formed_trial(trial):
         out["plan"] = {**plan, "scenarios": [sc for sc in plan["scenarios"] if not isinstance(sc, dict) or is_id(sc.get("name"))]}
     if isinstance(trial.get("pairwise"), dict):
         known = trial_arms(trial)
-        out["pairwise"] = {k: p for k, p in trial["pairwise"].items() if well_formed_pair(p, known)}
+        out["pairwise"] = {k: p for k, p in entries_of(trial["pairwise"]) if well_formed_pair(p, known)}
     return out
 
 
@@ -1071,12 +1078,12 @@ def story_obligations(known: dict, trial, comparison, blocks: list, own: dict, r
             kase(x)
         # The pairwise view reads its own arms and cases, whatever the runs name.
         pairwise = trial["pairwise"] if isinstance(trial, dict) and isinstance(trial.get("pairwise"), dict) else {}
-        for p in pairwise.values():
+        for _, p in entries_of(pairwise):
             if not isinstance(p, dict):
                 continue
             for a in p["arms"][:2] if isinstance(p.get("arms"), list) else []:
                 alt(a, "arm")
-            for x in p["scenarios"] if isinstance(p.get("scenarios"), dict) else []:
+            for x, _ in entries_of(p.get("scenarios")):
                 kase(x)
     if is_comparison(comparison):
         from_comparison(comparison)
@@ -1212,7 +1219,7 @@ def trial_sections_shown(trial, narrative: dict, kept: list[str]) -> list[str]:
             shown.append("arms")
         if any(r.get("passed") is False for r in valid):
             shown.append("failures")
-        if isinstance(trial.get("pairwise"), dict) and trial["pairwise"]:
+        if entries_of(trial.get("pairwise")):
             shown.append("pairwise")
 
         def positive(v) -> bool:
@@ -1282,7 +1289,7 @@ def checks_shown(trial: dict, runs: list[dict]) -> bool:
     if len(arms) > 1:
         names: dict[str, bool] = {}
         for r in recorded:
-            for k, v in checks_of(r).items():
+            for k, v in entries_of(checks_of(r)):
                 names[k] = names.get(k, True) if isinstance(v, bool) else False
         return any(names.values()) or any(isinstance(r.get("judge"), dict) and r["judge"].get("verdict") in ("pass", "fail") for r in runs)
     plan = trial.get("plan") if isinstance(trial.get("plan"), dict) else {}
@@ -1298,7 +1305,7 @@ def checks_shown(trial: dict, runs: list[dict]) -> bool:
         for r in recorded:
             if not js_same(r.get("scenario"), cs):
                 continue
-            for k, v in checks_of(r).items():
+            for k, v in entries_of(checks_of(r)):
                 if k in required:
                     continue
                 t = "boolean" if isinstance(v, bool) else "number" if is_number(v) else "other"
@@ -2068,10 +2075,11 @@ def skeleton(trial: dict, trial_label: str) -> dict:
     ran_arms = list(dict.fromkeys(r["arm"] for r in runs if isinstance(r.get("arm"), str)))
     ran_cases = list(dict.fromkeys(r["scenario"] for r in runs if isinstance(r.get("scenario"), str)))
     planned = plan.get("arms") if isinstance(plan.get("arms"), dict) else {}
+    planned = dict(entries_of(planned))
     arms = [a for a in planned if a in ran_arms] + [a for a in ran_arms if a not in planned]
     scenarios = [s["name"] for s in plan.get("scenarios") or [] if isinstance(s, dict) and isinstance(s.get("name"), str)]
     cases = [c for c in dict.fromkeys(scenarios) if c in ran_cases] + [c for c in ran_cases if c not in scenarios]
-    settings = {a: {k: v for k, v in planned[a].items() if k not in MATERIAL_TEXT} for a in arms if isinstance(planned.get(a), dict) and planned[a]}
+    settings = {a: {k: v for k, v in entries_of(planned[a]) if k not in MATERIAL_TEXT} for a in arms if isinstance(planned.get(a), dict) and planned[a]}
 
     by_identity: dict[str, list[str]] = {}
     for arm in arms:
@@ -2266,7 +2274,7 @@ def from_trial(trial: dict) -> dict:
     alternatives = []
     for ident in arms_axis:
         entry = planned.get(ident) if isinstance(planned.get(ident), dict) else {}
-        attributes = {k: scalar(v) for k, v in entry.items() if k not in FROM_TRIAL_MATERIAL}
+        attributes = {k: scalar(v) for k, v in entries_of(entry) if k not in FROM_TRIAL_MATERIAL}
         text = entry.get("instructions_text") if isinstance(entry.get("instructions_text"), str) else None
         alternatives.append({"id": ident, **({"attributes": attributes} if attributes else {}), **({"content": text} if text else {}),
                              **({"note": "instructions shortened to the report's text bound"} if entry.get("instructions_truncated") is True else {})})
@@ -2305,7 +2313,7 @@ def from_trial(trial: dict) -> dict:
                 observations.append({**at(r), "metric": m["id"], "value": v})
     kinds: dict[str, set] = {}
     for r in valid:
-        for k, v in (r.get("checks") if isinstance(r.get("checks"), dict) else {}).items():
+        for k, v in entries_of(r.get("checks")):
             kinds.setdefault(k, set()).add("boolean" if isinstance(v, bool) else "number" if is_number(v) else "other")
     for name in sorted(kinds):
         types = kinds[name]
@@ -2326,14 +2334,14 @@ def from_trial(trial: dict) -> dict:
                 observations.append({**at(r), "metric": "judge", "value": verdict(r) == "pass"})
     preferences = []
     pairwise = trial.get("pairwise") if isinstance(trial.get("pairwise"), dict) else {}
-    pairs = [(k, v) for k, v in pairwise.items() if isinstance(v, dict) and isinstance(v.get("arms"), list) and len(v["arms"]) == 2]
+    pairs = [(k, v) for k, v in entries_of(pairwise) if isinstance(v, dict) and isinstance(v.get("arms"), list) and len(v["arms"]) == 2]
     for key, summary in pairs:
         a, b = (js_text(x) for x in summary["arms"])
         ident = "pairwise" if len(pairs) == 1 else f"pairwise:{key}"
         judge = summary["judge"]["model"] if isinstance(summary.get("judge"), dict) and isinstance(summary["judge"].get("model"), str) else None
         metrics.append({"id": ident, "label": "Pairwise preference" if len(pairs) == 1 else f"Pairwise: {a} vs {b}", "kind": "preference", "better": "higher",
                         "description": "A judge saw matched runs side by side in both orders; only pairs decided the same way in both orders count as decided."})
-        scen = list(summary["scenarios"].items()) if isinstance(summary.get("scenarios"), dict) and summary["scenarios"] else [(None, summary.get("overall"))]
+        scen = entries_of(summary.get("scenarios")) or [(None, summary.get("overall"))]
         count = lambda v: int(v) if is_number(v) and float(v).is_integer() and v > 0 else 0
         for scenario, st in scen:
             if not isinstance(st, dict):

@@ -386,4 +386,54 @@ test("round 21: a pairwise judgment names two different arms this trial knows, w
   H.equal(said(spec(["a", "z"])), ['error trial.pairwise.p.arms[1]: "z" is not an arm of this trial'], "an arm the trial does not know");
 });
 
+// ------------------------------------------------------------------ keys that are notes
+
+/** Each keyed map a check or a view reads, given an entry under a "$" key carrying malformed content: a "$" key is a note,
+ * so the checks find exactly what they find without it and the page draws exactly what it draws without it. */
+const NOTE_MAPS = (() => {
+  const story = { background: "b", intent: "i", questions: ["q"], rule: "r", covers: "c", notCovered: "n", alternatives: { a: "A.", b: "B." }, cases: { c1: "C1." } };
+  const trial = () => ({ plan: { arms: { a: { model: "m" }, b: { model: "m" } }, scenarios: [{ name: "c1" }] },
+    runs: [{ job: "j1", arm: "a", scenario: "c1", repeat: 1, passed: true, valid: true, checks: { ok: true } }, { job: "j2", arm: "b", scenario: "c1", repeat: 1, passed: false, valid: true, checks: { ok: false } }],
+    pairwise: { "a|b": { arms: ["a", "b"], overall: { a_wins: 1, b_wins: 0 }, scenarios: { c1: { a_wins: 1, b_wins: 0 } } } } });
+  const trialSpec = t => ({ title: "T", story, sections: [{ title: "S", reading: "r", blocks: [{ type: "pairwise", read: { says: "p" } }, { type: "setup", read: { says: "s" } }, { type: "checks", read: { says: "c" } }, { type: "cases", read: { says: "k" } }] }], trial: t });
+  const comparison = () => ({ alternatives: [{ id: "x", attributes: { Spread: "pb" } }, { id: "y" }], cases: [{ id: "c1" }],
+    metrics: [{ id: "taste", kind: "ordinal", levels: ["bad", "good"], primary: true }], aggregates: [{ alternative: "x", metric: "taste", case: "c1", counts: { good: 2, bad: 1 } }, { alternative: "y", metric: "taste", case: "c1", counts: { bad: 2 } }] });
+  const cStory = { ...story, alternatives: { x: "X.", y: "Y." } };
+  const comparisonSpec = c => ({ title: "T", story: cStory, sections: [{ title: "S", reading: "r", blocks: [{ type: "metric", metric: "taste", read: { says: "m" } }, { type: "alternatives", read: { says: "a" } },
+    { type: "decision-matrix", criteria: [{ id: "cost", label: "Cost", scores: { x: 1, y: 2 } }], read: { says: "d" } }] }], comparison: c });
+  const ghost = { arms: ["ghost-a", "ghost-b"], overall: { a_wins: 1, b_wins: 0 }, scenarios: { "ghost-case": { a_wins: 1, b_wins: 0 } } };
+  return {
+    "pairwise judgments": [trialSpec(trial()), (() => { const t = trial(); t.pairwise.$p = ghost; return trialSpec(t); })()],
+    "a judgment's counts by case": [trialSpec(trial()), (() => { const t = trial(); t.pairwise["a|b"].scenarios.$ghost = { a_wins: 9, b_wins: "x" }; return trialSpec(t); })()],
+    "a plan's arms": [trialSpec(trial()), (() => { const t = trial(); t.plan.arms.$ghost = { model: { odd: true } }; return trialSpec(t); })()],
+    "a run's checks": [trialSpec(trial()), (() => { const t = trial(); t.runs[0].checks.$ghost = "not a check"; t.runs[1].checks.$ghost = 7; return trialSpec(t); })()],
+    "a run's usage": [trialSpec(trial()), (() => { const t = trial(); t.runs[0].usage = { $ghost: 1e9 }; const b = trial(); b.runs[0].usage = {}; return trialSpec(t); })(), (() => { const b = trial(); b.runs[0].usage = {}; return trialSpec(b); })()],
+    "a total's level counts": [comparisonSpec(comparison()), (() => { const c = comparison(); c.aggregates[0].counts.$ghost = 99; return comparisonSpec(c); })()],
+    "an alternative's attributes": [comparisonSpec(comparison()), (() => { const c = comparison(); c.alternatives[0].attributes.$ghost = "ghost"; return comparisonSpec(c); })()],
+    "a criterion's scores": [comparisonSpec(comparison()), (() => { const s = comparisonSpec(comparison()); s.sections[0].blocks[2].criteria[0].scores.$ghost = 5; return s; })()],
+    "a story's descriptions": [trialSpec(trial()), (() => { const s = trialSpec(trial()); s.story = { ...story, alternatives: { ...story.alternatives, $ghost: "Ghost." }, cases: { ...story.cases, $ghost: "Ghost case." } }; return s; })()],
+  };
+})();
+
+test("sweep (a selected matrix): a key starting with $ is a note in every keyed map, read by no check and drawn by no view", () => {
+  const drawn = html => html.replace(/<script[\s\S]*?<\/script>/g, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
+  for (const [map, [base, noted, plainBase]] of Object.entries(NOTE_MAPS)) {
+    const without = plainBase || base;
+    H.equal(H.plain(V.validateSpec(noted)), H.plain(V.validateSpec(without)), `${map}: the checks find what they find without the note`);
+    H.equal(drawn(V.renderReport(noted)), drawn(V.renderReport(without)), `${map}: the page draws what it draws without the note`);
+    H.excludes(V.renderReport(noted), "ghost", `${map}: nothing of the note is drawn`);
+  }
+});
+
+test("round 22: the pairwise view draws exactly the judgments the checks accept", () => {
+  const runs = [{ arm: "a", scenario: "c1", passed: true }, { arm: "b", scenario: "c1", passed: false }];
+  const page = pairwise => V.renderReport({ title: "T", sections: [{ title: "S", reading: "r", blocks: [{ type: "pairwise" }] }], trial: { runs, pairwise } });
+  const counts = { overall: { a_wins: 1, b_wins: 0 }, scenarios: { c1: { a_wins: 1, b_wins: 0 } } };
+  H.equal((page({ ok: { arms: ["a", "b"], ...counts } }).match(/data-pair="/g) || []).length, 1, "a well-formed judgment is drawn");
+  for (const [what, p] of [["unknown arms", { arms: ["ghost-a", "ghost-b"], ...counts }], ["a list for its overall counts", { arms: ["a", "b"], ...counts, overall: [] }], ["a list for its counts by case", { arms: ["a", "b"], ...counts, scenarios: [] }]]) {
+    H.excludes(page({ p }), 'data-pair="', `${what}: not drawn`);
+    H.ok(H.plain(V.validateSpec({ title: "T", sections: [], trial: { runs, pairwise: { p } } })).some(x => x.level === "error" && x.where.startsWith("trial.pairwise.p")), `${what}: refused by the checks`);
+  }
+});
+
 H.report();

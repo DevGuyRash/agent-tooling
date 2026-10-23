@@ -6,7 +6,7 @@
  * assumes what an alternative is: a sandwich, an ad, a prompt, a research
  * direction. Values the author did not supply are shown as missing, never
  * filled in, and totals appear only when the author supplied the weights. */
-import { attrs, count as whole, esc, fmtInt, fmtPct, inline, isNum, num, prose, wilson } from "../core";
+import { attrs, count as whole, esc, fmtInt, fmtPct, inline, isNum, num, prose, wilson, entriesOf, keysIn } from "../core";
 import { diffRuns, diffStats, DiffLine, lineDiff, splitLines, wordDiff } from "../diff";
 import { fingerprint } from "../identity";
 import type { Alternative, Comparison, Metric, MetricSummary, Observation } from "../comparison-model";
@@ -142,7 +142,7 @@ export function alternatives(input: AlternativesInput, ctx: RenderContext): stri
 
   // Attributes: those every alternative records identically are one line; the rest are a table.
   const keys: string[] = [];
-  for (const a of alts) if (isObject(a.attributes)) for (const k of Object.keys(a.attributes)) if (!hide.has(k) && !keys.includes(k)) keys.push(k);
+  for (const a of alts) if (isObject(a.attributes)) for (const k of keysIn(a.attributes)) if (!hide.has(k) && !keys.includes(k)) keys.push(k);
   const valueOf = (a: Alternative, k: string): unknown => isObject(a.attributes) && k in a.attributes ? a.attributes[k] : undefined;
   const differs = n > 1 ? keys.filter(k => new Set(alts.map(a => canon(valueOf(a, k)))).size > 1) : [];
   const shared = keys.filter(k => !differs.includes(k));
@@ -498,7 +498,7 @@ export function decisionMatrix(input: DecisionMatrixInput, ctx: RenderContext): 
     if (cellAt.has(key)) repeats++; else cellAt.set(key, c as unknown as DecisionCell);
   }
   // A criterion's scores are the same cells written by alternative; an explicit cell wins.
-  for (const c of criteria) if (isObject(c.scores)) for (const [alt, v] of Object.entries(c.scores)) {
+  for (const c of criteria) if (isObject(c.scores)) for (const [alt, v] of entriesOf(c.scores)) {
     if (!aids.has(alt)) { stray++; continue; }
     const key = `${c.id}\u0000${alt}`;
     if (!cellAt.has(key)) cellAt.set(key, { criterion: c.id, alternative: alt, rating: typeof v === "boolean" ? (v ? "yes" : "no") : v ?? null });
@@ -687,7 +687,7 @@ export function observations(input: ObservationsInput, ctx: RenderContext): stri
     if (num(g.median) !== null) parts.push(`<span class="av-obs-sub">median ${esc(shown(g.median as number))}</span>`);
     if (k === null && n !== null && n > 0) parts.push(`<span class="av-obs-sub">n = ${esc(fmtInt(n))}</span>`);
     if (num(g.lo) !== null && num(g.hi) !== null) parts.push(`<span class="av-obs-sub">reported interval ${esc(shown(g.lo as number))} to ${esc(shown(g.hi as number))}</span>`);
-    if (isObject(g.counts)) parts.push(`<span class="av-obs-sub">${esc(Object.entries(g.counts).filter(([, c]) => isNum(c)).map(([l, c]) => `${l}: ${fmtInt(c as number)}`).join(" · "))}</span>`);
+    if (isObject(g.counts)) parts.push(`<span class="av-obs-sub">${esc(entriesOf(g.counts).filter(([, c]) => isNum(c)).map(([l, c]) => `${l}: ${fmtInt(c as number)}`).join(" · "))}</span>`);
     rows.push({ kind: "aggregate", alt: String(g.alternative ?? ""), caseId: caseKey(g.case) === NO_CASE ? "" : caseKey(g.case), metric: String(g.metric ?? ""), value: parts.length ? `<span class="av-obs-agg">${parts.join("")}</span>` : missing("no summary values", "This aggregate supplies no counts or statistics."), sort: num(g.mean) ?? (k !== null && n ? k / n : -Infinity), outcome: "aggregate", reason: "", note: str(g.note) ?? "", excerpt: "", source: str(g.source) ?? "", unit: "" });
   }
 

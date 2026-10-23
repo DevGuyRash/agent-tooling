@@ -3,11 +3,11 @@
  * pairwise preferences, cost, invalid runs, the run ledger and the plan. Each
  * reads the trial in the render context and accepts explicit data where a
  * caller has its own. */
-import { attrs, axisTicks, count, esc, fmtDelta, fmtInt, fmtNum, fmtPct, fmtSeconds, fmtUsd, inline, isNum, logTicks, median, num, Outcome, secondsUnit, outcomeBadge, outcomeLabel, outcomeMark, prose, quantile, wilson } from "../core";
+import { attrs, axisTicks, count, esc, fmtDelta, fmtInt, fmtNum, fmtPct, fmtSeconds, fmtUsd, inline, isNum, logTicks, median, num, Outcome, secondsUnit, outcomeBadge, outcomeLabel, outcomeMark, prose, quantile, wilson, entriesOf, keysIn, valuesIn } from "../core";
 import type { RenderContext } from "../model";
 import { failureCause } from "../failure";
 import { casesWords, countPooling } from "../stats";
-import { armCases, armTally, CasePair, caseChecks, checkTable, costMeasures, displayPath, invalidReason, judgePassWhen, judgeQuestion, outcomeOf, pairedOrder, scenarioOf, tally, TrialReport, TrialRun, trialAxes } from "../trial-model";
+import { armCases, armTally, CasePair, caseChecks, checkTable, costMeasures, displayPath, invalidReason, judgePassWhen, judgeQuestion, outcomeOf, pairedOrder, scenarioOf, tally, TrialReport, TrialRun, trialArms, trialAxes, wellFormedPair } from "../trial-model";
 import { empty, frame, FrameInput, pos } from "./frame";
 
 const caseLabel = (ctx: RenderContext, id: string) => ctx.caseLabels[id] || id;
@@ -483,11 +483,10 @@ function checksByCase(input: ChecksInput, ctx: RenderContext, data: TrialReport,
 export interface PairwiseInput extends FrameInput { pair?: string }
 export function pairwise(input: PairwiseInput, ctx: RenderContext): string {
   const data = trialOf(ctx, "pairwise");
-  // Only judgments naming two different arms with their counts: a malformed one (refused by the checks) is not drawn
-  // against arms or counts it does not give.
-  const named = (a: unknown) => typeof a === "string" && !!a.trim();
-  const pairs = Object.entries(data.pairwise || {}).filter(([k, p]) => p && typeof p === "object" && Array.isArray(p.arms) && p.arms.length === 2 && p.arms.every(named) && p.arms[0] !== p.arms[1]
-    && !!p.overall && typeof p.overall === "object" && !!p.scenarios && typeof p.scenarios === "object" && (!input.pair || k === input.pair));
+  // Only the judgments the checks accept (wellFormedPair: two different arms this trial knows, with their counts), listed
+  // as the checks list them (entriesOf, where a "$" key is a note): a malformed one is refused there and not drawn here.
+  const known = trialArms(data);
+  const pairs = entriesOf(data.pairwise).filter(([k, p]) => wellFormedPair(p, known) && (!input.pair || k === input.pair));
   if (!pairs.length) return frame("pairwise", input, empty("No pairwise judgments were run."));
   const segs = ["a_wins", "tie", "b_wins", "inconsistent", "invalid"] as const;
   const clean = (st: Partial<Record<string, unknown>> | undefined) => {
@@ -497,14 +496,14 @@ export function pairwise(input: PairwiseInput, ctx: RenderContext): string {
     return { ...o, total: segs.reduce((n, k) => n + o[k], 0), rate, interval: iv && iv[0] !== null && iv[1] !== null ? [iv[0], iv[1]] as [number, number] : null };
   };
   let maxTotal = 1;
-  for (const [, p] of pairs) for (const st of [p.overall, ...Object.values(p.scenarios || {})]) maxTotal = Math.max(maxTotal, clean(st as never).total);
+  for (const [, p] of pairs) for (const st of [p.overall, ...valuesIn(p.scenarios || {})]) maxTotal = Math.max(maxTotal, clean(st as never).total);
   const html = pairs.map(([key, p]) => {
     const [a, b] = (Array.isArray(p.arms) ? p.arms : ["A", "B"]).map(String);
     const present = new Set<string>();
-    for (const st of [p.overall, ...Object.values(p.scenarios || {})]) { const c = clean(st as never); for (const k of segs) if (c[k]) present.add(k); }
+    for (const st of [p.overall, ...valuesIn(p.scenarios || {})]) { const c = clean(st as never); for (const k of segs) if (c[k]) present.add(k); }
     const words: Record<string, string> = { a_wins: `${ctx.arms.label(a)} preferred in both orders`, tie: "tie in both orders", b_wins: `${ctx.arms.label(b)} preferred in both orders`, inconsistent: "the two orders disagree", invalid: "invalid" };
     // Pairs on one case repeat that case: the all-cases row pools them as plain counts, with no interval.
-    const decisiveCases = Object.values(p.scenarios || {}).filter(st => { const c = clean(st as never); return c.a_wins + c.b_wins > 0; }).length;
+    const decisiveCases = valuesIn(p.scenarios || {}).filter(st => { const c = clean(st as never); return c.a_wins + c.b_wins > 0; }).length;
     const line = (label: string, raw: unknown, strong = false) => {
       const s = clean(raw as never), total = s.total || 1;
       const pooledCases = strong && decisiveCases > 1 ? decisiveCases : 0;
@@ -516,7 +515,7 @@ export function pairwise(input: PairwiseInput, ctx: RenderContext): string {
       return `<div class="av-duel-row${strong ? " av-duel-row--overall" : ""}"><span class="av-duel-label">${esc(label)}<span class="av-muted"> · ${plural(s.total, "pair")}</span></span><div class="av-duel-track"><div class="av-duel-bar" style="width:${pos(s.total / maxTotal)}" role="img" aria-label="${esc(`${label}: ${ctx.arms.label(a)} preferred ${s.a_wins}, ties ${s.tie}, ${ctx.arms.label(b)} preferred ${s.b_wins}, order-inconsistent ${s.inconsistent}, invalid ${s.invalid}`)}">${bar}</div>${s.inconsistent ? `<span class="av-duel-split" title="the two orders disagree">${s.inconsistent} split</span>` : ""}</div><span class="av-duel-rate">${rate}</span></div>`;
     };
     // One scale for every row, the overall row included, so a bar's length always means the same number of pairs.
-    const scen = Object.entries(p.scenarios || {}).map(([s, st]) => line(caseLabel(ctx, s), st)).join("");
+    const scen = entriesOf(p.scenarios || {}).map(([s, st]) => line(caseLabel(ctx, s), st)).join("");
     const legend = `<p class="av-legend av-duel-legend">${segs.filter(k => present.has(k)).map(k => `<span><span class="av-sw av-duel-seg--${k}"></span>${k === "a_wins" ? ctx.arms.glyph(a) : k === "b_wins" ? ctx.arms.glyph(b) : ""}${esc(words[k])}</span>`).join("")}<span>Bar length is the number of pairs, on one scale for every row.</span></p>`;
     return `<div class="av-duel" data-pair="${esc(key)}" style="--c-a:${ctx.arms.color(a)};--c-b:${ctx.arms.color(b)}"><div class="av-duel-head">${ctx.arms.tag(a)}<span class="av-duel-vs">preferred over</span>${ctx.arms.tag(b)}<span class="av-duel-rate-head">${esc(ctx.arms.label(a))} win rate</span></div>${legend}${line("All cases", p.overall, true)}${scen}</div>`;
   }).join("");
@@ -665,7 +664,7 @@ export function plan(input: FrameInput, ctx: RenderContext): string {
   const data = trialOf(ctx, "plan");
   const armIds = trialAxes(data).arms.slice().sort(byIdentity(ctx)), settings = data.plan?.arms || {};
   const skip = new Set(["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"]);
-  const present = [...new Set(armIds.flatMap(a => Object.keys(settings[a] || {})))].filter(k => !skip.has(k) && armIds.some(a => settings[a]?.[k] !== undefined && settings[a]?.[k] !== null));
+  const present = [...new Set(armIds.flatMap(a => keysIn(settings[a] || {})))].filter(k => !skip.has(k) && armIds.some(a => settings[a]?.[k] !== undefined && settings[a]?.[k] !== null));
   const cellText = (k: string, v: unknown) => v === undefined || v === null ? '<span class="av-muted">—</span>' : /sha256$/.test(k) && typeof v === "string" ? `<code title="${esc(v)}">${esc(v.slice(0, 10))}</code>` : `<code>${esc(typeof v === "string" ? v : JSON.stringify(v))}</code>`;
   const armTable = `<div class="av-scroll-x"><table class="av-table av-plan-arms"><thead><tr><th scope="col">Arm</th>${present.map(k => `<th scope="col">${esc(k.replace(/_sha256$/, " digest").replace(/_/g, " "))}</th>`).join("")}</tr></thead><tbody>${armIds.map(a => `<tr><th scope="row">${ctx.arms.tag(a)}${ctx.arms.note(a) ? `<span class="av-ladder-note">${esc(ctx.arms.note(a)!)}</span>` : ""}</th>${present.map(k => `<td>${cellText(k, settings[a]?.[k])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
   const ran = new Set(data.runs.map(r => r.scenario));

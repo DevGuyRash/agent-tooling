@@ -3,7 +3,7 @@
  * received identical material, and the instruction and artifact texts
  * themselves, lettered (Text A, Text B) with a line diff from a reference text.
  * Reads the trial plan in the render context, or explicit `settings`. */
-import { esc, fmtInt } from "../core";
+import { esc, fmtInt, entriesOf, keysIn } from "../core";
 import { casesWords } from "../stats";
 import { diffRuns, diffStats, DiffLine, lineDiff, splitLines, wordDiff } from "../diff";
 import { fingerprint } from "../identity";
@@ -125,7 +125,7 @@ function valueHtml(key: string, vc: ValueCtx): string {
       : clamp(items.join("\n"), label(key));
   }
   if (isObject(v)) {
-    const entries = Object.keys(v).sort().map(k => `${k} ${displayText(typeof v[k] === "string" ? v[k] as string : canon(v[k]))}`);
+    const entries = keysIn(v).sort().map(k => `${k} ${displayText(typeof v[k] === "string" ? v[k] as string : canon(v[k]))}`);
     return entries.length ? `<span class="av-setup-items av-setup-items--inline">${entries.map(x => `<code class="av-setup-code">${esc(x)}</code>`).join("")}</span>` : missing("empty", "An empty setting.");
   }
   return `<code class="av-setup-code">${esc(displayText(canon(v)))}</code>`;
@@ -286,15 +286,15 @@ export function setup(input: SetupInput, ctx: RenderContext): string {
   if (!explicit && !data) throw new TypeError('A setup block needs trial data (the report spec\'s "trial" field, which trialReport() sets) or its own "settings".');
   const source: Record<string, unknown> = explicit || (isObject(data?.plan?.arms) ? data!.plan!.arms as Record<string, unknown> : {});
   const settings: Record<string, Settings | undefined> = {};
-  for (const [k, v] of Object.entries(source)) settings[k] = isObject(v) ? v : undefined;
+  for (const [k, v] of entriesOf(source)) settings[k] = isObject(v) ? v : undefined;
 
   // Which arms: the trial's arms that ran (or every explicit entry), narrowed to a requested subset.
-  const pool = explicit ? Object.keys(source) : trialAxes(data!).arms;
+  const pool = explicit ? keysIn(source) : trialAxes(data!).arms;
   const known = new Set(pool);
   const asked = Array.isArray(input.arms) ? input.arms.filter((a): a is string => typeof a === "string") : null;
   const unknown = asked ? asked.filter(a => !known.has(a)) : [];
   const arms = (asked ? pool.filter(a => asked.includes(a)) : pool).slice().sort((x, y) => ctx.arms.index(x) - ctx.arms.index(y));
-  const notRun = !explicit && !asked ? Object.keys(source).filter(a => !known.has(a)) : [];
+  const notRun = !explicit && !asked ? keysIn(source).filter(a => !known.has(a)) : [];
   const footnotes = [
     ...(notRun.length ? [`Planned but never run: ${notRun.join(", ")}.`] : []),
     ...(unknown.length ? [`Not in this trial, so not shown: ${unknown.join(", ")}.`] : []),
@@ -308,7 +308,7 @@ export function setup(input: SetupInput, ctx: RenderContext): string {
 
   // Every setting any shown arm records, in reading order; a material counts when only its text is present.
   const keySet = new Set<string>();
-  for (const a of arms) for (const [k, v] of Object.entries(settings[a] || {})) if (!NOT_SETTINGS.has(k) && present(v)) keySet.add(k);
+  for (const a of arms) for (const [k, v] of entriesOf(settings[a] || {})) if (!NOT_SETTINGS.has(k) && present(v)) keySet.add(k);
   for (const kind of KINDS) if (lists.get(kind.digest)!.length) keySet.add(kind.digest);
   const keys = [...keySet].filter(k => !hide.has(k)).sort(byOrder);
   const compareValue = (a: string, k: string): string => {
@@ -401,7 +401,7 @@ export function setup(input: SetupInput, ctx: RenderContext): string {
   if (judgeSettings) {
     // An arm that records a judge of its own is scored by that one, which shows among its settings above; this judge scores the others.
     const scored = arms.filter(a => !isObject(settings[a]?.judge));
-    const jkeys = Object.keys(judgeSettings).filter(k => !NOT_SETTINGS.has(k) && !hide.has(k) && present(judgeSettings[k])).sort(byOrder);
+    const jkeys = keysIn(judgeSettings).filter(k => !NOT_SETTINGS.has(k) && !hide.has(k) && present(judgeSettings[k])).sort(byOrder);
     // A judge that is the same model as an arm it scores is worth knowing before trusting its verdicts.
     const jm = str(judgeSettings.model), same = jm ? scored.filter(a => str(settings[a]?.model) === jm) : [];
     const selfNote = same.length ? `<p class="av-setup-textnote av-setup-judge-same"><span class="av-chip av-chip--warn">same model</span> ${esc(`The judge is the same model as ${same.length === scored.length ? (scored.length === 1 ? "the arm" : "every arm") : joinWords(same.map(a => ctx.arms.label(a)))} it judges (${jm}).`)}</p>` : "";

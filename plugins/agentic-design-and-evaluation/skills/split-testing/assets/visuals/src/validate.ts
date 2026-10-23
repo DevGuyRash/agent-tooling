@@ -4,10 +4,10 @@
  * input that would break a view or make it misread; a warning is input the
  * report does not use as written. report.py --check applies the same rules
  * without a browser; tests/test_validate.py keeps the two in agreement. */
-import { esc } from "./core";
+import { esc, entriesOf, keysIn } from "./core";
 import type { ReportSpec } from "./model";
 import { blockTypes } from "./report";
-import { casePairs } from "./trial-model";
+import { casePairs, trialArms, wellFormedPair } from "./trial-model";
 import { caseKey, NO_CASE } from "./stats";
 import type { TrialReport } from "./trial-model";
 
@@ -248,7 +248,8 @@ type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => v !== null && typeof v === "object" && !Array.isArray(v);
 const isNumber = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 const isText = (v: unknown) => typeof v === "string" || isNumber(v);
-const keysOf = (v: Obj) => Object.keys(v).filter(k => !k.startsWith("$")).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+/** A map's keys as entriesOf lists them ("$" keys are notes), sorted so both checkers list problems in one order. */
+const keysOf = (v: Obj) => keysIn(v).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 
 /** A supplied value as it reads in a message: text in quotes, cut to 60 characters. */
 function clip(value: string, max = 60): string {
@@ -412,7 +413,7 @@ function knownFrom(trial: unknown, comparison?: unknown, collection?: unknown): 
   known.trial = true;
   const add = (list: string[], v: unknown) => { if (typeof v === "string" && !list.includes(v)) list.push(v); };
   const plan = isObj(trial.plan) ? trial.plan : {};
-  if (isObj(plan.arms)) for (const [a, entry] of Object.entries(plan.arms)) { add(known.arms, a); if (isObj(entry)) known.settings[a] = entry; }
+  if (isObj(plan.arms)) for (const [a, entry] of entriesOf(plan.arms)) { add(known.arms, a); if (isObj(entry)) known.settings[a] = entry; }
   if (Array.isArray(plan.scenarios)) for (const s of plan.scenarios) if (isObj(s)) add(known.cases, s.name);
   for (const r of trial.runs) {
     if (!isObj(r)) continue;
@@ -420,9 +421,9 @@ function knownFrom(trial: unknown, comparison?: unknown, collection?: unknown): 
     add(known.cases, r.scenario);
     add(known.ranArms, r.arm);
     add(known.ranCases, r.scenario);
-    if ((r.passed === true || r.passed === false) && isObj(r.checks)) for (const [k, v] of Object.entries(r.checks)) if (typeof v === "boolean") add(known.checks, k);
+    if ((r.passed === true || r.passed === false) && isObj(r.checks)) for (const [k, v] of entriesOf(r.checks)) if (typeof v === "boolean") add(known.checks, k);
   }
-  if (isObj(trial.pairwise)) for (const k of Object.keys(trial.pairwise)) add(known.pairs, k);
+  if (isObj(trial.pairwise)) for (const k of keysIn(trial.pairwise)) add(known.pairs, k);
   return known;
 }
 
@@ -769,7 +770,7 @@ function trialSectionsShown(trial: unknown, narrative: Obj, kept: string[]): str
     // The arms section holds the arm views, or with one arm the variants against their base cases.
     if (valid.length && (new Set(runs.map(r => r.arm).filter(a => typeof a === "string")).size > 1 || variantPairs(trial, runs, narrative))) shown.push("arms");
     if (valid.some(r => r.passed === false)) shown.push("failures");
-    if (isObj(trial.pairwise) && Object.keys(trial.pairwise).length) shown.push("pairwise");
+    if (isObj(trial.pairwise) && keysIn(trial.pairwise).length) shown.push("pairwise");
     const positive = (v: unknown) => isNumber(v) && v > 0;
     if (valid.some(r => positive(r.seconds) || positive(r.commands) || (isObj(r.usage) && ["output_tokens", "input_tokens", "cost_usd", "total_cost_usd"].some(k => positive((r.usage as Obj)[k]))))) shown.push("cost");
     if (runs.some(r => r.passed !== true && r.passed !== false)) shown.push("invalid");
@@ -798,7 +799,7 @@ function checksShown(trial: Obj, runs: Obj[]): boolean {
   const checksOf = (r: Obj): Obj => isObj(r.checks) ? r.checks : {};
   if (arms.size > 1) {
     const names = new Map<string, boolean>();
-    for (const r of recorded) for (const [k, v] of Object.entries(checksOf(r))) names.set(k, typeof v === "boolean" ? names.get(k) ?? true : false);
+    for (const r of recorded) for (const [k, v] of entriesOf(checksOf(r))) names.set(k, typeof v === "boolean" ? names.get(k) ?? true : false);
     return [...names.values()].some(Boolean) || runs.some(r => isObj(r.judge) && (r.judge.verdict === "pass" || r.judge.verdict === "fail"));
   }
   const scenarios = isObj(trial.plan) && Array.isArray(trial.plan.scenarios) ? trial.plan.scenarios.filter(isObj) : [];
@@ -806,7 +807,7 @@ function checksShown(trial: Obj, runs: Obj[]): boolean {
     const plan = scenarios.find(s => s.name === cs);
     const required = plan && Array.isArray(plan.required) ? plan.required.filter(x => typeof x === "string") : [];
     const kinds = new Map<string, string>();
-    for (const r of recorded.filter(x => x.scenario === cs)) for (const [k, v] of Object.entries(checksOf(r))) {
+    for (const r of recorded.filter(x => x.scenario === cs)) for (const [k, v] of entriesOf(checksOf(r))) {
       if (required.includes(k)) continue;
       const t = typeof v === "boolean" ? "boolean" : isNumber(v) ? "number" : "other";
       kinds.set(k, kinds.get(k) === undefined || kinds.get(k) === t ? t : "other");
@@ -920,11 +921,11 @@ function storyObligations(known: Known, trial: unknown, comparison: unknown, blo
     any = true; known.ranArms.forEach(a => alt(a, "arm")); known.ranCases.forEach(kase);
     // The pairwise view reads its own arms and cases, whatever the runs name.
     const pairwise = isObj(trial) && isObj(trial.pairwise) ? trial.pairwise : {};
-    for (const k of Object.keys(pairwise)) {
+    for (const k of keysIn(pairwise)) {
       const p = pairwise[k];
       if (!isObj(p)) continue;
       if (Array.isArray(p.arms)) p.arms.slice(0, 2).forEach(a => alt(a, "arm"));
-      if (isObj(p.scenarios)) Object.keys(p.scenarios).forEach(kase);
+      if (isObj(p.scenarios)) keysIn(p.scenarios).forEach(kase);
     }
   }
   const fromComparison = (data: Obj) => { any = true; for (const a of data.alternatives as unknown[]) if (isObj(a)) alt(a.id, "alternative"); comparisonCases(data).forEach(kase); };
@@ -1008,17 +1009,6 @@ function checkTrial(c: Checker, trial: unknown, where: string): boolean {
 }
 /** A run's verdict: passed, failed, or null for none (an invalid run). */
 const isVerdict = (v: unknown) => v === true || v === false || v === null;
-/** The arms a trial knows: those its well-formed runs ran and those its plan lists. */
-function trialArms(trial: Obj): string[] {
-  const out: string[] = [];
-  for (const r of Array.isArray(trial.runs) ? trial.runs : []) if (isObj(r) && isId(r.arm) && isId(r.scenario) && !out.includes(r.arm)) out.push(r.arm);
-  if (isObj(trial.plan) && isObj(trial.plan.arms)) for (const a of Object.keys(trial.plan.arms)) if (isId(a) && !out.includes(a)) out.push(a);
-  return out;
-}
-/** A pairwise judgment every view can read: two different arms the trial knows, with its overall counts and counts by case. */
-function wellFormedPair(p: unknown, known: string[]): boolean {
-  return isObj(p) && Array.isArray(p.arms) && p.arms.length === 2 && p.arms.every(a => isId(a) && known.includes(a)) && p.arms[0] !== p.arms[1] && isObj(p.overall) && isObj(p.scenarios);
-}
 /** The trial every check after checkTrial reads: only the runs, plan scenarios and pairwise judgments whose identifiers
  * are well formed, so no check descends into a record whose identifiers are malformed. */
 function wellFormedTrial(trial: unknown): unknown {
@@ -1026,7 +1016,7 @@ function wellFormedTrial(trial: unknown): unknown {
   const runs = trial.runs.filter(r => !isObj(r) || (isId(r.arm) && isId(r.scenario) && (r.job === undefined || r.job === null || isId(r.job)) && isVerdict(r.passed)));
   const plan = isObj(trial.plan) && Array.isArray(trial.plan.scenarios) ? { ...trial.plan, scenarios: trial.plan.scenarios.filter(sc => !isObj(sc) || isId(sc.name)) } : trial.plan;
   const known = trialArms(trial);
-  const pairwise = isObj(trial.pairwise) ? Object.fromEntries(Object.entries(trial.pairwise).filter(([, p]) => wellFormedPair(p, known))) : trial.pairwise;
+  const pairwise = isObj(trial.pairwise) ? Object.fromEntries(entriesOf(trial.pairwise).filter(([, p]) => wellFormedPair(p, known))) : trial.pairwise;
   return { ...trial, runs, ...(plan !== undefined ? { plan } : {}), ...(pairwise !== undefined ? { pairwise } : {}) };
 }
 /** A check's problems, moved from the place it names its input (`from`, such as "comparison") to where the input

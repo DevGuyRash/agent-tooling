@@ -8,7 +8,7 @@
  * a two-alternative taste test and a study of research directions with many
  * concepts each get the same reader-first page at their own size. A narrative
  * can include, exclude, reorder (after) and append, as with the trial report. */
-import { fmtInt } from "./core";
+import { fmtInt, entriesOf, keysIn } from "./core";
 import type { Alternative, Case, Comparison, Metric, Observation, Preference } from "./comparison-model";
 import { alternativeIds, caseKey, casesWords, groupPath, invalidJudgments, judgmentMetric, NO_CASE, NO_CASE_WORDS, observationStatus, winMatrix } from "./comparison-stats";
 import type { ReportSpec, SectionSpec, BlockSpec, ArmSpec } from "./model";
@@ -76,7 +76,7 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
 
   // Narrative labels win over the data's; narrative order leads, but only for alternatives that exist.
   const ids = alternativeIds(dataIn);
-  const rawLabels: unknown[] = Array.isArray(narrative.alternatives) ? narrative.alternatives : isObject(narrative.alternatives) ? Object.entries(narrative.alternatives).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
+  const rawLabels: unknown[] = Array.isArray(narrative.alternatives) ? narrative.alternatives : isObject(narrative.alternatives) ? entriesOf(narrative.alternatives).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
   const labels = rawLabels.filter((a): a is ArmSpec => isObject(a) && typeof a.id === "string");
   const order = [...new Set([...labels.map(a => a.id).filter(id => ids.includes(id)), ...ids])];
   const given = (id: string) => labels.find(a => a.id === id);
@@ -120,10 +120,10 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
       : undefined;
 
   const appended = new Map<string, BlockSpec[]>();
-  for (const [k, blocks] of Object.entries(isObject(narrative.append) ? narrative.append : {})) if (Array.isArray(blocks)) appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
+  for (const [k, blocks] of entriesOf(isObject(narrative.append) ? narrative.append : {})) if (Array.isArray(blocks)) appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
   const sections: Array<{ key: string; section: SectionSpec }> = [];
   // What each section's views say for this data, from the narrative's readings (keyed by section id or another name).
-  const readings = new Map<string, unknown>(isObject(narrative.readings) ? Object.entries(narrative.readings).map(([k, v]) => [alias(k), v]) : []);
+  const readings = new Map<string, unknown>(isObject(narrative.readings) ? entriesOf(narrative.readings).map(([k, v]) => [alias(k), v]) : []);
   const add = (key: string, s: SectionSpec) => sections.push({ key, section: { ...s, id: key, ...(readings.has(key) ? { reading: readings.get(key) as string | string[] } : {}), blocks: [...s.blocks, ...(appended.get(key) || [])] } });
 
   // ---------------------------------------------------------------- verdict
@@ -292,7 +292,7 @@ export function fromTrial(trial: TrialReport): Comparison {
   const valid = runs.filter(r => r.passed === true || r.passed === false);
   const alternatives: Alternative[] = axes.arms.map(id => {
     const entry = isObject(planned[id]) ? planned[id] as Record<string, unknown> : {};
-    const attributes = Object.fromEntries(Object.entries(entry).filter(([k]) => !MATERIAL.has(k)).map(([k, v]) => [k, scalar(v)]));
+    const attributes = Object.fromEntries(entriesOf(entry).filter(([k]) => !MATERIAL.has(k)).map(([k, v]) => [k, scalar(v)]));
     const text = typeof entry.instructions_text === "string" ? entry.instructions_text : undefined;
     return { id, ...(Object.keys(attributes).length ? { attributes } : {}), ...(text ? { content: text } : {}), ...(entry.instructions_truncated === true ? { note: "instructions shortened to the report's text bound" } : {}) };
   });
@@ -325,7 +325,7 @@ export function fromTrial(trial: TrialReport): Comparison {
   }
   // Check values: all-boolean checks are binary, all-numeric ones numeric; other values stay in the trial views.
   const checkTypes = new Map<string, Set<string>>();
-  for (const r of valid) for (const [k, v] of Object.entries(isObject(r.checks) ? r.checks : {})) (checkTypes.get(k) || checkTypes.set(k, new Set()).get(k)!).add(typeof v === "boolean" ? "boolean" : typeof v === "number" && Number.isFinite(v) ? "number" : "other");
+  for (const r of valid) for (const [k, v] of entriesOf(isObject(r.checks) ? r.checks : {})) (checkTypes.get(k) || checkTypes.set(k, new Set()).get(k)!).add(typeof v === "boolean" ? "boolean" : typeof v === "number" && Number.isFinite(v) ? "number" : "other");
   for (const [name, types] of [...checkTypes].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)) {
     if (types.size !== 1 || types.has("other")) continue;
     const boolean = types.has("boolean"), id = `check:${name}`, req = required.get(name);
@@ -338,12 +338,12 @@ export function fromTrial(trial: TrialReport): Comparison {
   }
   // Pairwise summaries: one judgment per counted pair, with inconsistent and invalid pairs as unreached judgments.
   const preferences: Preference[] = [];
-  const pairs = Object.entries(isObject(trial.pairwise) ? trial.pairwise : {}).filter(([, s]) => isObject(s) && Array.isArray(s.arms) && s.arms.length === 2);
+  const pairs = entriesOf(isObject(trial.pairwise) ? trial.pairwise : {}).filter(([, s]) => isObject(s) && Array.isArray(s.arms) && s.arms.length === 2);
   for (const [key, summary] of pairs) {
     const [a, b] = summary.arms.map(String), id = pairs.length === 1 ? "pairwise" : `pairwise:${key}`;
     const judge = isObject(summary.judge) && typeof summary.judge.model === "string" ? summary.judge.model : undefined;
     metrics.push({ id, label: pairs.length === 1 ? "Pairwise preference" : `Pairwise: ${a} vs ${b}`, kind: "preference", better: "higher", description: "A judge saw matched runs side by side in both orders; only pairs decided the same way in both orders count as decided." });
-    const scenarios = isObject(summary.scenarios) && Object.keys(summary.scenarios).length ? Object.entries(summary.scenarios) : [[undefined, summary.overall] as const];
+    const scenarios = isObject(summary.scenarios) && keysIn(summary.scenarios).length ? entriesOf(summary.scenarios) : [[undefined, summary.overall] as const];
     for (const [scenario, st] of scenarios) {
       if (!isObject(st)) continue;
       const n = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v > 0 ? v : 0;

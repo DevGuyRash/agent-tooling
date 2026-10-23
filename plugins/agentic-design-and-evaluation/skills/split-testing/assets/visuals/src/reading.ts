@@ -2,7 +2,7 @@
  * story before the results, and with every view what it shows, how to read it
  * and what this data says. The library writes "shows" and "how" for each of its
  * views; the author writes the story and what each view says here. */
-import { esc, inline, prose } from "./core";
+import { esc, inline, prose, entriesOf } from "./core";
 import type { RenderContext } from "./model";
 
 export interface Reading { shows?: string | string[]; how?: string | string[]; says?: string | string[] }
@@ -80,7 +80,7 @@ export function storyHtml(story: Story, ctx: RenderContext): string {
   if (!story || typeof story !== "object") return "";
   const part = (title: string, body: string) => body ? `<div class="av-story-part"><h3 class="av-story-h">${esc(title)}</h3>${body}</div>` : "";
   const entries = (record: unknown, name: (id: string) => string) => record && typeof record === "object" && !Array.isArray(record)
-    ? `<dl class="av-story-list">${Object.entries(record as Record<string, unknown>).filter(([, v]) => typeof v === "string" || Array.isArray(v)).map(([id, v]) => `<div><dt>${name(id)}</dt><dd>${prose(v as string | string[], "av-story-prose")}</dd></div>`).join("")}</dl>` : "";
+    ? `<dl class="av-story-list">${entriesOf(record as Record<string, unknown>).filter(([, v]) => typeof v === "string" || Array.isArray(v)).map(([id, v]) => `<div><dt>${name(id)}</dt><dd>${prose(v as string | string[], "av-story-prose")}</dd></div>`).join("")}</dl>` : "";
   const questions = Array.isArray(story.questions) ? story.questions.filter(q => typeof q === "string") : [];
   const glossary = Array.isArray(story.glossary) ? story.glossary.filter(g => g && typeof g === "object" && typeof g.term === "string") : [];
   return `<div class="av-story">${part("Background", prose(story.background, "av-story-prose"))}${part("What the decider wanted", story.intent ? `<blockquote class="av-story-intent">${prose(story.intent, "av-story-prose")}</blockquote>` : "")}${part("What was tested", questions.length ? `<ol class="av-story-questions">${questions.map(q => `<li>${inline(q)}</li>`).join("")}</ol>` : "")}${part("What was compared", entries(story.alternatives, id => ctx.arms.tag(id)))}${part("The cases", entries(story.cases, id => `<span class="av-story-case">${esc(ctx.caseLabels[id] || id)}</span>${ctx.caseLabels[id] && ctx.caseLabels[id] !== id ? ` <code>${esc(id)}</code>` : ""}`))}${part("How the decision was made", prose(story.rule, "av-story-prose"))}<div class="av-story-scope">${part("This report covers", prose(story.covers, "av-story-prose"))}${part("It does not cover", prose(story.notCovered, "av-story-prose"))}</div>${part("Words used here", glossary.length ? `<dl class="av-story-list">${glossary.map(g => `<div><dt>${esc(g.term)}</dt><dd>${prose(g.meaning, "av-story-prose")}</dd></div>`).join("")}</dl>` : "")}</div>`;

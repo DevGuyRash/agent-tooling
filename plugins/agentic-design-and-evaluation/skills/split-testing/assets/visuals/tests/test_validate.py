@@ -468,14 +468,16 @@ def id_base_trial() -> dict:
 
 
 def id_base_comparison() -> dict:
-    return {"alternatives": [{"id": "x"}, {"id": "y"}], "cases": [{"id": "c1"}], "metrics": [{"id": "m", "kind": "binary"}, {"id": "p", "kind": "preference"}],
-            "observations": [{"alternative": "x", "metric": "m", "case": "c1", "value": True}], "aggregates": [{"alternative": "y", "metric": "m", "case": "c1", "k": 1, "n": 2}],
+    return {"alternatives": [{"id": "x"}, {"id": "y"}], "cases": [{"id": "c1"}], "metrics": [{"id": "m", "kind": "binary"}, {"id": "p", "kind": "preference"}, {"id": "t", "kind": "numeric"}, {"id": "o", "kind": "ordinal", "levels": ["bad", "good"]}],
+            "observations": [{"alternative": "x", "metric": "m", "case": "c1", "value": True}],
+            "aggregates": [{"alternative": "y", "metric": "m", "case": "c1", "k": 1, "n": 2}, {"alternative": "y", "metric": "t", "case": "c1", "mean": 3, "sd": 1, "n": 4}, {"alternative": "y", "metric": "o", "case": "c1", "counts": {"good": 2}}],
             "preferences": [{"a": "x", "b": "y", "winner": "x", "case": "c1", "metric": "p"}], "rankings": [{"order": ["x", "y"], "case": "c1", "metric": "p"}]}
 
 
 def id_base_collection() -> dict:
     tiny = {"runs": [{"job": "j1", "arm": "a", "scenario": "c1", "repeat": 1, "passed": True, "valid": True}]}
-    return {"themes": [{"id": "t"}], "members": [{"id": "m1", "theme": "t", "trial": tiny}, {"id": "m2", "follows": "m1", "trial": tiny}], "pairs": [{"a": "m1", "b": "m2"}]}
+    small = {"alternatives": [{"id": "x"}], "metrics": [{"id": "m", "kind": "binary"}], "observations": [{"alternative": "x", "metric": "m", "value": True}]}
+    return {"themes": [{"id": "t"}], "members": [{"id": "m1", "theme": "t", "trial": tiny}, {"id": "m2", "follows": "m1", "trial": tiny}, {"id": "m3", "comparison": small}, {"id": "m4", "spec": {"title": "S", "sections": []}}], "pairs": [{"a": "m1", "b": "m2"}]}
 
 
 def id_one_arm_trial() -> dict:
@@ -568,8 +570,9 @@ REQUIRED_FIELDS = {
                               ("pairwise", "a|b", "arms"), ("pairwise", "a|b", "overall"), ("pairwise", "a|b", "scenarios")]),
     "comparison": (id_base_comparison, [("alternatives",), ("metrics",), ("alternatives", 0, "id"), ("cases", 0, "id"), ("metrics", 0, "id"), ("metrics", 0, "kind"),
                                         ("observations", 0, "alternative"), ("observations", 0, "metric"), ("aggregates", 0, "alternative"), ("aggregates", 0, "metric"),
-                                        ("aggregates", 0, "k"), ("aggregates", 0, "n"), ("preferences", 0, "a"), ("preferences", 0, "b"), ("rankings", 0, "order")]),
-    "collection": (id_base_collection, [("members",), ("members", 0, "id"), ("members", 0, "trial"), ("themes", 0, "id"), ("pairs", 0, "a"), ("pairs", 0, "b")]),
+                                        ("aggregates", 0, "k"), ("aggregates", 0, "n"), ("aggregates", 1, "mean"), ("aggregates", 2, "counts"),
+                                        ("preferences", 0, "a"), ("preferences", 0, "b"), ("rankings", 0, "order")]),
+    "collection": (id_base_collection, [("members",), ("members", 0, "id"), ("members", 0, "trial"), ("members", 2, "comparison"), ("members", 3, "spec"), ("themes", 0, "id"), ("pairs", 0, "a"), ("pairs", 0, "b")]),
 }
 
 
@@ -631,6 +634,74 @@ def removal_failures() -> tuple[list[str], int]:
         if drawn and kind == "trial" and field[0] == "pairwise" and drawn["duels"]:
             failures.append(f"{label}: the pairwise view draws a judgment whose {name} is missing")
     return failures, len(entries)
+
+
+# Every keyed map a check reads, given a "$" entry carrying malformed content: a "$" key is a note, so each checker
+# finds exactly what it finds without it, and both agree.
+def note_cases() -> list[tuple[str, dict, dict]]:
+    ghost = {"arms": ["ghost-a", "ghost-b"], "overall": {"a_wins": 1}, "scenarios": {"ghost-case": {"a_wins": 1}}}
+
+    def trial_with(change) -> dict:
+        t = id_base_trial()
+        t["plan"]["arms"] = {"a": {"model": "m"}, "b": {"model": "m"}}
+        for r in t["runs"]:
+            r["checks"] = {"ok": r["passed"]}
+        change(t)
+        return t
+
+    def comparison_with(change) -> dict:
+        c = id_base_comparison()
+        c["alternatives"][0]["attributes"] = {"Spread": "pb"}
+        c["metrics"].append({"id": "taste", "kind": "ordinal", "levels": ["bad", "good"]})
+        c["aggregates"].append({"alternative": "x", "metric": "taste", "case": "c1", "counts": {"good": 2}})
+        change(c)
+        return c
+
+    def nothing(_):
+        return None
+    spec = lambda t: {"title": "T", "sections": [{"title": "S", "reading": "r", "blocks": [{"type": "pairwise"}, {"type": "checks"}]}], "trial": t}  # noqa: E731
+    cspec = lambda c, scores: {"title": "T", "sections": [{"title": "S", "reading": "r", "blocks": [{"type": "decision-matrix", "criteria": [{"id": "cost", "scores": scores}]}]}], "comparison": c}  # noqa: E731
+    out = []
+    for name, change in [("pairwise judgments", lambda t: t["pairwise"].__setitem__("$p", ghost)),
+                         ("a judgment's counts by case", lambda t: t["pairwise"]["a|b"]["scenarios"].__setitem__("$ghost", {"a_wins": "x"})),
+                         ("a plan's arms", lambda t: t["plan"]["arms"].__setitem__("$ghost", {"model": {"odd": True}})),
+                         ("a run's checks", lambda t: t["runs"][0]["checks"].__setitem__("$ghost", "not a check"))]:
+        out += [(f"{name} via spec", spec(trial_with(change)), spec(trial_with(nothing))),
+                (f"{name} via narrative", {"trial": trial_with(change)}, {"trial": trial_with(nothing)}),
+                (f"{name} via collection", {"members": [{"id": "m", "trial": trial_with(change)}]}, {"members": [{"id": "m", "trial": trial_with(nothing)}]})]
+    for name, change in [("a total's level counts", lambda c: c["aggregates"][-1]["counts"].__setitem__("$ghost", 99)),
+                         ("an alternative's attributes", lambda c: c["alternatives"][0]["attributes"].__setitem__("$ghost", {"odd": True}))]:
+        out += [(f"{name} via comparison", comparison_with(change), comparison_with(nothing)),
+                (f"{name} via spec", cspec(comparison_with(change), {"x": 1}), cspec(comparison_with(nothing), {"x": 1}))]
+    out += [("a criterion's scores via spec", cspec(comparison_with(nothing), {"x": 1, "$ghost": {"odd": True}}), cspec(comparison_with(nothing), {"x": 1})),
+            ("a story's descriptions via spec", {**spec(trial_with(nothing)), "story": {**story_for(), "alternatives": {"$ghost": "Ghost."}, "cases": {"$ghost": "Ghost."}}}, {**spec(trial_with(nothing)), "story": {**story_for(), "alternatives": {}, "cases": {}}}),
+            ("a collection's readings via collection", {**id_base_collection(), "readings": {"$ghost": {"odd": True}}}, {**id_base_collection(), "readings": {}})]
+    return out
+
+
+class NoteKeySweepTest(unittest.TestCase):
+    """A "$" key is a note in every keyed map, for both checkers: each finds what it finds without it, both agree, neither raises."""
+
+    def test_every_keyed_map_with_a_note(self) -> None:
+        cases = note_cases()
+        entries = []
+        for _, noted, plain in cases:
+            for given in (noted, plain):
+                kind = "narrative" if "trial" in given and "title" not in given else "spec" if "title" in given else "collection" if "members" in given else "comparison"
+                entries.append({"kind": kind, "input": {} if kind == "narrative" else given, **({"trial": given["trial"]} if kind == "narrative" else {})})
+        with Scratch() as directory:
+            file = directory / "notes.json"
+            file.write_text(json.dumps(entries), encoding="utf-8")
+            result = run_node(TESTS / "validate.cjs", "--ids", file, "--out", directory / "page.json", timeout=300)
+            self.assertEqual(result.returncode, 0, result.stderr[-3000:])
+            page = json.loads((directory / "page.json").read_text(encoding="utf-8"))
+        for i, (name, _, _) in enumerate(cases):
+            with self.subTest(map=name):
+                noted, plain = entries[2 * i], entries[2 * i + 1]
+                ours = [R.validate_spec(e["input"]) if e["kind"] == "spec" else R.validate_narrative({}, e["trial"]) if e["kind"] == "narrative" else R.validate_collection(e["input"]) if e["kind"] == "collection" else R.validate_comparison(e["input"]) for e in (noted, plain)]
+                self.assertEqual(ours[0], page[2 * i], "the checkers agree, with the note")
+                self.assertEqual(ours[1], page[2 * i + 1], "and without it")
+                self.assertEqual(ours[0], ours[1], "the note changes nothing a check finds")
 
 
 class RequiredFieldSweepTest(unittest.TestCase):
