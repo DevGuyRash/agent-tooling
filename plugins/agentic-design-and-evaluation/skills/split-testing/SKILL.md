@@ -37,7 +37,7 @@ sequenceDiagram
     Note over Y: discover concerns widely,<br/>ground each criterion
     alt costly or hard to reverse
       Y->>S: the draft criteria and the originals
-      S-->>Y: false passes? false failures?<br/>missing concerns?
+      S-->>Y: passes but fails intended use?<br/>fails for an irrelevant reason?<br/>missing consequential concern?
     else small and reversible
       Note over Y: ask the same three questions<br/>of your own draft
     end
@@ -49,21 +49,23 @@ sequenceDiagram
   else new observations are needed
     rect rgba(46, 139, 87, 0.14)
       Note over Y,J: Prepare
-      alt small choice, item copied unchanged from an alternative's spec
-        Note over Y: check it against that source
-      else any other setup item (default: none)
-        Y->>S: the item and its grounds
-        S-->>Y: grounds and scope checked
-      end
+      Note over Y: setup defaults to none. Small, reversible choice:<br/>check an item copied unchanged from an<br/>alternative's spec against that spec yourself
+      Y->>S: every other setup item and its grounds
+      S-->>Y: grounds and scope checked
       Note over Y: probe each item live under scored conditions,<br/>a step under test is scored, not pre-run
-      Y->>K: known-good and known-bad cases,<br/>real outputs read by hand
-      K-->>Y: counts only if every verdict is right
-      alt verdicts have grounded right answers
-        Y->>J: the same reference cases and real outputs
-        J-->>Y: qualified (costly model judging:<br/>a family the executors don't use)
-      else a preference with no right answer
-        Y->>J: the attribute, the scale,<br/>presentation tests
-        J-->>Y: understood, disagreement is an outcome
+      opt deterministic checks are used
+        Y->>K: known-good and known-bad cases,<br/>real outputs read by hand
+        K-->>Y: counts only if every verdict is right
+      end
+      opt a judge or rater is used
+        alt verdicts have grounded right answers
+          Y->>J: the same kind of reference cases and real outputs
+          J-->>Y: counts only if every verdict is right
+        else a preference with no right answer
+          Y->>J: the attribute, the scale,<br/>presentation tests
+          J-->>Y: understood, disagreement is an outcome
+        end
+        Note over Y,J: costly model judging includes a judge<br/>from a family the executors don't use
       end
       Note over Y: fix the decision rule
     end
@@ -71,7 +73,7 @@ sequenceDiagram
     rect rgba(218, 165, 32, 0.16)
       Note over Y,J: Observe, blind and repeated
       loop every alternative × case × repeat, interleaved
-        alt agents do the work (trial runtime)
+        alt agents do the work
           Y->>W: fresh workspace,<br/>its instructions, the task only
           W-->>Y: output, actions, final state
         else people, measurements, or a ready artifact
@@ -82,7 +84,7 @@ sequenceDiagram
           K-->>Y: true, false, or cannot tell
         end
         opt a judge or rater assesses it
-          Y->>J: the output, its producer unnamed,<br/>one judge or panel for all alternatives
+          Y->>J: the output, its producer unnamed,<br/>same judge or panel across alternatives,<br/>a fresh context per verdict
           J-->>Y: verdict, rating, or choice
         end
         Note over Y: record it, or mark it invalid<br/>when what decides it was not observed
