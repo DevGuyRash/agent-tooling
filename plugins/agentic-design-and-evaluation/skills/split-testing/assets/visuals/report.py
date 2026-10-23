@@ -636,13 +636,13 @@ class Checker:
                     self.type(x, "text", self.join(where, i))
         if kind == "member-id" and not MEMBER_ID.fullmatch(v):
             self.add("error", where, f'"{clip(v)}" cannot be a report id, since links name reports by id', "start with a letter and use only letters, digits, _ . or -")
-        if kind == "theme-id" and not v.strip():
+        if kind == "theme-id" and is_blank(v):
             self.add("error", where, "a theme id cannot be blank, since reports join their theme by its id", "name the theme")
         if kind == "section-id" and not SECTION_ID.fullmatch(v):
             self.add("warning", where, f'"{clip(v)}" cannot be used as a section id, so the section gets a generated one', "start with a letter and use only letters, digits, _ : . or -")
         # An id that is not blank but breaks the identifier rule is refused here; a blank one is told by its kind's own check.
-        if kind in ID_KINDS and v.strip() != "" and not is_id(v):
-            return self.add("error", where, f'"{clip(v)}" cannot be an id: an id starts with no "$" (kept for notes) and has no space or tab at either end', "write the id without them")
+        if kind in ID_KINDS and not is_blank(v) and not is_id(v):
+            return self.add("error", where, f'"{clip(v)}" cannot be an id: an id starts with no "$" (kept for notes) and has no whitespace at either end', "write the id without them")
         if kind in IDS:
             self.id(v, kind, where)
         return None
@@ -662,7 +662,7 @@ class Checker:
         if not spec:
             return
         # A blank case names no case: every view reads that evidence as evidence naming no case.
-        if kind == "comparison-case" and not value.strip():
+        if kind == "comparison-case" and is_blank(value):
             if self.known["comparison"]:
                 self.add("warning", where, "an empty or blank case names no case: it stands for the evidence naming no case", 'name a case, or leave "case" out where the evidence names none')
             return
@@ -893,13 +893,23 @@ def named_ids(value, field, out: dict) -> None:
             named_ids(value.get(k), f, out)
 
 
+# Whitespace, one explicit set for both checkers (src/core.ts WHITESPACE): ASCII space and tab, line breaks, and all
+# Unicode whitespace (no-break and em spaces, the byte-order mark, next-line and the information separators among them).
+WHITESPACE = "\t\n\u000b\f\r \u001c\u001d\u001e\u001f\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+
+
+def is_blank(v: str) -> bool:
+    """Text made of whitespace alone, or nothing (src/core.ts isBlank)."""
+    return all(ch in WHITESPACE for ch in v)
+
+
 def is_id(v) -> bool:
     """An identifier (src/core.ts isId): text with something in it that starts with no "$" (kept for notes) and has no
-    space or tab at either end."""
-    return isinstance(v, str) and v != "" and not v.startswith("$") and v == v.strip()
+    whitespace at either end."""
+    return isinstance(v, str) and v != "" and not v.startswith("$") and v[0] not in WHITESPACE and v[-1] not in WHITESPACE
 
 
-ID_HINT = 'an id is text that starts with no "$" (kept for notes) and has no space or tab at either end, as trial.py report RUN_DIR --out FILE writes it'
+ID_HINT = 'an id is text that starts with no "$" (kept for notes) and has no whitespace at either end, as trial.py report RUN_DIR --out FILE writes it'
 
 
 def check_trial_data(c, trial, where: str) -> bool:
@@ -1052,7 +1062,7 @@ def comparison_cases(data: dict) -> list:
     out: list = []
     # Evidence naming no case (a case missing, null, empty or only spaces) names none, as every view reads it.
     def named(v) -> bool:
-        return isinstance(v, str) and v.strip() != "" and v not in out
+        return isinstance(v, str) and not is_blank(v) and v not in out
     for x in data.get("cases") if isinstance(data.get("cases"), list) else []:
         if isinstance(x, dict) and named(x.get("id")):
             out.append(x["id"])
@@ -1214,10 +1224,28 @@ def story_checks(c, owner: dict, at: str, needs: dict) -> None:
                 file_refs(c, g.get("meaning"), c.join(c.join(c.join(where, "glossary"), i), "meaning"))
 
 
+def resolve_sections(record, section) -> tuple[dict, list]:
+    """A record keyed by section names, resolved as src/sections.ts resolveSections does: each section's value is that of
+    the first key naming it, in the record's order (entries_of), and each later key naming the same section is a clash,
+    kept with both keys."""
+    values, keys, clashes = {}, {}, []
+    for k, v in entries_of(record):
+        s = section(k)
+        if s in keys:
+            clashes.append((s, keys[s], k))
+        else:
+            keys[s], values[s] = k, v
+    return values, clashes
+
+
 def readings_checks(c, owner: dict, at: str, required: list[str], names: list[str], key) -> None:
     where = c.join(at, "readings")
     given = owner["readings"] if isinstance(owner.get("readings"), dict) else {}
-    covered = [key(k) for k in keys_of(given) if said(given[k])]
+    # The readings exactly as the composition shows them (resolve_sections); two keys for one section are refused, naming both.
+    values, clashes = resolve_sections(given, key)
+    for section, first, again in clashes:
+        c.add("error", c.join(where, again), f'"{clip(again)}" names the "{section}" section, as "{clip(first)}" does, so only "{clip(first)}" is shown', f'give the "{section}" reading once')
+    covered = [s for s, v in values.items() if said(v)]
     for ident in required:
         if ident not in covered:
             c.add("error", where, f'no reading for the "{ident}" section', f"add readings.{ident}: what a newcomer should take from that section's views for this data, in plain words, with the numbers that matter")

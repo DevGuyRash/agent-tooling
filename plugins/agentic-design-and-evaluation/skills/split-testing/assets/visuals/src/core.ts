@@ -35,9 +35,14 @@ export function slug(value: string, prefix = "av"): string {
   return `${prefix}-${base || "x"}-${hash(String(value))}`;
 }
 
-/** An identifier: text with something in it that starts with no "$" (kept for notes) and has no space or tab at either
+/** Whitespace, one explicit set for both checkers and every view: ASCII space and tab, line breaks, and all Unicode
+ * whitespace (no-break and em spaces, the byte-order mark, next-line and the information separators among them). */
+export const WHITESPACE = "\t\n\u000b\f\r \u001c\u001d\u001e\u001f\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
+/** Text made of whitespace alone, or nothing. */
+export const isBlank = (v: string): boolean => [...v].every(ch => WHITESPACE.includes(ch));
+/** An identifier: text with something in it that starts with no "$" (kept for notes) and has no whitespace at either
  * end. Every check of every kind of data holds each id to this, so every view compares ids exactly as written. */
-export const isId = (v: unknown): v is string => typeof v === "string" && v !== "" && !v.startsWith("$") && v === v.trim();
+export const isId = (v: unknown): v is string => typeof v === "string" && v !== "" && !v.startsWith("$") && !WHITESPACE.includes(v[0]) && !WHITESPACE.includes(v[v.length - 1]);
 /** The entries of a keyed map in data, in its own order, as every check and every view lists them: a trial's pairwise
  * judgments, a judgment's counts by case, a plan's arms, a run's checks and usage, a total's level counts, an
  * alternative's attributes, a criterion's scores, and a narrative's or story's records. A key starting with "$" is a

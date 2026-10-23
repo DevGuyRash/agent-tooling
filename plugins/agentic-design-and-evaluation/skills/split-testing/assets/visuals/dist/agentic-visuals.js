@@ -72,7 +72,7 @@ var __importStar = (this && this.__importStar) || (function () {
 define("core", ["require", "exports"], function (require, exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.outcomeLabel = exports.isOutcome = exports.count = exports.num = exports.isNum = exports.keysIn = exports.isId = void 0;
+    exports.outcomeLabel = exports.isOutcome = exports.count = exports.num = exports.isNum = exports.keysIn = exports.isId = exports.isBlank = exports.WHITESPACE = void 0;
     exports.escapeText = escapeText;
     exports.esc = esc;
     exports.documentId = documentId;
@@ -143,9 +143,15 @@ define("core", ["require", "exports"], function (require, exports) {
         const base = String(value).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
         return `${prefix}-${base || "x"}-${hash(String(value))}`;
     }
-    /** An identifier: text with something in it that starts with no "$" (kept for notes) and has no space or tab at either
+    /** Whitespace, one explicit set for both checkers and every view: ASCII space and tab, line breaks, and all Unicode
+     * whitespace (no-break and em spaces, the byte-order mark, next-line and the information separators among them). */
+    exports.WHITESPACE = "\t\n\u000b\f\r \u001c\u001d\u001e\u001f\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
+    /** Text made of whitespace alone, or nothing. */
+    const isBlank = (v) => [...v].every(ch => exports.WHITESPACE.includes(ch));
+    exports.isBlank = isBlank;
+    /** An identifier: text with something in it that starts with no "$" (kept for notes) and has no whitespace at either
      * end. Every check of every kind of data holds each id to this, so every view compares ids exactly as written. */
-    const isId = (v) => typeof v === "string" && v !== "" && !v.startsWith("$") && v === v.trim();
+    const isId = (v) => typeof v === "string" && v !== "" && !v.startsWith("$") && !exports.WHITESPACE.includes(v[0]) && !exports.WHITESPACE.includes(v[v.length - 1]);
     exports.isId = isId;
     function entriesOf(map) {
         if (!map || typeof map !== "object" || Array.isArray(map))
@@ -407,7 +413,7 @@ define("stats", ["require", "exports", "core"], function (require, exports, core
      * missing, null, empty or only spaces. Every grouping, count, weight, filter and wording of evidence by case reads its
      * case through this, so those forms are one group everywhere. */
     function caseKey(c) {
-        return c === undefined || c === null || (typeof c === "string" && !c.trim()) ? exports.NO_CASE : String(c);
+        return c === undefined || c === null || (typeof c === "string" && (0, core_1.isBlank)(c)) ? exports.NO_CASE : String(c);
     }
     /** How many named cases a list of case keys holds, and whether evidence naming no case is among them. */
     function caseSplit(ids) {
@@ -459,6 +465,7 @@ define("trial-model", ["require", "exports", "core", "stats"], function (require
     exports.caseChecks = caseChecks;
     exports.trialArms = trialArms;
     exports.wellFormedPair = wellFormedPair;
+    exports.wellFormedPairs = wellFormedPairs;
     function outcomeOf(run) {
         return run.passed === true ? "pass" : run.passed === false ? "fail" : "invalid";
     }
@@ -805,6 +812,12 @@ define("trial-model", ["require", "exports", "core", "stats"], function (require
      * draws none. */
     function wellFormedPair(p, known) {
         return isPlain(p) && Array.isArray(p.arms) && p.arms.length === 2 && p.arms.every(a => (0, core_2.isId)(a) && known.includes(a)) && p.arms[0] !== p.arms[1] && isPlain(p.overall) && isPlain(p.scenarios) && (0, core_2.keysIn)(p.scenarios).every(core_2.isId);
+    }
+    /** The pairwise judgments every check and every view reads, listed one way (entriesOf): each named by an id and
+     * well formed (wellFormedPair). The checks refuse the rest, and the pairwise view draws none of them. */
+    function wellFormedPairs(trial) {
+        const known = trialArms(trial);
+        return (0, core_2.entriesOf)(isPlain(trial) ? trial.pairwise : undefined).filter(([k, p]) => (0, core_2.isId)(k) && wellFormedPair(p, known));
     }
 });
 define("failure", ["require", "exports", "core", "trial-model", "trial-model"], function (require, exports, core_3, trial_model_1, trial_model_2) {
@@ -3082,8 +3095,7 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
         const data = trialOf(ctx, "pairwise");
         // Only the judgments the checks accept (wellFormedPair: two different arms this trial knows, with their counts), listed
         // as the checks list them (entriesOf, where a "$" key is a note): a malformed one is refused there and not drawn here.
-        const known = (0, trial_model_3.trialArms)(data);
-        const pairs = (0, core_7.entriesOf)(data.pairwise).filter(([k, p]) => (0, trial_model_3.wellFormedPair)(p, known) && (!input.pair || k === input.pair));
+        const pairs = (0, trial_model_3.wellFormedPairs)(data).filter(([k]) => !input.pair || k === input.pair);
         if (!pairs.length)
             return (0, frame_1.frame)("pairwise", input, (0, frame_1.empty)("No pairwise judgments were run."));
         const segs = ["a_wins", "tie", "b_wins", "inconsistent", "invalid"];
@@ -7750,7 +7762,38 @@ ${metricIds.length > 1 ? `<label class="av-field"><span>Metric</span><select dat
         return (0, frame_8.frame)("observations", { ...input, description }, `<p class="av-jv-lede av-obs-lede">${sentence}</p>${tools}<div class="av-scroll-x av-obs-wrap"><table class="av-obs" data-av-table="observations" data-av-noun="observations">${head}<tbody>${body}</tbody></table></div>`);
     }
 });
-define("compose", ["require", "exports", "core", "stats", "trial-model", "validate"], function (require, exports, core_16, stats_12, trial_model_9, validate_1) {
+define("sections", ["require", "exports", "core"], function (require, exports, core_16) {
+    "use strict";
+    Object.defineProperty(exports, "__esModule", { value: true });
+    exports.comparisonSection = exports.trialSection = exports.COMPARISON_SECTION_ALIASES = exports.TRIAL_SECTION_ALIASES = void 0;
+    exports.resolveSections = resolveSections;
+    /** Earlier ids that still name a trial report's default sections. */
+    exports.TRIAL_SECTION_ALIASES = { plan: "setup" };
+    /** Other names a comparison report's sections answer to. */
+    exports.COMPARISON_SECTION_ALIASES = { setup: "compared", alternatives: "compared", metrics: "results", hierarchy: "groups", preferences: "judgments", pairwise: "judgments", matrix: "decision", ledger: "observations", runs: "observations" };
+    const via = (aliases) => (id) => { const k = String(id); return Object.prototype.hasOwnProperty.call(aliases, k) ? aliases[k] : k; };
+    /** The trial section a name stands for. */
+    exports.trialSection = via(exports.TRIAL_SECTION_ALIASES);
+    /** The comparison section a name stands for. */
+    exports.comparisonSection = via(exports.COMPARISON_SECTION_ALIASES);
+    /** A record keyed by section names, resolved: each section's value is that of the first key naming it, in the record's
+     * own order (entriesOf: a "$" key is a note), and each later key naming the same section is a clash, kept with both
+     * keys. Both compositions show exactly `values`; the checks assess exactly `values` and refuse every clash. */
+    function resolveSections(record, section) {
+        const values = new Map(), keys = new Map(), clashes = [];
+        for (const [k, v] of (0, core_16.entriesOf)(record)) {
+            const s = section(k);
+            if (keys.has(s))
+                clashes.push({ section: s, first: keys.get(s), again: k });
+            else {
+                keys.set(s, k);
+                values.set(s, v);
+            }
+        }
+        return { values, keys, clashes };
+    }
+});
+define("compose", ["require", "exports", "sections", "core", "stats", "trial-model", "validate"], function (require, exports, sections_1, core_17, stats_12, trial_model_9, validate_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.SECTION_IDS = void 0;
@@ -7759,9 +7802,8 @@ define("compose", ["require", "exports", "core", "stats", "trial-model", "valida
     /** The default sections' ids, in reading order. A section with nothing to show for a trial is left out;
      * "grid" is drawn only when include names it. */
     exports.SECTION_IDS = ["verdict", "setup", "arms", "cases", "grid", "failures", "checks", "pairwise", "cost", "invalid", "runs"];
-    /** Earlier ids that still name a default section. */
-    const ALIASES = { plan: "setup" };
-    const alias = (id) => { const k = String(id); return ALIASES[k] || k; };
+    /** The section a name stands for (an earlier id still names a default section). */
+    const alias = sections_1.trialSection;
     const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
     /** A date range in words (UTC), such as "4–5 Oct 2026"; unreadable dates are shown as written. */
     function fmtDates(first, last) {
@@ -7795,7 +7837,7 @@ define("compose", ["require", "exports", "core", "stats", "trial-model", "valida
             problems = [{ level: "warning", where: "narrative", message: `The narrative could not be checked: ${error instanceof Error ? error.message : String(error)}` }];
         }
         const axes = (0, trial_model_9.trialAxes)(data);
-        const rawArms = Array.isArray(narrative.arms) ? narrative.arms : isObject(narrative.arms) ? (0, core_16.entriesOf)(narrative.arms).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
+        const rawArms = Array.isArray(narrative.arms) ? narrative.arms : isObject(narrative.arms) ? (0, core_17.entriesOf)(narrative.arms).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
         const armSpecs = rawArms.filter((a) => isObject(a) && typeof a.id === "string");
         // Narrative arms set the identity order, but only arms that ran enter it: a misspelled id must not shift every color.
         const order = [...new Set([...armSpecs.map(a => a.id).filter(id => axes.arms.includes(id)), ...axes.arms])];
@@ -7860,17 +7902,18 @@ define("compose", ["require", "exports", "core", "stats", "trial-model", "valida
             }
         const breakdown = [...reasons.entries()].sort((a, b) => b[1] - a[1]).map(([k, n]) => `\`${k}\` ×${n}`).join(", ");
         const alert = all.runs && !anyValid
-            ? { text: `All ${(0, core_16.fmtInt)(all.runs)} run${all.runs === 1 ? " is" : "s are"} invalid (${breakdown}), so no pass rate can be given. Invalid runs are not failures.`, href: "#invalid", link: "What happened, and what would fix it" }
+            ? { text: `All ${(0, core_17.fmtInt)(all.runs)} run${all.runs === 1 ? " is" : "s are"} invalid (${breakdown}), so no pass rate can be given. Invalid runs are not failures.`, href: "#invalid", link: "What happened, and what would fix it" }
             : all.invalid && all.invalid / all.runs >= 0.2
-                ? { text: `${(0, core_16.fmtInt)(all.invalid)} of ${(0, core_16.fmtInt)(all.runs)} runs produced no valid result (${breakdown}). They are excluded from every rate and never counted as failures.`, href: "#invalid", link: "Invalid runs" }
+                ? { text: `${(0, core_17.fmtInt)(all.invalid)} of ${(0, core_17.fmtInt)(all.runs)} runs produced no valid result (${breakdown}). They are excluded from every rate and never counted as failures.`, href: "#invalid", link: "Invalid runs" }
                 : undefined;
         const appended = new Map();
-        for (const [k, blocks] of (0, core_16.entriesOf)(isObject(narrative.append) ? narrative.append : {}))
+        for (const [k, blocks] of (0, core_17.entriesOf)(isObject(narrative.append) ? narrative.append : {}))
             if (Array.isArray(blocks))
                 appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
         const sections = [];
         // What each section's views say for this data, from the narrative's readings (keyed by section id or an earlier name).
-        const readings = new Map(isObject(narrative.readings) ? (0, core_16.entriesOf)(narrative.readings).map(([k, v]) => [alias(k), v]) : []);
+        // Resolved as the checks resolve them (resolveSections): the first key naming a section gives its reading.
+        const readings = (0, sections_1.resolveSections)(narrative.readings, alias).values;
         const add = (key, s) => sections.push({ key, section: { ...s, id: key, ...(readings.has(key) ? { reading: readings.get(key) } : {}), blocks: [...s.blocks, ...(appended.get(key) || [])] } });
         // ---------------------------------------------------------------- verdict
         const decision = isObject(narrative.decision) ? narrative.decision : null;
@@ -7886,12 +7929,12 @@ define("compose", ["require", "exports", "core", "stats", "trial-model", "valida
             title: "Verdict", label: "Verdict", blocks: [verdict, {
                     type: "figures", items: [
                         { value: all.runs, label: "Runs" },
-                        { value: all.valid, label: "Valid", note: all.runs ? (0, core_16.fmtPct)(all.valid / all.runs) : undefined, tone: anyValid ? "pass" : "warn" },
+                        { value: all.valid, label: "Valid", note: all.runs ? (0, core_17.fmtPct)(all.valid / all.runs) : undefined, tone: anyValid ? "pass" : "warn" },
                         { value: all.invalid, label: "Invalid", note: all.invalid ? "excluded, not failures" : "none", tone: all.invalid ? "warn" : "neutral" },
                         // Over several cases the runs repeat each case rather than sample new ones: plain counts, and each case's own interval under Cases.
                         ...(!multiArm && anyValid ? [one.cases > 1
                                 ? { value: `${one.pass} of ${one.valid}`, label: "Runs passed", note: `across ${one.over}; each case's rate and 95% interval are under Cases` }
-                                : { value: (0, core_16.fmtPct)(one.rate), label: "Pass rate", note: `${one.pass} of ${one.valid} valid${one.interval ? ` · 95% ${(0, core_16.fmtPct)(one.interval[0])}–${(0, core_16.fmtPct)(one.interval[1])}` : ""}` }] : []),
+                                : { value: (0, core_17.fmtPct)(one.rate), label: "Pass rate", note: `${one.pass} of ${one.valid} valid${one.interval ? ` · 95% ${(0, core_17.fmtPct)(one.interval[0])}–${(0, core_17.fmtPct)(one.interval[1])}` : ""}` }] : []),
                         { value: axes.arms.length, label: axes.arms.length === 1 ? "Arm" : "Arms" },
                         { value: baseCount, label: baseCount === 1 ? "Case" : "Cases", note: pairs.length ? `+${pairs.length} variant${pairs.length === 1 ? "" : "s"}: ${axes.cases.length} versions` : undefined },
                         { value: range ? (range.min === range.max ? `×${range.max}` : `×${range.min}–${range.max}`) : "—", label: "Repeats", note: range && range.min !== range.max ? "varies by arm or case" : undefined },
@@ -7973,7 +8016,7 @@ define("compose", ["require", "exports", "core", "stats", "trial-model", "valida
         else if (anyValid && !multiArm && cases.some(c => (0, trial_model_9.caseChecks)(data, c, axes.arms).measures.length))
             // One arm: each dossier already shows its required checks and judge, so this section keeps only the measures.
             add("checks", { title: "Recorded measures", label: "Measures", lead: "What each case's checks recorded besides pass and fail, over valid runs: values the plan records but does not require, so they never decide a pass. The required checks and the judge are in each case's dossier above.", blocks: [{ type: "checks", required: false, ...(pairs.length ? { pairs } : {}) }] });
-        if (isObject(data.pairwise) && (0, core_16.keysIn)(data.pairwise).length)
+        if (isObject(data.pairwise) && (0, core_17.keysIn)(data.pairwise).length)
             add("pairwise", { title: "Pairwise judgments", label: "Pairwise", lead: "A judge saw matched runs side by side in both orders. Only pairs decided the same way in both orders count toward a win rate.", blocks: [{ type: "pairwise" }] });
         if (anyValid && (0, trial_model_9.costMeasures)(data).length)
             add("cost", { title: "Cost and time", label: "Cost", lead: "Every valid run's usage as its executor reported it. Executors report different fields, so compare like with like.", blocks: [{ type: "cost" }] });
@@ -8007,7 +8050,7 @@ define("compose", ["require", "exports", "core", "stats", "trial-model", "valida
         // Without a narrative the page has no question of its own; the plan's rule is the one place that says what the trial tested.
         const purpose = rule && !narrative.summary && !narrative.question && !narrative.title ? " What the trial tested is stated only in its decision rule, quoted under Verdict." : "";
         const shape = order.length
-            ? `${armText} on ${caseText}${reps ? `, ${reps} each` : ""}: ${(0, core_16.fmtInt)(all.runs)} run${all.runs === 1 ? "" : "s"}${judgeGroups.length ? `, judged by ${judgeName}` : ""}.${purpose}`
+            ? `${armText} on ${caseText}${reps ? `, ${reps} each` : ""}: ${(0, core_17.fmtInt)(all.runs)} run${all.runs === 1 ? "" : "s"}${judgeGroups.length ? `, judged by ${judgeName}` : ""}.${purpose}`
             : undefined;
         const ran = isObject(data.ran) ? fmtDates(data.ran.first, data.ran.last) : null;
         const written = fmtDates(data.generated_at);
@@ -8029,7 +8072,7 @@ define("compose", ["require", "exports", "core", "stats", "trial-model", "valida
         }, problems);
     }
 });
-define("comparison-compose", ["require", "exports", "core", "comparison-stats", "trial-model", "validate"], function (require, exports, core_17, comparison_stats_3, trial_model_10, validate_2) {
+define("comparison-compose", ["require", "exports", "sections", "core", "comparison-stats", "trial-model", "validate", "sections"], function (require, exports, sections_2, core_18, comparison_stats_3, trial_model_10, validate_2, sections_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.COMPARISON_SECTION_ALIASES = exports.COMPARISON_SECTION_IDS = void 0;
@@ -8037,14 +8080,14 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
     exports.fromTrial = fromTrial;
     /** The default sections' ids, in reading order; each appears only when the comparison holds its data. */
     exports.COMPARISON_SECTION_IDS = ["verdict", "compared", "results", "differences", "groups", "cases", "judgments", "decision", "observations", "sources"];
-    /** Other names readers reach for, mapped to a default section. */
-    exports.COMPARISON_SECTION_ALIASES = { setup: "compared", alternatives: "compared", metrics: "results", hierarchy: "groups", preferences: "judgments", pairwise: "judgments", matrix: "decision", ledger: "observations", runs: "observations" };
-    const alias = (id) => { const k = String(id); return Object.prototype.hasOwnProperty.call(exports.COMPARISON_SECTION_ALIASES, k) ? exports.COMPARISON_SECTION_ALIASES[k] : k; };
+    Object.defineProperty(exports, "COMPARISON_SECTION_ALIASES", { enumerable: true, get: function () { return sections_3.COMPARISON_SECTION_ALIASES; } });
+    /** The section a name stands for. */
+    const alias = sections_2.comparisonSection;
     const isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
     const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
     const objects = (v) => Array.isArray(v) ? v.filter(isObject) : [];
     const KINDS = ["binary", "numeric", "ordinal", "count", "rank", "preference"];
-    const plural = (n, one, many = `${one}s`) => `${(0, core_17.fmtInt)(n)} ${n === 1 ? one : many}`;
+    const plural = (n, one, many = `${one}s`) => `${(0, core_18.fmtInt)(n)} ${n === 1 ? one : many}`;
     const listed = (names) => names.length <= 1 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
     function comparisonReport(dataIn, narrativeIn = {}) {
         if (!isObject(dataIn) || !Array.isArray(dataIn.alternatives))
@@ -8059,7 +8102,7 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
         }
         // Narrative labels win over the data's; narrative order leads, but only for alternatives that exist.
         const ids = (0, comparison_stats_3.alternativeIds)(dataIn);
-        const rawLabels = Array.isArray(narrative.alternatives) ? narrative.alternatives : isObject(narrative.alternatives) ? (0, core_17.entriesOf)(narrative.alternatives).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
+        const rawLabels = Array.isArray(narrative.alternatives) ? narrative.alternatives : isObject(narrative.alternatives) ? (0, core_18.entriesOf)(narrative.alternatives).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
         const labels = rawLabels.filter((a) => isObject(a) && typeof a.id === "string");
         const order = [...new Set([...labels.map(a => a.id).filter(id => ids.includes(id)), ...ids])];
         const given = (id) => labels.find(a => a.id === id);
@@ -8098,15 +8141,16 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
         const alert = recorded && !valid
             ? { text: `All ${plural(recorded, "observation")} are invalid, so no value can be given. Invalid observations are not failures.`, href: "#observations", link: "What was recorded" }
             : invalid && invalid / recorded >= 0.2
-                ? { text: `${(0, core_17.fmtInt)(invalid)} of ${plural(recorded, "observation")} produced no valid value. They are counted apart from every summary and never treated as failures.`, href: "#observations", link: "Every observation" }
+                ? { text: `${(0, core_18.fmtInt)(invalid)} of ${plural(recorded, "observation")} produced no valid value. They are counted apart from every summary and never treated as failures.`, href: "#observations", link: "Every observation" }
                 : undefined;
         const appended = new Map();
-        for (const [k, blocks] of (0, core_17.entriesOf)(isObject(narrative.append) ? narrative.append : {}))
+        for (const [k, blocks] of (0, core_18.entriesOf)(isObject(narrative.append) ? narrative.append : {}))
             if (Array.isArray(blocks))
                 appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
         const sections = [];
         // What each section's views say for this data, from the narrative's readings (keyed by section id or another name).
-        const readings = new Map(isObject(narrative.readings) ? (0, core_17.entriesOf)(narrative.readings).map(([k, v]) => [alias(k), v]) : []);
+        // Resolved as the checks resolve them (resolveSections): the first key naming a section gives its reading.
+        const readings = (0, sections_2.resolveSections)(narrative.readings, alias).values;
         const add = (key, s) => sections.push({ key, section: { ...s, id: key, ...(readings.has(key) ? { reading: readings.get(key) } : {}), blocks: [...s.blocks, ...(appended.get(key) || [])] } });
         // ---------------------------------------------------------------- verdict
         const decision = isObject(narrative.decision) ? narrative.decision : null;
@@ -8125,7 +8169,7 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
                         { value: metrics.length, label: metrics.length === 1 ? "Metric" : "Metrics", note: primary ? `primary: ${primary.label || primary.id}` : undefined },
                         ...(caseIds.length ? [{ value: caseIds.length, label: caseIds.length === 1 ? "Case" : "Cases", ...(namesNoCase ? { note: `plus ${comparison_stats_3.NO_CASE_WORDS}` } : {}) }] : []),
                         ...(recorded ? [{ value: valid, label: "Valid observations", tone: valid ? "pass" : "warn" }, { value: invalid, label: "Invalid", note: invalid ? "counted apart, not failures" : "none", tone: invalid ? "warn" : "neutral" }] : []),
-                        ...(judgments ? [{ value: judgments, label: judgments === 1 ? "Judgment" : "Judgments", note: unreached ? `${(0, core_17.fmtInt)(unreached)} unreached` : rankings.length ? `${plural(rankings.length, "ranking")}` : undefined }] : []),
+                        ...(judgments ? [{ value: judgments, label: judgments === 1 ? "Judgment" : "Judgments", note: unreached ? `${(0, core_18.fmtInt)(unreached)} unreached` : rankings.length ? `${plural(rankings.length, "ranking")}` : undefined }] : []),
                     ],
                 },
             ],
@@ -8232,7 +8276,7 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
         const altText = order.length === 1 ? `One alternative (${label(order[0])})` : order.length <= 4 ? `${order.length} alternatives (${listed(order.map(label))})` : plural(order.length, "alternative");
         const groupText = topGroups.size ? ` in ${plural(topGroups.size, "group")}` : "";
         const metricText = metrics.length ? ` on ${metrics.length <= 3 ? listed(metrics.map(m => m.label || m.id)) : plural(metrics.length, "metric")}` : "";
-        const shape = order.length ? `${altText}${groupText}${metricText}${caseIds.length + (namesNoCase ? 1 : 0) > 1 ? ` across ${(0, comparison_stats_3.casesWords)(caseIds.length, namesNoCase)}` : ""}${recorded ? `: ${plural(recorded, "observation")}${invalid ? ` (${(0, core_17.fmtInt)(invalid)} invalid)` : ""}` : ""}${judgments ? `${recorded ? " and" : ":"} ${plural(judgments, "judgment")}` : ""}.` : undefined;
+        const shape = order.length ? `${altText}${groupText}${metricText}${caseIds.length + (namesNoCase ? 1 : 0) > 1 ? ` across ${(0, comparison_stats_3.casesWords)(caseIds.length, namesNoCase)}` : ""}${recorded ? `: ${plural(recorded, "observation")}${invalid ? ` (${(0, core_18.fmtInt)(invalid)} invalid)` : ""}` : ""}${judgments ? `${recorded ? " and" : ":"} ${plural(judgments, "judgment")}` : ""}.` : undefined;
         const question = [narrative.question, dataIn.question].find((q) => typeof q === "string" && !!q.trim());
         const title = [narrative.title, narrative.question, dataIn.title, dataIn.question].find((t) => typeof t === "string" && !!t.trim()) || "Comparison";
         return (0, validate_2.composed)({
@@ -8270,7 +8314,7 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
         const valid = runs.filter(r => r.passed === true || r.passed === false);
         const alternatives = axes.arms.map(id => {
             const entry = isObject(planned[id]) ? planned[id] : {};
-            const attributes = Object.fromEntries((0, core_17.entriesOf)(entry).filter(([k]) => !MATERIAL.has(k)).map(([k, v]) => [k, scalar(v)]));
+            const attributes = Object.fromEntries((0, core_18.entriesOf)(entry).filter(([k]) => !MATERIAL.has(k)).map(([k, v]) => [k, scalar(v)]));
             const text = typeof entry.instructions_text === "string" ? entry.instructions_text : undefined;
             return { id, ...(Object.keys(attributes).length ? { attributes } : {}), ...(text ? { content: text } : {}), ...(entry.instructions_truncated === true ? { note: "instructions shortened to the report's text bound" } : {}) };
         });
@@ -8309,7 +8353,7 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
         // Check values: all-boolean checks are binary, all-numeric ones numeric; other values stay in the trial views.
         const checkTypes = new Map();
         for (const r of valid)
-            for (const [k, v] of (0, core_17.entriesOf)(isObject(r.checks) ? r.checks : {}))
+            for (const [k, v] of (0, core_18.entriesOf)(isObject(r.checks) ? r.checks : {}))
                 (checkTypes.get(k) || checkTypes.set(k, new Set()).get(k)).add(typeof v === "boolean" ? "boolean" : typeof v === "number" && Number.isFinite(v) ? "number" : "other");
         for (const [name, types] of [...checkTypes].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)) {
             if (types.size !== 1 || types.has("other"))
@@ -8330,12 +8374,12 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
         }
         // Pairwise summaries: one judgment per counted pair, with inconsistent and invalid pairs as unreached judgments.
         const preferences = [];
-        const pairs = (0, core_17.entriesOf)(isObject(trial.pairwise) ? trial.pairwise : {}).filter(([, s]) => isObject(s) && Array.isArray(s.arms) && s.arms.length === 2);
+        const pairs = (0, core_18.entriesOf)(isObject(trial.pairwise) ? trial.pairwise : {}).filter(([, s]) => isObject(s) && Array.isArray(s.arms) && s.arms.length === 2);
         for (const [key, summary] of pairs) {
             const [a, b] = summary.arms.map(String), id = pairs.length === 1 ? "pairwise" : `pairwise:${key}`;
             const judge = isObject(summary.judge) && typeof summary.judge.model === "string" ? summary.judge.model : undefined;
             metrics.push({ id, label: pairs.length === 1 ? "Pairwise preference" : `Pairwise: ${a} vs ${b}`, kind: "preference", better: "higher", description: "A judge saw matched runs side by side in both orders; only pairs decided the same way in both orders count as decided." });
-            const scenarios = isObject(summary.scenarios) && (0, core_17.keysIn)(summary.scenarios).length ? (0, core_17.entriesOf)(summary.scenarios) : [[undefined, summary.overall]];
+            const scenarios = isObject(summary.scenarios) && (0, core_18.keysIn)(summary.scenarios).length ? (0, core_18.entriesOf)(summary.scenarios) : [[undefined, summary.overall]];
             for (const [scenario, st] of scenarios) {
                 if (!isObject(st))
                     continue;
@@ -8359,7 +8403,7 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
         };
     }
 });
-define("collection", ["require", "exports", "core", "stats", "model", "trial-model", "comparison-stats", "compose", "comparison-compose", "blocks/trial", "validate"], function (require, exports, core_18, stats_13, model_1, trial_model_11, comparison_stats_4, compose_1, comparison_compose_1, trial_1, validate_3) {
+define("collection", ["require", "exports", "core", "stats", "model", "trial-model", "comparison-stats", "compose", "comparison-compose", "blocks/trial", "validate"], function (require, exports, core_19, stats_13, model_1, trial_model_11, comparison_stats_4, compose_1, comparison_compose_1, trial_1, validate_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.COLLECTION_SECTION_IDS = exports.relativeMeasure = exports.MEMBER_ID = void 0;
@@ -8381,7 +8425,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
     exports.compareReport = compareReport;
     exports.MEMBER_ID = /^[A-Za-z][\w.-]*$/;
     const isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
-    const text = (v) => typeof v === "string" ? v.trim() : (0, core_18.isNum)(v) ? String(v) : "";
+    const text = (v) => typeof v === "string" ? v.trim() : (0, core_19.isNum)(v) ? String(v) : "";
     /** An id as written: the checks hold every id to the identifier rule (isId), so ids are compared exactly, never trimmed. */
     const idOf = (v) => typeof v === "string" ? v : "";
     const isTrial = (v) => isObject(v) && Array.isArray(v.runs);
@@ -8420,15 +8464,15 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         return arms.map(id => {
             const runs = t.runs.filter(r => r && r.arm === id);
             const tl = (0, trial_model_11.armTally)(t, id);
-            const costs = runs.filter(r => r.passed === true || r.passed === false).map(trial_model_11.costUsd).filter(core_18.isNum);
+            const costs = runs.filter(r => r.passed === true || r.passed === false).map(trial_model_11.costUsd).filter(core_19.isNum);
             const model = t.plan?.arms?.[id]?.model;
             const perCase = cases.flatMap(c => {
                 const ct = (0, trial_model_11.tally)(runs.filter(r => (0, comparison_stats_4.caseKey)(r.scenario) === c));
                 return ct.runs ? [{ id: c, label: c === comparison_stats_4.NO_CASE ? comparison_stats_4.NO_CASE_WORDS : caseLabel(c), k: ct.pass, n: ct.valid, value: ct.rate, interval: ct.interval, text: ct.valid ? `${ct.pass} of ${ct.valid}` : "no valid runs" }] : [];
             });
             return { id, label: label(id), lane: typeof model === "string" ? model : "", k: tl.pass, n: tl.valid, invalid: tl.invalid, value: tl.rate, interval: tl.interval,
-                text: !tl.valid ? "no valid runs" : tl.cases > 1 ? (0, trial_model_11.countsText)(tl) : `${tl.pass} of ${tl.valid} passed (${(0, core_18.fmtPct)(tl.rate)})`,
-                cost: (0, core_18.median)(costs), baseline: id === baseline, cases: tl.cases, over: (0, comparison_stats_4.casesWords)(tl.cases, false), perCase, balanced: null };
+                text: !tl.valid ? "no valid runs" : tl.cases > 1 ? (0, trial_model_11.countsText)(tl) : `${tl.pass} of ${tl.valid} passed (${(0, core_19.fmtPct)(tl.rate)})`,
+                cost: (0, core_19.median)(costs), baseline: id === baseline, cases: tl.cases, over: (0, comparison_stats_4.casesWords)(tl.cases, false), perCase, balanced: null };
         }).map(r => ({ ...r, balanced: balancedValue(PASS_RATE, r) }));
     }
     /** Each alternative's headline value on the comparison's primary metric, whatever its kind, as the comparison views summarize it. */
@@ -8504,8 +8548,8 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
                     const at = one.medianLevel ? levels.indexOf(one.medianLevel) : -1;
                     return [{ id: cs.id, label: cs.label, k: 0, n: one.n, value: at >= 0 ? at : null, interval: null, counts: one.counts || [], text: at >= 0 ? `median level “${one.medianLevel}” (n = ${one.n})` : "no level" }];
                 }
-                const v = rate ? one.rate ?? null : (0, core_18.isNum)(one.mean) ? one.mean : (0, core_18.isNum)(one.median) ? one.median : null;
-                return [{ id: cs.id, label: cs.label, k: one.k ?? 0, n: one.n, value: v, interval: rate || (0, core_18.isNum)(one.mean) ? one.interval ?? null : null, mean: one.mean ?? null, sd: one.sd ?? null, text: rate ? `${one.k ?? 0} of ${one.n}` : v === null ? "no value" : `${(0, core_18.fmtNum)(v)}${unit ? ` ${unit}` : ""} (n = ${one.n})` }];
+                const v = rate ? one.rate ?? null : (0, core_19.isNum)(one.mean) ? one.mean : (0, core_19.isNum)(one.median) ? one.median : null;
+                return [{ id: cs.id, label: cs.label, k: one.k ?? 0, n: one.n, value: v, interval: rate || (0, core_19.isNum)(one.mean) ? one.interval ?? null : null, mean: one.mean ?? null, sd: one.sd ?? null, text: rate ? `${one.k ?? 0} of ${one.n}` : v === null ? "no value" : `${(0, core_19.fmtNum)(v)}${unit ? ` ${unit}` : ""} (n = ${one.n})` }];
             });
             // The comparison engine decides when values pool repeats over several cases; such a value has no interval.
             const spread = s?.cases ?? 1, pooled = spread > 1, over = s ? (0, comparison_stats_4.pooledWords)(s) : (0, comparison_stats_4.casesWords)(0, false);
@@ -8516,21 +8560,21 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             switch (primary.kind) {
                 case "binary":
                 case "count":
-                    return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: pooled ? null : s.interval ?? null, text: pooled ? `${s.k ?? 0} of ${n} across ${over}` : `${s.k ?? 0} of ${n} (${(0, core_18.fmtPct)(s.rate)})` };
+                    return { ...row, k: s.k ?? 0, value: s.rate ?? null, interval: pooled ? null : s.interval ?? null, text: pooled ? `${s.k ?? 0} of ${n} across ${over}` : `${s.k ?? 0} of ${n} (${(0, core_19.fmtPct)(s.rate)})` };
                 case "preference": {
                     const decisive = (s.wins ?? 0) + (s.losses ?? 0);
-                    return { ...row, k: s.wins ?? 0, n: decisive, value: decisive ? (s.wins ?? 0) / decisive : null, interval: s.interval ?? null, text: decisive ? `won ${s.wins ?? 0} of ${decisive} decisive judgments (${(0, core_18.fmtPct)((s.wins ?? 0) / decisive)})` : "no decisive judgments" };
+                    return { ...row, k: s.wins ?? 0, n: decisive, value: decisive ? (s.wins ?? 0) / decisive : null, interval: s.interval ?? null, text: decisive ? `won ${s.wins ?? 0} of ${decisive} decisive judgments (${(0, core_19.fmtPct)((s.wins ?? 0) / decisive)})` : "no decisive judgments" };
                 }
                 case "numeric": {
-                    const v = (0, core_18.isNum)(s.mean) ? s.mean : (0, core_18.isNum)(s.median) ? s.median : null;
-                    return { ...row, value: v, interval: (0, core_18.isNum)(s.mean) && !pooled ? s.interval ?? null : null, mean: s.mean ?? null, sd: s.sd ?? null, text: v === null ? "no value" : `${(0, core_18.isNum)(s.mean) ? "mean" : "median"} ${(0, core_18.fmtNum)(v)}${unit ? ` ${unit}` : ""} (n = ${n}${across})` };
+                    const v = (0, core_19.isNum)(s.mean) ? s.mean : (0, core_19.isNum)(s.median) ? s.median : null;
+                    return { ...row, value: v, interval: (0, core_19.isNum)(s.mean) && !pooled ? s.interval ?? null : null, mean: s.mean ?? null, sd: s.sd ?? null, text: v === null ? "no value" : `${(0, core_19.isNum)(s.mean) ? "mean" : "median"} ${(0, core_19.fmtNum)(v)}${unit ? ` ${unit}` : ""} (n = ${n}${across})` };
                 }
                 case "ordinal": {
                     const at = s.medianLevel ? levels.indexOf(s.medianLevel) : -1;
                     return { ...row, value: at >= 0 ? at : null, text: at >= 0 ? `median level “${s.medianLevel}” (n = ${n}${across})` : "no level" };
                 }
                 case "rank":
-                    return { ...row, value: s.meanRank ?? null, interval: pooled ? null : s.interval ?? null, text: (0, core_18.isNum)(s.meanRank) ? `mean rank ${(0, core_18.fmtNum)(s.meanRank)} (n = ${n}${across})` : "no ranking" };
+                    return { ...row, value: s.meanRank ?? null, interval: pooled ? null : s.interval ?? null, text: (0, core_19.isNum)(s.meanRank) ? `mean rank ${(0, core_19.fmtNum)(s.meanRank)} (n = ${n}${across})` : "no ranking" };
                 default:
                     return row;
             }
@@ -8540,7 +8584,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const shape = { id: primary.id, label: text(primary.label) || primary.id, kind: primary.kind, better, unit, percent, domain: [0, 1], ...(primary.kind === "ordinal" ? { levels } : {}) };
         // Every value plotted is the case-balanced one, and the axis is drawn to hold it.
         const balancedRows = rows.map(r => ({ ...r, balanced: balancedValue(shape, r) }));
-        const measure = { ...shape, domain: measureDomain(shape, balancedRows.flatMap(r => [r.balanced, ...(r.interval || [])]).filter(core_18.isNum), ids.length) };
+        const measure = { ...shape, domain: measureDomain(shape, balancedRows.flatMap(r => [r.balanced, ...(r.interval || [])]).filter(core_19.isNum), ids.length) };
         return { rows: balancedRows, measure, source: cc };
     }
     /** A setup's change from its reference, case-balanced as every comparison of setups is: its delta, interval and method,
@@ -8640,8 +8684,8 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             const caseText = isObject(custom ? spec.cases : narrative.cases) ? (custom ? spec.cases : narrative.cases) : {};
             const rows = trialRows(t, order, label, baseline, id => text(caseText[id]) || id);
             const all = (0, trial_model_11.tally)(t.runs.filter((r) => isObject(r)));
-            const costs = t.runs.map(r => isObject(r) ? (0, trial_model_11.costUsd)(r) : null).filter(core_18.isNum);
-            const pct = (id) => { const v = t.pct_vs_baseline?.[id]?.cost_usd?.median ?? t.pct_vs_baseline?.[id]?.total_cost_usd?.median; return (0, core_18.isNum)(v) && t.baseline === baseline ? v : null; };
+            const costs = t.runs.map(r => isObject(r) ? (0, trial_model_11.costUsd)(r) : null).filter(core_19.isNum);
+            const pct = (id) => { const v = t.pct_vs_baseline?.[id]?.cost_usd?.median ?? t.pct_vs_baseline?.[id]?.total_cost_usd?.median; return (0, core_19.isNum)(v) && t.baseline === baseline ? v : null; };
             const first = text(t.ran?.first) || text(t.generated_at);
             const time = Date.parse(first), set = calendarDay(m.date);
             return {
@@ -8681,7 +8725,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
     function held(m, rows, gains) {
         if (!m)
             return m;
-        const drawn = [...rows.flatMap(r => [r.balanced, ...(r.interval || [])]), ...gains.flatMap(g => [g.from, g.to])].filter(core_18.isNum);
+        const drawn = [...rows.flatMap(r => [r.balanced, ...(r.interval || [])]), ...gains.flatMap(g => [g.from, g.to])].filter(core_19.isNum);
         return { ...m, domain: measureDomain(m, drawn, rows.length) };
     }
     /** The member's full report: its specification, or the trial or comparison composition of its data and narrative. */
@@ -8861,8 +8905,8 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
                 const iv = (0, stats_13.newcombe)(y.k, y.n, x.k, x.n);
                 return { a: x.value, b: y.value, estimate: y.value - x.value, interval: iv, method: iv ? "difference of rates with a 95% Newcombe interval" : "difference of rates (no interval: the counts do not allow one)", why: iv ? null : "no interval: the counts do not allow one", label, coverage, shared: n, cases: caseNames, over, noCase };
             }
-            if (m.kind === "numeric" && (0, core_18.isNum)(x.mean) && (0, core_18.isNum)(y.mean)) {
-                const spread = (0, core_18.isNum)(x.sd) && (0, core_18.isNum)(y.sd) && x.n > 1 && y.n > 1;
+            if (m.kind === "numeric" && (0, core_19.isNum)(x.mean) && (0, core_19.isNum)(y.mean)) {
+                const spread = (0, core_19.isNum)(x.sd) && (0, core_19.isNum)(y.sd) && x.n > 1 && y.n > 1;
                 const iv = spread ? (0, comparison_stats_4.welch)(y.mean, y.sd, y.n, x.mean, x.sd, x.n)?.interval ?? null : null;
                 const why = iv ? null : !spread ? "no interval: a spread is missing" : x.sd === 0 && y.sd === 0 ? `no interval: neither ${A === "A" && B === "B" ? "report's" : "setup's"} values vary` : "no interval: the spreads do not allow one";
                 return { a: x.mean, b: y.mean, estimate: y.mean - x.mean, interval: iv, method: iv ? "difference of means with a 95% Welch interval" : `difference of means (${why})`, why, label, coverage, shared: n, cases: caseNames, over, noCase };
@@ -8931,7 +8975,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const sum = (xs) => xs.reduce((a, b) => a + b, 0);
         const named = (n, word) => n ? `${n} ${word}${n === 1 ? "" : "s"}` : "";
         const allModels = [...new Set(ms.flatMap(s => s.models))];
-        const costs = ms.map(s => s.cost).filter(core_18.isNum);
+        const costs = ms.map(s => s.cost).filter(core_19.isNum);
         const times = ms.map(s => s.date).filter((d) => !!d).sort();
         const shared = (f) => ms.some(f);
         const sections = [
@@ -9037,7 +9081,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         };
     }
 });
-define("blocks/collection", ["require", "exports", "core", "model", "report", "collection", "comparison-stats", "blocks/trial", "blocks/frame"], function (require, exports, core_19, model_2, report_1, collection_1, comparison_stats_5, trial_2, frame_9) {
+define("blocks/collection", ["require", "exports", "core", "model", "report", "collection", "comparison-stats", "blocks/trial", "blocks/frame"], function (require, exports, core_20, model_2, report_1, collection_1, comparison_stats_5, trial_2, frame_9) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.INDEX_LAYOUTS = void 0;
@@ -9060,18 +9104,18 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
     const open = (id) => `#report/${encodeURIComponent(id)}`;
     const pairHref = (a, b) => `#compare/${encodeURIComponent(a)}/${encodeURIComponent(b)}`;
     const VERDICT_ORDER = ["adopt", "reject", "mixed", "inconclusive", "none"];
-    const plural = (n, word) => `${(0, core_19.fmtInt)(n)} ${word}${n === 1 ? "" : "s"}`;
+    const plural = (n, word) => `${(0, core_20.fmtInt)(n)} ${word}${n === 1 ? "" : "s"}`;
     const signed = (v, body) => `${v > 0 ? "+" : v < 0 ? "−" : "±"}${body}`;
     const isRate = (m) => !!m && ["binary", "count", "preference"].includes(m.kind);
     /** A change in the measure's own units, as plain text: percentage points for rates, units for means, positions for ranks. */
     function changeText(m, d) {
-        if (!(0, core_19.isNum)(d) || !m)
+        if (!(0, core_20.isNum)(d) || !m)
             return "—";
         if (isRate(m)) {
             const p = Math.round(d * 100);
             return signed(p, `${Math.abs(p)} pts`);
         }
-        const body = (0, core_19.fmtNum)(Math.abs(d));
+        const body = (0, core_20.fmtNum)(Math.abs(d));
         if (m.kind === "numeric")
             return signed(d, `${body}${m.unit ? ` ${m.unit}` : ""}`);
         if (m.kind === "rank")
@@ -9088,22 +9132,22 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
     }
     /** Where a value sits on a member's measure, as a share of its track. */
     const at = (m, v) => (v - m.domain[0]) / (m.domain[1] - m.domain[0] || 1);
-    const ends = (m) => m.percent ? ["0%", "100%"] : m.kind === "rank" ? [`rank ${(0, core_19.fmtNum)(m.domain[0])}`, `rank ${(0, core_19.fmtNum)(m.domain[1])}`] : m.kind === "ordinal" ? (m.levels && m.levels.length > 1 ? [`“${m.levels[0]}”`, `“${m.levels[m.levels.length - 1]}”`] : ["lowest level", "highest level"]) : [(0, core_19.fmtNum)(m.domain[0]), `${(0, core_19.fmtNum)(m.domain[1])}${m.unit ? ` ${m.unit}` : ""}`];
-    const intervalText = (m, iv) => !iv || !m ? "—" : m.percent ? `${(0, core_19.fmtPct)(iv[0])}–${(0, core_19.fmtPct)(iv[1])}` : `${(0, core_19.fmtNum)(iv[0])}–${(0, core_19.fmtNum)(iv[1])}${m.unit ? ` ${m.unit}` : ""}`;
+    const ends = (m) => m.percent ? ["0%", "100%"] : m.kind === "rank" ? [`rank ${(0, core_20.fmtNum)(m.domain[0])}`, `rank ${(0, core_20.fmtNum)(m.domain[1])}`] : m.kind === "ordinal" ? (m.levels && m.levels.length > 1 ? [`“${m.levels[0]}”`, `“${m.levels[m.levels.length - 1]}”`] : ["lowest level", "highest level"]) : [(0, core_20.fmtNum)(m.domain[0]), `${(0, core_20.fmtNum)(m.domain[1])}${m.unit ? ` ${m.unit}` : ""}`];
+    const intervalText = (m, iv) => !iv || !m ? "—" : m.percent ? `${(0, core_20.fmtPct)(iv[0])}–${(0, core_20.fmtPct)(iv[1])}` : `${(0, core_20.fmtNum)(iv[0])}–${(0, core_20.fmtNum)(iv[1])}${m.unit ? ` ${m.unit}` : ""}`;
     // The same, escaped for HTML: a measure's unit is supplied text.
-    const change = (m, d) => (0, core_19.esc)(changeText(m, d));
-    const span = (m, iv) => (0, core_19.esc)(spanText(m, iv));
-    const interval = (m, iv) => (0, core_19.esc)(intervalText(m, iv));
+    const change = (m, d) => (0, core_20.esc)(changeText(m, d));
+    const span = (m, iv) => (0, core_20.esc)(spanText(m, iv));
+    const interval = (m, iv) => (0, core_20.esc)(intervalText(m, iv));
     /** A value's interval, or, when it pools several cases, that it has none: runs on one case repeat that case rather than sample new ones. */
-    const rowInterval = (m, r) => r.cases > 1 ? `<span class="av-muted">none: pooled over ${(0, core_19.esc)(r.over)}</span>` : interval(m, r.interval);
-    const gainInterval = (m, g) => m?.kind === "ordinal" ? (g.cases > 1 ? `median levels balanced over the ${(0, core_19.esc)(g.over)}` : "median levels") : g.cases > 1 ? `averaged over the ${(0, core_19.esc)(g.over)}, no interval` : g.delta === null ? "—" : span(m, g.interval);
+    const rowInterval = (m, r) => r.cases > 1 ? `<span class="av-muted">none: pooled over ${(0, core_20.esc)(r.over)}</span>` : interval(m, r.interval);
+    const gainInterval = (m, g) => m?.kind === "ordinal" ? (g.cases > 1 ? `median levels balanced over the ${(0, core_20.esc)(g.over)}` : "median levels") : g.cases > 1 ? `averaged over the ${(0, core_20.esc)(g.over)}, no interval` : g.delta === null ? "—" : span(m, g.interval);
     /** Whether a row's value weighs evidence naming no case as a group of its own. */
     const weighsNoCase = (r) => !!r.perCase?.some(c => c.id === comparison_stats_5.NO_CASE && c.n > 0);
     /** A change in words: its size in the measure's units, or for an ordinal measure the median level it moves from and to
      * (no difference is computed for levels). */
-    const gainWords = (m, g) => (0, core_19.isNum)(g.delta) ? change(m, g.delta) : m?.kind === "ordinal" && (0, core_19.isNum)(g.from) && (0, core_19.isNum)(g.to) ? (0, core_19.esc)(`“${m.levels?.[g.from] ?? g.from}” → “${m.levels?.[g.to] ?? g.to}”`) : "—";
+    const gainWords = (m, g) => (0, core_20.isNum)(g.delta) ? change(m, g.delta) : m?.kind === "ordinal" && (0, core_20.isNum)(g.from) && (0, core_20.isNum)(g.to) ? (0, core_20.esc)(`“${m.levels?.[g.from] ?? g.from}” → “${m.levels?.[g.to] ?? g.to}”`) : "—";
     /** Whether a change was taken: a size, or for an ordinal measure the two levels its line runs between. */
-    const taken = (m, g) => (0, core_19.isNum)(g.delta) || (m?.kind === "ordinal" && (0, core_19.isNum)(g.from) && (0, core_19.isNum)(g.to));
+    const taken = (m, g) => (0, core_20.isNum)(g.delta) || (m?.kind === "ordinal" && (0, core_20.isNum)(g.from) && (0, core_20.isNum)(g.to));
     /** Each case on its own: every setup's value there with its 95% interval, and each change from the reference with its interval. */
     function byCase(s) {
         const m = s.measure, pooled = s.rows.filter(r => r.perCase?.length);
@@ -9114,11 +9158,11 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
             for (const c of r.perCase)
                 if (!cases.some(x => x.id === c.id))
                     cases.push({ id: c.id, label: c.label });
-        const cell = (r, id) => { const c = r.perCase.find(x => x.id === id); return c ? `${(0, core_19.esc)(c.text)}${c.interval ? ` <span class="av-muted">${interval(m, c.interval)}</span>` : ""}` : '<span class="av-muted">not run</span>'; };
-        const values = `<table class="av-table av-table--compact"><thead><tr><th scope="col">Case</th>${pooled.map(r => `<th scope="col">${s.arms.tag(r.id, { id: false })}</th>`).join("")}</tr></thead><tbody>${cases.map(c => `<tr><th scope="row">${(0, core_19.esc)(c.label)}</th>${pooled.map(r => `<td class="av-num">${cell(r, c.id)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+        const cell = (r, id) => { const c = r.perCase.find(x => x.id === id); return c ? `${(0, core_20.esc)(c.text)}${c.interval ? ` <span class="av-muted">${interval(m, c.interval)}</span>` : ""}` : '<span class="av-muted">not run</span>'; };
+        const values = `<table class="av-table av-table--compact"><thead><tr><th scope="col">Case</th>${pooled.map(r => `<th scope="col">${s.arms.tag(r.id, { id: false })}</th>`).join("")}</tr></thead><tbody>${cases.map(c => `<tr><th scope="row">${(0, core_20.esc)(c.label)}</th>${pooled.map(r => `<td class="av-num">${cell(r, c.id)}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
         const gains = s.gains.filter(g => g.perCase?.length);
-        const changes = gains.length ? `<table class="av-table av-table--compact"><thead><tr><th scope="col">Case</th>${gains.map(g => `<th scope="col">${s.arms.tag(g.arm, { id: false })} <span class="av-muted">minus ${(0, core_19.esc)(s.rows.find(r => r.id === g.base)?.label || g.base)}</span></th>`).join("")}</tr></thead><tbody>${cases.map(c => `<tr><th scope="row">${(0, core_19.esc)(c.label)}</th>${gains.map(g => { const x = g.perCase.find(y => y.id === c.id); return `<td class="av-num">${x ? `${change(m, x.delta)} <span class="av-muted">(${span(m, x.interval)})</span>` : '<span class="av-muted">—</span>'}</td>`; }).join("")}</tr>`).join("")}</tbody></table>` : "";
-        return `<details class="av-cx-bycase"><summary>Each case on its own, with its 95% interval (${(0, core_19.esc)((0, comparison_stats_5.casesWords)(...(0, comparison_stats_5.caseSplit)(cases.map(c => c.id))))})</summary><p class="av-muted">The values above pool every case, so they carry no interval: runs on one case repeat that case rather than sample new ones. Here each case stands alone.</p><div class="av-scroll-x">${values}</div>${changes ? `<div class="av-scroll-x">${changes}</div>` : ""}</details>`;
+        const changes = gains.length ? `<table class="av-table av-table--compact"><thead><tr><th scope="col">Case</th>${gains.map(g => `<th scope="col">${s.arms.tag(g.arm, { id: false })} <span class="av-muted">minus ${(0, core_20.esc)(s.rows.find(r => r.id === g.base)?.label || g.base)}</span></th>`).join("")}</tr></thead><tbody>${cases.map(c => `<tr><th scope="row">${(0, core_20.esc)(c.label)}</th>${gains.map(g => { const x = g.perCase.find(y => y.id === c.id); return `<td class="av-num">${x ? `${change(m, x.delta)} <span class="av-muted">(${span(m, x.interval)})</span>` : '<span class="av-muted">—</span>'}</td>`; }).join("")}</tr>`).join("")}</tbody></table>` : "";
+        return `<details class="av-cx-bycase"><summary>Each case on its own, with its 95% interval (${(0, core_20.esc)((0, comparison_stats_5.casesWords)(...(0, comparison_stats_5.caseSplit)(cases.map(c => c.id))))})</summary><p class="av-muted">The values above pool every case, so they carry no interval: runs on one case repeat that case rather than sample new ones. Here each case stands alone.</p><div class="av-scroll-x">${values}</div>${changes ? `<div class="av-scroll-x">${changes}</div>` : ""}</details>`;
     }
     /** good, bad or flat by the measure's direction; neutral where it names none. */
     function tone(m, d) {
@@ -9130,7 +9174,7 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
     }
     /** The decision as a compact stamp, in the verdict block's words and icons. */
     function stampHtml(s, extra = "") {
-        return `<span class="av-cx-stamp av-cx-v--${s.verdict}${extra ? " " + extra : ""}"><span class="av-cx-stamp-icon" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><span class="av-cx-stamp-word">${(0, core_19.esc)(s.stamp)}</span></span>`;
+        return `<span class="av-cx-stamp av-cx-v--${s.verdict}${extra ? " " + extra : ""}"><span class="av-cx-stamp-icon" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><span class="av-cx-stamp-word">${(0, core_20.esc)(s.stamp)}</span></span>`;
     }
     function lanesOf(s) {
         const out = [];
@@ -9148,7 +9192,7 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
         const m = s.measure;
         if (!m || r.cases <= 1 || r.balanced === null || (0, collection_1.relativeMeasure)(m))
             return r.text;
-        const v = r.balanced, words = m.percent ? (0, core_19.fmtPct)(v) : m.kind === "ordinal" ? `median level “${m.levels?.[Math.round(v)] ?? (0, core_19.fmtNum)(v)}”` : `${(0, core_19.fmtNum)(v)}${m.unit ? ` ${m.unit}` : ""}`;
+        const v = r.balanced, words = m.percent ? (0, core_20.fmtPct)(v) : m.kind === "ordinal" ? `median level “${m.levels?.[Math.round(v)] ?? (0, core_20.fmtNum)(v)}”` : `${(0, core_20.fmtNum)(v)}${m.unit ? ` ${m.unit}` : ""}`;
         return `${r.text}; ${words} with ${(0, comparison_stats_5.eachWeighted)(weighsNoCase(r))}`;
     }
     /** Every setup on one track per model (or group), at its case-balanced value: the reference as a ring, each change as a line from it, toned by the measure's direction. */
@@ -9161,7 +9205,7 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
         const body = groups.map(([lane, rows]) => {
             // Each change's line runs between the values it is taken over (the cases both ran), as its stated change is; with no
             // case in common there is no change, and no line.
-            const shifts = s.gains.filter(g => rows.some(r => r.id === g.arm) && (0, core_19.isNum)(g.from) && (0, core_19.isNum)(g.to)).map(g => {
+            const shifts = s.gains.filter(g => rows.some(r => r.id === g.arm) && (0, core_20.isNum)(g.from) && (0, core_20.isNum)(g.to)).map(g => {
                 const a = at(m, Math.min(g.from, g.to)), b = at(m, Math.max(g.from, g.to));
                 return `<span class="av-cx-shift av-cx-shift--${tone(m, g.to - g.from)}" style="--a:${(0, frame_9.pos)(a)};--b:${(0, frame_9.pos)(b)}"></span>`;
             }).join("");
@@ -9174,41 +9218,41 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
                 lift.set(r, k ? (k % 2 ? -1 : 1) * Math.ceil(k / 2) * 8 : 0);
             }
             const high = Math.max(0, ...[...lift.values()].map(Math.abs));
-            const dots = rows.filter(r => r.balanced !== null).map(r => `<span class="av-cx-pt${r.baseline ? " av-cx-pt--base" : ""}" style="--x:${(0, frame_9.pos)(at(m, r.balanced))};--dy:${lift.get(r) || 0}px" data-av-tip="${(0, core_19.esc)(`${r.label}: ${valueSaid(s, r)}${r.baseline ? " · the reference" : ""}`)}">${s.arms.glyph(r.id)}</span>`).join("");
+            const dots = rows.filter(r => r.balanced !== null).map(r => `<span class="av-cx-pt${r.baseline ? " av-cx-pt--base" : ""}" style="--x:${(0, frame_9.pos)(at(m, r.balanced))};--dy:${lift.get(r) || 0}px" data-av-tip="${(0, core_20.esc)(`${r.label}: ${valueSaid(s, r)}${r.baseline ? " · the reference" : ""}`)}">${s.arms.glyph(r.id)}</span>`).join("");
             const none = rows.every(r => r.balanced === null) ? `<span class="av-cx-none">no valid ${s.noun}</span>` : "";
-            return `<div class="av-cx-lane">${multi || names ? `<span class="av-cx-lane-name">${(0, core_19.esc)(lane || "setups")}</span>` : ""}<div class="av-cx-track"${high ? ` style="height:${22 + 2 * high}px"` : ""}>${shifts}${cis}${dots}${none}</div>${m.percent ? "" : `<span class="av-cx-ends" aria-hidden="true"><span>${(0, core_19.esc)(ends(m)[0])}</span><span>${(0, core_19.esc)(ends(m)[1])}</span></span>`}</div>`;
+            return `<div class="av-cx-lane">${multi || names ? `<span class="av-cx-lane-name">${(0, core_20.esc)(lane || "setups")}</span>` : ""}<div class="av-cx-track"${high ? ` style="height:${22 + 2 * high}px"` : ""}>${shifts}${cis}${dots}${none}</div>${m.percent ? "" : `<span class="av-cx-ends" aria-hidden="true"><span>${(0, core_20.esc)(ends(m)[0])}</span><span>${(0, core_20.esc)(ends(m)[1])}</span></span>`}</div>`;
         }).join("");
-        return `<div class="av-cx-lanes" role="img" aria-label="${(0, core_19.esc)(`${m.label} by setup${m.better === "none" ? "" : `, ${m.better} is better`}. ${said}.`)}">${body}</div>`;
+        return `<div class="av-cx-lanes" role="img" aria-label="${(0, core_20.esc)(`${m.label} by setup${m.better === "none" ? "" : `, ${m.better} is better`}. ${said}.`)}">${body}</div>`;
     }
     /** The exact values behind a member's tracks. */
     function numbers(s) {
         if (!s.rows.length)
             return '<p class="av-muted">No headline value recorded.</p>';
-        const costs = s.rows.some(r => (0, core_19.isNum)(r.cost)), gains = s.gains.length > 0, lanesShown = s.rows.some(r => r.lane);
+        const costs = s.rows.some(r => (0, core_20.isNum)(r.cost)), gains = s.gains.length > 0, lanesShown = s.rows.some(r => r.lane);
         const head = ["Setup", ...(lanesShown ? [s.kind === "trial" ? "Model" : "Group"] : []), s.measure ? s.measure.label[0].toUpperCase() + s.measure.label.slice(1) : "Value", "95% interval", ...(costs ? ["Median cost per run"] : []), ...(gains ? ["Change from reference"] : [])];
         const rows = s.rows.map(r => {
             const g = s.gains.find(x => x.arm === r.id);
-            return `<tr><th scope="row">${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</th>${lanesShown ? `<td>${(0, core_19.esc)(r.lane || "—")}</td>` : ""}<td>${(0, core_19.esc)(valueSaid(s, r))}${r.invalid ? ` <span class="av-muted">(${r.invalid} invalid)</span>` : ""}</td><td class="av-num">${rowInterval(s.measure, r)}</td>${costs ? `<td class="av-num">${(0, core_19.fmtUsd)(r.cost)}</td>` : ""}${gains ? `<td class="av-num"${(0, core_19.attrs)({ title: g?.method })}>${g ? `${gainWords(s.measure, g)} <span class="av-muted">(${gainInterval(s.measure, g)})</span>` : r.baseline ? "reference" : "other lane"}</td>` : ""}</tr>`;
+            return `<tr><th scope="row">${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</th>${lanesShown ? `<td>${(0, core_20.esc)(r.lane || "—")}</td>` : ""}<td>${(0, core_20.esc)(valueSaid(s, r))}${r.invalid ? ` <span class="av-muted">(${r.invalid} invalid)</span>` : ""}</td><td class="av-num">${rowInterval(s.measure, r)}</td>${costs ? `<td class="av-num">${(0, core_20.fmtUsd)(r.cost)}</td>` : ""}${gains ? `<td class="av-num"${(0, core_20.attrs)({ title: g?.method })}>${g ? `${gainWords(s.measure, g)} <span class="av-muted">(${gainInterval(s.measure, g)})</span>` : r.baseline ? "reference" : "other lane"}</td>` : ""}</tr>`;
         }).join("");
-        const how = s.gains[0]?.method ? `<p class="av-muted">Changes: ${(0, core_19.esc)(s.gains[0].method)}.</p>` : "";
-        return `<div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr>${head.map(h => `<th scope="col">${(0, core_19.esc)(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>${how}${byCase(s)}`;
+        const how = s.gains[0]?.method ? `<p class="av-muted">Changes: ${(0, core_20.esc)(s.gains[0].method)}.</p>` : "";
+        return `<div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr>${head.map(h => `<th scope="col">${(0, core_20.esc)(h)}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table></div>${how}${byCase(s)}`;
     }
     function facts(s) {
         const items = [
-            s.dates ? `<li><span class="av-sr">Ran </span>${(0, core_19.esc)(s.dates)}</li>` : "",
-            ...s.evidence.map(e => `<li>${plural(e.n, e.noun)}${e.invalid ? ` <span class="av-cx-invalid">${(0, core_19.fmtInt)(e.invalid)} invalid</span>` : ""}</li>`),
-            s.models.length ? `<li>${s.models.map(m => `<code>${(0, core_19.esc)(m)}</code>`).join(" ")}</li>` : "",
-            (0, core_19.isNum)(s.cost) ? `<li>$${s.cost.toFixed(s.cost >= 10 ? 0 : 2)} recorded</li>` : "",
+            s.dates ? `<li><span class="av-sr">Ran </span>${(0, core_20.esc)(s.dates)}</li>` : "",
+            ...s.evidence.map(e => `<li>${plural(e.n, e.noun)}${e.invalid ? ` <span class="av-cx-invalid">${(0, core_20.fmtInt)(e.invalid)} invalid</span>` : ""}</li>`),
+            s.models.length ? `<li>${s.models.map(m => `<code>${(0, core_20.esc)(m)}</code>`).join(" ")}</li>` : "",
+            (0, core_20.isNum)(s.cost) ? `<li>$${s.cost.toFixed(s.cost >= 10 ? 0 : 2)} recorded</li>` : "",
         ];
         return `<ul class="av-cx-facts">${items.join("")}</ul>`;
     }
     function tallyBar(ms, label) {
         const counts = VERDICT_ORDER.map(v => [v, ms.filter(s => s.verdict === v).length]).filter(([, n]) => n > 0);
         const said = counts.map(([v, n]) => `${n} ${trial_2.verdictWords[v].toLowerCase()}`).join(", ");
-        return `<div class="av-dec-bar" role="img" aria-label="${(0, core_19.esc)(`${label}: ${said}`)}">${counts.map(([v, n]) => `<span class="av-dec-seg av-cx-v--${v}" style="flex:${n}"><b>${n}</b> ${(0, core_19.esc)(trial_2.verdictWords[v])}</span>`).join("")}</div>`;
+        return `<div class="av-dec-bar" role="img" aria-label="${(0, core_20.esc)(`${label}: ${said}`)}">${counts.map(([v, n]) => `<span class="av-dec-seg av-cx-v--${v}" style="flex:${n}"><b>${n}</b> ${(0, core_20.esc)(trial_2.verdictWords[v])}</span>`).join("")}</div>`;
     }
     const tip = (s) => s.headline ? s.headline.replace(/\*\*|`/g, "") : undefined;
-    const pick = (s) => `<button type="button" class="av-btn av-btn--small av-rx-pick" data-av-rx-pick="${(0, core_19.esc)(s.id)}" aria-pressed="false" aria-label="Compare ${(0, core_19.esc)(s.short)}" hidden><span class="av-rx-pick-box" aria-hidden="true"></span>Compare</button>`;
+    const pick = (s) => `<button type="button" class="av-btn av-btn--small av-rx-pick" data-av-rx-pick="${(0, core_20.esc)(s.id)}" aria-pressed="false" aria-label="Compare ${(0, core_20.esc)(s.short)}" hidden><span class="av-rx-pick-box" aria-hidden="true"></span>Compare</button>`;
     // ------------------------------------------------------------------ decision board
     function decisions(input, ctx) {
         const model = need(ctx, "decisions");
@@ -9216,8 +9260,8 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
         if (!themes.length)
             return (0, frame_9.frame)("decisions", input, (0, frame_9.empty)("No report to show."));
         const all = themes.flatMap(t => t.members);
-        const rows = themes.map(t => `<div class="av-dec-row"><h3 class="av-dec-theme">${(0, core_19.esc)(t.label)} <span class="av-muted">${plural(t.members.length, "report")}</span></h3><ul class="av-dec-tiles">${t.members.map(s => `<li><a class="av-dec-tile av-cx-v--${s.verdict}" href="${open(s.id)}"${(0, core_19.attrs)({ "data-av-tip": tip(s) })}><span class="av-dec-icon" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><span class="av-dec-word">${(0, core_19.esc)(s.stamp)}</span><span class="av-dec-name">${(0, core_19.esc)(s.short)}</span></a></li>`).join("")}</ul></div>`).join("");
-        const legend = `<p class="av-dec-legend">${VERDICT_ORDER.filter(v => all.some(s => s.verdict === v)).map(v => `<span class="av-cx-v--${v}"><span class="av-dec-icon" aria-hidden="true">${trial_2.verdictIcons[v]}</span>${(0, core_19.esc)(trial_2.verdictWords[v])}</span>`).join("")}<span class="av-muted">A stamp's own words, where its report gives them, replace these.</span></p>`;
+        const rows = themes.map(t => `<div class="av-dec-row"><h3 class="av-dec-theme">${(0, core_20.esc)(t.label)} <span class="av-muted">${plural(t.members.length, "report")}</span></h3><ul class="av-dec-tiles">${t.members.map(s => `<li><a class="av-dec-tile av-cx-v--${s.verdict}" href="${open(s.id)}"${(0, core_20.attrs)({ "data-av-tip": tip(s) })}><span class="av-dec-icon" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><span class="av-dec-word">${(0, core_20.esc)(s.stamp)}</span><span class="av-dec-name">${(0, core_20.esc)(s.short)}</span></a></li>`).join("")}</ul></div>`).join("");
+        const legend = `<p class="av-dec-legend">${VERDICT_ORDER.filter(v => all.some(s => s.verdict === v)).map(v => `<span class="av-cx-v--${v}"><span class="av-dec-icon" aria-hidden="true">${trial_2.verdictIcons[v]}</span>${(0, core_20.esc)(trial_2.verdictWords[v])}</span>`).join("")}<span class="av-muted">A stamp's own words, where its report gives them, replace these.</span></p>`;
         return (0, frame_9.frame)("decisions", input, `${tallyBar(all, "Decisions")}${legend}<div class="av-dec-board">${rows}</div>`);
     }
     // ------------------------------------------------------------------ report index
@@ -9233,31 +9277,31 @@ define("blocks/collection", ["require", "exports", "core", "model", "report", "c
         const layouts = asked.length ? [...new Set(asked)] : [...exports.INDEX_LAYOUTS];
         const switcher = layouts.length > 1 ? `<div class="av-rx-layouts" role="group" aria-label="Index design">${layouts.map((l, i) => `<button type="button" class="av-rx-layout" data-av-rx-layout="${l}" aria-pressed="${i === 0}"><span class="av-rx-layout-icon av-rx-layout-icon--${l}" aria-hidden="true"></span>${LAYOUT_WORDS[l]}</button>`).join("")}</div>` : "";
         const tools = `<div class="av-rx-tools" data-av-rx-tools hidden>${switcher}
-<div class="av-rx-verdicts" role="group" aria-label="Show reports by decision"><button type="button" class="av-rx-chip" data-av-rx-verdict="" aria-pressed="true">All <span>${all.length}</span></button>${verdicts.map(v => `<button type="button" class="av-rx-chip av-cx-v--${v}" data-av-rx-verdict="${v}" aria-pressed="false"><span aria-hidden="true">${trial_2.verdictIcons[v]}</span> ${(0, core_19.esc)(trial_2.verdictWords[v])} <span>${all.filter(s => s.verdict === v).length}</span></button>`).join("")}</div>
-<div class="av-rx-fields">${themes.length > 1 ? `<label><span>Theme</span><select data-av-rx-theme><option value="">Every theme</option>${themes.map(t => `<option value="${(0, core_19.esc)(t.id)}">${(0, core_19.esc)(t.label)}</option>`).join("")}</select></label>` : ""}${models.length > 1 ? `<label><span>Model</span><select data-av-rx-model><option value="">Every model</option>${models.map(m => `<option value="${(0, core_19.esc)(m)}">${(0, core_19.esc)(m)}</option>`).join("")}</select></label>` : ""}<label class="av-rx-search"><span>Search</span><input type="search" data-av-rx-q placeholder="Questions, decisions, setups" autocomplete="off"></label></div>
+<div class="av-rx-verdicts" role="group" aria-label="Show reports by decision"><button type="button" class="av-rx-chip" data-av-rx-verdict="" aria-pressed="true">All <span>${all.length}</span></button>${verdicts.map(v => `<button type="button" class="av-rx-chip av-cx-v--${v}" data-av-rx-verdict="${v}" aria-pressed="false"><span aria-hidden="true">${trial_2.verdictIcons[v]}</span> ${(0, core_20.esc)(trial_2.verdictWords[v])} <span>${all.filter(s => s.verdict === v).length}</span></button>`).join("")}</div>
+<div class="av-rx-fields">${themes.length > 1 ? `<label><span>Theme</span><select data-av-rx-theme><option value="">Every theme</option>${themes.map(t => `<option value="${(0, core_20.esc)(t.id)}">${(0, core_20.esc)(t.label)}</option>`).join("")}</select></label>` : ""}${models.length > 1 ? `<label><span>Model</span><select data-av-rx-model><option value="">Every model</option>${models.map(m => `<option value="${(0, core_20.esc)(m)}">${(0, core_20.esc)(m)}</option>`).join("")}</select></label>` : ""}<label class="av-rx-search"><span>Search</span><input type="search" data-av-rx-q placeholder="Questions, decisions, setups" autocomplete="off"></label></div>
 <p class="av-rx-status"><span data-av-rx-count role="status">${plural(all.length, "report")}</span><button type="button" class="av-btn av-btn--small" data-av-rx-clear hidden>Clear filters</button></p>
 </div>`;
         const searchOf = (s) => [s.title, s.question, s.headline, s.note, s.stamp, ...s.models, ...s.rows.map(r => r.label), s.id].join(" ").toLowerCase();
-        const item = (s) => (0, core_19.attrs)({ "data-av-rx-card": true, "data-member": s.id, "data-verdict": s.verdict, "data-theme": s.theme, "data-models": s.models.join("\n"), "data-search": searchOf(s) });
+        const item = (s) => (0, core_20.attrs)({ "data-av-rx-card": true, "data-member": s.id, "data-verdict": s.verdict, "data-theme": s.theme, "data-models": s.models.join("\n"), "data-search": searchOf(s) });
         const card = (s) => {
             const follows = s.follows ? model.byId.get(s.follows) : undefined;
             const head = ctx.uid(`rx-${s.id}`);
             return `<li class="av-rx-card av-cx-v--${s.verdict}"${item(s)}>
 <article aria-labelledby="${head}"><header class="av-rx-card-head">${stampHtml(s)}${s.kind === "trial" ? "" : `<span class="av-chip">${s.kind === "spec" ? "specification" : "comparison"}</span>`}</header>
-<h4 class="av-rx-title" id="${head}"><a href="${open(s.id)}">${(0, core_19.esc)(s.title)}</a></h4>
-${s.headline ? `<p class="av-rx-headline">${(0, core_19.inline)(s.headline)}</p>` : ""}${s.note ? `<p class="av-rx-note">${(0, core_19.inline)(s.note)}</p>` : ""}
-${s.measure ? `<div class="av-rx-chart"><span class="av-eyebrow">${(0, core_19.esc)(s.metric)} by setup</span>${lanes(s, false)}</div>` : ""}
-${facts(s)}${follows ? `<p class="av-rx-follows">Follows <a href="${open(follows.id)}">${(0, core_19.esc)(follows.short)}</a> · <a href="${pairHref(follows.id, s.id)}">compare the two</a></p>` : ""}
+<h4 class="av-rx-title" id="${head}"><a href="${open(s.id)}">${(0, core_20.esc)(s.title)}</a></h4>
+${s.headline ? `<p class="av-rx-headline">${(0, core_20.inline)(s.headline)}</p>` : ""}${s.note ? `<p class="av-rx-note">${(0, core_20.inline)(s.note)}</p>` : ""}
+${s.measure ? `<div class="av-rx-chart"><span class="av-eyebrow">${(0, core_20.esc)(s.metric)} by setup</span>${lanes(s, false)}</div>` : ""}
+${facts(s)}${follows ? `<p class="av-rx-follows">Follows <a href="${open(follows.id)}">${(0, core_20.esc)(follows.short)}</a> · <a href="${pairHref(follows.id, s.id)}">compare the two</a></p>` : ""}
 ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>${numbers(s)}</details>` : ""}
 <div class="av-rx-actions"><a class="av-btn av-btn--primary" href="${open(s.id)}">Read the full report<span aria-hidden="true"> →</span></a>${pick(s)}</div>
 </article></li>`;
         };
-        const grouped = (body, story) => themes.map(t => { const hid = ctx.uid(`rx-theme-${t.id || "other"}`); return `<section class="av-rx-theme" data-av-rx-group aria-labelledby="${hid}"><header class="av-rx-theme-head"><h3 id="${hid}" class="av-rx-theme-title">${(0, core_19.esc)(t.label)}</h3>${tallyBar(t.members, t.label)}${story ? (0, core_19.prose)(t.summary, "av-rx-story") : ""}</header>${body(t)}</section>`; }).join("");
-        const row = (s) => `<li class="av-rx-row av-cx-v--${s.verdict}"${item(s)}><span class="av-rx-row-stamp">${stampHtml(s)}</span><div class="av-rx-row-main"><a class="av-rx-row-title" href="${open(s.id)}">${(0, core_19.esc)(s.title)}</a>${s.headline ? `<p class="av-rx-row-head">${(0, core_19.inline)(s.headline)}</p>` : ""}</div><div class="av-rx-row-chart">${s.measure ? lanes(s, false) : ""}</div><div class="av-rx-row-facts">${facts(s)}</div><div class="av-rx-row-pick">${pick(s)}</div></li>`;
+        const grouped = (body, story) => themes.map(t => { const hid = ctx.uid(`rx-theme-${t.id || "other"}`); return `<section class="av-rx-theme" data-av-rx-group aria-labelledby="${hid}"><header class="av-rx-theme-head"><h3 id="${hid}" class="av-rx-theme-title">${(0, core_20.esc)(t.label)}</h3>${tallyBar(t.members, t.label)}${story ? (0, core_20.prose)(t.summary, "av-rx-story") : ""}</header>${body(t)}</section>`; }).join("");
+        const row = (s) => `<li class="av-rx-row av-cx-v--${s.verdict}"${item(s)}><span class="av-rx-row-stamp">${stampHtml(s)}</span><div class="av-rx-row-main"><a class="av-rx-row-title" href="${open(s.id)}">${(0, core_20.esc)(s.title)}</a>${s.headline ? `<p class="av-rx-row-head">${(0, core_20.inline)(s.headline)}</p>` : ""}</div><div class="av-rx-row-chart">${s.measure ? lanes(s, false) : ""}</div><div class="av-rx-row-facts">${facts(s)}</div><div class="av-rx-row-pick">${pick(s)}</div></li>`;
         // Changes sort with others on the same measure (a preference or rank value has none: it depends on who else took part).
         const sortGroup = (s) => (0, collection_1.measureKey)(s.measure);
         // An ordinal change has no size, so it is said in levels and sorts after every change that has one.
-        const changes = (s) => { const ds = s.gains.map(g => g.delta).filter(core_19.isNum); const levels = ds.length ? [] : s.gains.filter(g => taken(s.measure, g)); return ds.length ? { v: Math.max(...ds.map(Math.abs)), sized: true, text: ds.length === 1 ? change(s.measure, ds[0]) : `${change(s.measure, Math.min(...ds))} to ${change(s.measure, Math.max(...ds))}` } : levels.length ? { v: -1, sized: false, text: levels.map(g => gainWords(s.measure, g)).join("; ") } : null; };
+        const changes = (s) => { const ds = s.gains.map(g => g.delta).filter(core_20.isNum); const levels = ds.length ? [] : s.gains.filter(g => taken(s.measure, g)); return ds.length ? { v: Math.max(...ds.map(Math.abs)), sized: true, text: ds.length === 1 ? change(s.measure, ds[0]) : `${change(s.measure, Math.min(...ds))} to ${change(s.measure, Math.max(...ds))}` } : levels.length ? { v: -1, sized: false, text: levels.map(g => gainWords(s.measure, g)).join("; ") } : null; };
         // A trial's setups together, as counts: a rate over runs of several setups and cases would claim more than it holds.
         // Sorted by the case-balanced rate: each case's passes of valid runs, every setup together, averaged with each case weighted equally.
         const pooled = (s) => {
@@ -9273,17 +9317,17 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
             const rates = [...byCase.values()].filter(e => e[1] > 0).map(e => e[0] / e[1]);
             return n ? { k, n, balanced: rates.length ? rates.reduce((t, v) => t + v, 0) / rates.length : k / n } : null;
         };
-        const head = (label, kind, note) => `<th scope="col"${(0, core_19.attrs)({ "data-av-rx-sortable": kind, title: note })}><button type="button" class="av-rx-sort">${label}<span class="av-rx-sort-mark" aria-hidden="true"></span></button></th>`;
+        const head = (label, kind, note) => `<th scope="col"${(0, core_20.attrs)({ "data-av-rx-sortable": kind, title: note })}><button type="button" class="av-rx-sort">${label}<span class="av-rx-sort-mark" aria-hidden="true"></span></button></th>`;
         const table = `<div class="av-scroll-x"><table class="av-table av-table--compact av-rx-table"><thead><tr>${head("Decision", "text")}${head("Report", "text")}${themes.length > 1 ? head("Theme", "text") : ""}${head("Models", "text")}${head("Evidence", "number", "Trial runs, or a comparison's observations, judgments, rankings and supplied totals; sorted by their total")}${head("Invalid", "number")}${head("Passed", "number", "Passes of valid runs, a trial's setups together: plain counts, sorted by the case-balanced pass rate (each case's rate, every case weighted equally), so no report's mix of cases decides its place")}${head("Changes from reference", "number", "Each setup against its reference on the same model, in its measure's units, over the cases both ran with each case weighted equally; sorted by the largest case-balanced change either way, reports on one measure together, so no change is ranked against another measure's")}${head("Cost", "number")}${head("Ran", "text")}</tr></thead><tbody>${themes.flatMap(t => t.members.map(s => {
             const c = changes(s), p = pooled(s);
-            return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${(0, core_19.esc)(s.title.toLowerCase())}"><a href="${open(s.id)}">${(0, core_19.esc)(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${(0, core_19.esc)(t.label.toLowerCase())}">${(0, core_19.esc)(t.label)}</td>` : ""}<td data-v="${(0, core_19.esc)(s.models.join(" "))}">${s.models.map(m => `<code>${(0, core_19.esc)(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.evidence.reduce((t, e) => t + e.n, 0)}">${s.evidence.length ? s.evidence.map(e => plural(e.n, e.noun)).join(" · ") : "—"}</td><td class="av-num" data-v="${s.invalid}">${(0, core_19.fmtInt)(s.invalid)}</td><td class="av-num" data-v="${p ? p.balanced : -1}">${p ? `${(0, core_19.fmtInt)(p.k)} of ${(0, core_19.fmtInt)(p.n)}` : "—"}</td><td class="av-num" data-v="${c ? c.v : -1}"${c?.sized ? ` data-g="${(0, core_19.esc)(sortGroup(s))}"` : ""}>${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${(0, core_19.isNum)(s.cost) ? (0, core_19.fmtUsd)(s.cost) : "—"}</td><td data-v="${(0, core_19.esc)(s.date || "")}">${(0, core_19.esc)(s.dates || "—")}</td></tr>`;
+            return `<tr${item(s)}><td data-v="${VERDICT_ORDER.indexOf(s.verdict)}">${stampHtml(s)}</td><th scope="row" data-v="${(0, core_20.esc)(s.title.toLowerCase())}"><a href="${open(s.id)}">${(0, core_20.esc)(s.short)}</a>${pick(s)}</th>${themes.length > 1 ? `<td data-v="${(0, core_20.esc)(t.label.toLowerCase())}">${(0, core_20.esc)(t.label)}</td>` : ""}<td data-v="${(0, core_20.esc)(s.models.join(" "))}">${s.models.map(m => `<code>${(0, core_20.esc)(m)}</code>`).join(" ") || "—"}</td><td class="av-num" data-v="${s.evidence.reduce((t, e) => t + e.n, 0)}">${s.evidence.length ? s.evidence.map(e => plural(e.n, e.noun)).join(" · ") : "—"}</td><td class="av-num" data-v="${s.invalid}">${(0, core_20.fmtInt)(s.invalid)}</td><td class="av-num" data-v="${p ? p.balanced : -1}">${p ? `${(0, core_20.fmtInt)(p.k)} of ${(0, core_20.fmtInt)(p.n)}` : "—"}</td><td class="av-num" data-v="${c ? c.v : -1}"${c?.sized ? ` data-g="${(0, core_20.esc)(sortGroup(s))}"` : ""}>${c ? c.text : "—"}</td><td class="av-num" data-v="${s.cost ?? -1}">${(0, core_20.isNum)(s.cost) ? (0, core_20.fmtUsd)(s.cost) : "—"}</td><td data-v="${(0, core_20.esc)(s.date || "")}">${(0, core_20.esc)(s.dates || "—")}</td></tr>`;
         })).join("")}</tbody></table></div><p class="av-muted av-rx-sortnote">Passed shows plain counts and sorts by the case-balanced pass rate; Changes from reference sorts by the largest case-balanced change. Both weight every case equally, so no report's mix of cases decides its place.</p>`;
         const single = [...new Set(all.flatMap(s => s.models.length === 1 ? s.models : []))];
         const columns = [...single.map(m => ({ key: m, label: m, test: (s) => s.models.length === 1 && s.models[0] === m })),
             ...(all.some(s => s.models.length > 1) ? [{ key: "", label: "Several models", test: (s) => s.models.length > 1 }] : []),
             ...(all.some(s => !s.models.length) ? [{ key: "", label: "Model not recorded", test: (s) => !s.models.length }] : [])];
-        const tile = (s) => `<li class="av-rx-matrix-item"${item(s)}><a class="av-dec-tile av-dec-tile--small av-cx-v--${s.verdict}" href="${open(s.id)}"${(0, core_19.attrs)({ "data-av-tip": tip(s) })}><span class="av-dec-icon" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><span class="av-dec-word">${(0, core_19.esc)(s.stamp)}</span><span class="av-dec-name">${(0, core_19.esc)(s.short)}</span></a>${pick(s)}</li>`;
-        const matrix = `<p class="av-muted av-rx-matrix-read">Each theme against the models its reports ran on: a question checked on both families shows a decision in each column.</p><div class="av-scroll-x"><table class="av-rx-matrix"><thead><tr><th scope="col">Theme</th>${columns.map(c => `<th scope="col">${c.key ? `<code>${(0, core_19.esc)(c.label)}</code>` : (0, core_19.esc)(c.label)}</th>`).join("")}</tr></thead><tbody>${themes.map(t => `<tr data-av-rx-group><th scope="row">${(0, core_19.esc)(t.label)}</th>${columns.map(c => { const here = t.members.filter(c.test); return `<td>${here.length ? `<ul class="av-rx-matrix-tiles">${here.map(tile).join("")}</ul>` : '<span class="av-rx-matrix-none" aria-label="none">—</span>'}</td>`; }).join("")}</tr>`).join("")}</tbody></table></div>`;
+        const tile = (s) => `<li class="av-rx-matrix-item"${item(s)}><a class="av-dec-tile av-dec-tile--small av-cx-v--${s.verdict}" href="${open(s.id)}"${(0, core_20.attrs)({ "data-av-tip": tip(s) })}><span class="av-dec-icon" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><span class="av-dec-word">${(0, core_20.esc)(s.stamp)}</span><span class="av-dec-name">${(0, core_20.esc)(s.short)}</span></a>${pick(s)}</li>`;
+        const matrix = `<p class="av-muted av-rx-matrix-read">Each theme against the models its reports ran on: a question checked on both families shows a decision in each column.</p><div class="av-scroll-x"><table class="av-rx-matrix"><thead><tr><th scope="col">Theme</th>${columns.map(c => `<th scope="col">${c.key ? `<code>${(0, core_20.esc)(c.label)}</code>` : (0, core_20.esc)(c.label)}</th>`).join("")}</tr></thead><tbody>${themes.map(t => `<tr data-av-rx-group><th scope="row">${(0, core_20.esc)(t.label)}</th>${columns.map(c => { const here = t.members.filter(c.test); return `<td>${here.length ? `<ul class="av-rx-matrix-tiles">${here.map(tile).join("")}</ul>` : '<span class="av-rx-matrix-none" aria-label="none">—</span>'}</td>`; }).join("")}</tr>`).join("")}</tbody></table></div>`;
         const body = {
             cards: () => grouped(t => `<ol class="av-rx-list">${t.members.map(card).join("")}</ol>`, true),
             list: () => grouped(t => `<ol class="av-rx-rows">${t.members.map(row).join("")}</ol>`, false),
@@ -9310,17 +9354,17 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
                 return "no change measured in the reference's lane";
             if (measured.length === 1)
                 return `${gainWords(s.measure, measured[0])} <span class="av-muted">(${measured[0].cases > 1 || s.measure?.kind === "ordinal" ? gainInterval(s.measure, measured[0]) : `95%: ${span(s.measure, measured[0].interval)}`})</span>`;
-            if (!measured.every(g => (0, core_19.isNum)(g.delta)))
+            if (!measured.every(g => (0, core_20.isNum)(g.delta)))
                 return `${measured.length} changes: ${measured.map(g => gainWords(s.measure, g)).join("; ")}`;
             const ds = measured.map(g => g.delta);
             return Math.min(...ds) === Math.max(...ds) ? `${measured.length} changes, each ${change(s.measure, ds[0])}` : `${measured.length} changes, ${change(s.measure, Math.min(...ds))} to ${change(s.measure, Math.max(...ds))}`;
         };
-        const rows = themes.map(t => `<div class="av-sh-theme"><h3 class="av-sh-theme-title">${(0, core_19.esc)(t.label)}</h3>${t.members.map(s => `<div class="av-sh-row"><div class="av-sh-name">${stampHtml(s, "av-cx-stamp--icon")}<a href="${open(s.id)}">${(0, core_19.esc)(s.short)}</a><span class="av-sh-sum">${s.measure.percent ? "" : `${(0, core_19.esc)(s.metric)}: `}${line(s)}</span></div><div class="av-sh-plot">${lanes(s, true)}</div></div>`).join("")}</div>`).join("");
+        const rows = themes.map(t => `<div class="av-sh-theme"><h3 class="av-sh-theme-title">${(0, core_20.esc)(t.label)}</h3>${t.members.map(s => `<div class="av-sh-row"><div class="av-sh-name">${stampHtml(s, "av-cx-stamp--icon")}<a href="${open(s.id)}">${(0, core_20.esc)(s.short)}</a><span class="av-sh-sum">${s.measure.percent ? "" : `${(0, core_20.esc)(s.metric)}: `}${line(s)}</span></div><div class="av-sh-plot">${lanes(s, true)}</div></div>`).join("")}</div>`).join("");
         const scale = `<div class="av-sh-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(x => `<span style="--x:${(0, frame_9.pos)(x)}">${x * 100}%</span>`).join("")}</div></div>`;
         const key = `<ul class="av-sh-key" aria-label="How to read this chart"><li><span class="av-cx-key-ring" aria-hidden="true"></span>the reference setup</li><li><span class="av-cx-key-dot" aria-hidden="true"></span>a setup tried (its color and shape as in its report)</li><li><span class="av-cx-key-up" aria-hidden="true"></span>a change for the better</li><li><span class="av-cx-key-down" aria-hidden="true"></span>a change for the worse</li><li><span class="av-cx-key-neutral" aria-hidden="true"></span>a change on a measure with no better direction</li><li><span class="av-cx-key-ci" aria-hidden="true"></span>95% interval: where the true value likely lies (drawn only for a value from one case)</li></ul><p class="av-muted av-sh-read">Rates share the 0–100% scale above; a measure that is not a rate shows its own range under its track.</p>`;
         const table = themes.flatMap(t => t.members).flatMap(s => s.rows.map(r => {
             const g = s.gains.find(x => x.arm === r.id);
-            return `<tr><th scope="row"><a href="${open(s.id)}">${(0, core_19.esc)(s.short)}</a></th><td>${(0, core_19.esc)(s.metric)}</td><td>${(0, core_19.esc)(r.lane || "—")}</td><td>${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</td><td>${(0, core_19.esc)(valueSaid(s, r))}</td><td class="av-num">${rowInterval(s.measure, r)}</td><td class="av-num"${(0, core_19.attrs)({ title: g?.method })}>${g ? gainWords(s.measure, g) : "—"}</td><td class="av-num">${g ? gainInterval(s.measure, g) : "—"}</td></tr>`;
+            return `<tr><th scope="row"><a href="${open(s.id)}">${(0, core_20.esc)(s.short)}</a></th><td>${(0, core_20.esc)(s.metric)}</td><td>${(0, core_20.esc)(r.lane || "—")}</td><td>${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</td><td>${(0, core_20.esc)(valueSaid(s, r))}</td><td class="av-num">${rowInterval(s.measure, r)}</td><td class="av-num"${(0, core_20.attrs)({ title: g?.method })}>${g ? gainWords(s.measure, g) : "—"}</td><td class="av-num">${g ? gainInterval(s.measure, g) : "—"}</td></tr>`;
         })).join("");
         const exact = `<details class="av-cx-exact"><summary>Every value and change, exactly</summary><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Report</th><th scope="col">Measure</th><th scope="col">Model or group</th><th scope="col">Setup</th><th scope="col">Value</th><th scope="col">95% interval</th><th scope="col">Change from reference</th><th scope="col">95% interval of the change</th></tr></thead><tbody>${table}</tbody></table></div><p class="av-muted">Rates count valid observations only. A change is the setup minus its reference in the same lane: for trials with a 95% Newcombe interval, for comparisons by the comparison's own method for its metric (hover a change to read it); an interval that spans zero means the change could be chance. A value or change pooled over several cases has no interval, since runs on one case repeat that case rather than sample new ones; its report gives each case's own interval.</p></details>`;
         return (0, frame_9.frame)("shifts", input, `<div class="av-sh">${key}${scale}${rows}</div>${exact}`);
@@ -9329,8 +9373,8 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
     function costGain(input, ctx) {
         const model = need(ctx, "cost-gain");
         const ms = (0, collection_1.selectMembers)(model, input);
-        const points = ms.flatMap(s => s.gains.filter(g => (0, core_19.isNum)(g.delta) && (0, core_19.isNum)(g.costChange)).map(g => ({ s, g })));
-        const left = ms.filter(s => s.rows.length > 1 && !s.gains.some(g => (0, core_19.isNum)(g.delta) && (0, core_19.isNum)(g.costChange)));
+        const points = ms.flatMap(s => s.gains.filter(g => (0, core_20.isNum)(g.delta) && (0, core_20.isNum)(g.costChange)).map(g => ({ s, g })));
+        const left = ms.filter(s => s.rows.length > 1 && !s.gains.some(g => (0, core_20.isNum)(g.delta) && (0, core_20.isNum)(g.costChange)));
         if (!points.length)
             return (0, frame_9.frame)("cost-gain", input, (0, frame_9.empty)("No change records both a pass-rate difference and a cost difference against its reference."));
         const W = 760, H = 440, L = 64, R = 24, T = 28, B = 56;
@@ -9348,9 +9392,9 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
             const ci = p.g.interval ? `<line class="av-cg-ci" x1="${cx}" x2="${cx}" y1="${y(Math.min(my, p.g.interval[1]))}" y2="${y(Math.max(-my, p.g.interval[0]))}"/>` : "";
             return `<g class="av-cg-pt" style="--v:${p.s.arms.color(p.g.arm)}">${ci}<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="10"/><text x="${cx.toFixed(1)}" y="${(cy + 4).toFixed(1)}" text-anchor="middle">${i + 1}</text></g>`;
         }).join("");
-        const plot = (0, core_19.svg)(`Cost against gain: ${plural(points.length, "change")} against their references`, H, `${quads}${xt}${yt}<line class="av-cg-zero" x1="${x(0)}" x2="${x(0)}" y1="${T}" y2="${H - B}"/><line class="av-cg-zero" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/><text class="av-cg-axis" x="${(L + W - R) / 2}" y="${H - 12}" text-anchor="middle">Cost per run against the reference (median over cases) →</text><text class="av-cg-axis" transform="translate(16 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle">Pass rate against the reference →</text>${marks}`, W);
-        const key = `<ol class="av-cg-key">${points.map((p, i) => `<li style="--v:${p.s.arms.color(p.g.arm)}"><span class="av-cg-n" aria-hidden="true">${i + 1}</span><span class="av-cg-text">${p.s.arms.tag(p.g.arm, { id: false })} <span class="av-muted">against ${(0, core_19.esc)(p.s.arms.label(p.g.base))}${p.g.lane ? ` on ${(0, core_19.esc)(p.g.lane)}` : ""} in</span> <a href="${open(p.s.id)}">${(0, core_19.esc)(p.s.short)}</a></span><span class="av-cg-vals"><b>${change(p.s.measure, p.g.delta)}</b> <span class="av-muted">(${span(p.s.measure, p.g.interval)})</span> · cost <b>${tick(p.g.costChange)}</b> · <span class="av-muted">report:</span> ${stampHtml(p.s, "av-cx-stamp--icon")}</span></li>`).join("")}</ol>`;
-        const note = left.length ? `<p class="av-muted">Not drawn, for want of a reference on the same model or a recorded cost: ${left.map(s => `<a href="${open(s.id)}">${(0, core_19.esc)(s.short)}</a>`).join(", ")}.</p>` : "";
+        const plot = (0, core_20.svg)(`Cost against gain: ${plural(points.length, "change")} against their references`, H, `${quads}${xt}${yt}<line class="av-cg-zero" x1="${x(0)}" x2="${x(0)}" y1="${T}" y2="${H - B}"/><line class="av-cg-zero" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/><text class="av-cg-axis" x="${(L + W - R) / 2}" y="${H - 12}" text-anchor="middle">Cost per run against the reference (median over cases) →</text><text class="av-cg-axis" transform="translate(16 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle">Pass rate against the reference →</text>${marks}`, W);
+        const key = `<ol class="av-cg-key">${points.map((p, i) => `<li style="--v:${p.s.arms.color(p.g.arm)}"><span class="av-cg-n" aria-hidden="true">${i + 1}</span><span class="av-cg-text">${p.s.arms.tag(p.g.arm, { id: false })} <span class="av-muted">against ${(0, core_20.esc)(p.s.arms.label(p.g.base))}${p.g.lane ? ` on ${(0, core_20.esc)(p.g.lane)}` : ""} in</span> <a href="${open(p.s.id)}">${(0, core_20.esc)(p.s.short)}</a></span><span class="av-cg-vals"><b>${change(p.s.measure, p.g.delta)}</b> <span class="av-muted">(${span(p.s.measure, p.g.interval)})</span> · cost <b>${tick(p.g.costChange)}</b> · <span class="av-muted">report:</span> ${stampHtml(p.s, "av-cx-stamp--icon")}</span></li>`).join("")}</ol>`;
+        const note = left.length ? `<p class="av-muted">Not drawn, for want of a reference on the same model or a recorded cost: ${left.map(s => `<a href="${open(s.id)}">${(0, core_20.esc)(s.short)}</a>`).join(", ")}.</p>` : "";
         return (0, frame_9.frame)("cost-gain", input, `${plot}<p class="av-muted av-cg-read">Vertical whiskers are 95% intervals of the pass-rate change; one that crosses the middle line could be chance. Cost changes are each trial's median over its cases of the per-case difference in cost per run.</p>${key}${note}`);
     }
     // ------------------------------------------------------------------ timeline
@@ -9374,16 +9418,16 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
         const followers = (id) => ms.filter(x => x.follows === id);
         const item = (s) => {
             const before = s.follows ? model.byId.get(s.follows) : undefined, after = followers(s.id);
-            const time = (0, core_19.isNum)(s.time) ? new Date(s.time).toISOString().slice(11, 16) + " UTC" : "";
-            return `<li class="av-tl-item av-cx-v--${s.verdict}"><span class="av-tl-dot" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><div class="av-tl-body"><p class="av-tl-meta">${time ? `<span>${time}</span>` : ""}${themeLabel(s.theme) ? `<span>${(0, core_19.esc)(themeLabel(s.theme))}</span>` : ""}</p><p class="av-tl-title"><a href="${open(s.id)}">${(0, core_19.esc)(s.short)}</a> ${stampHtml(s)}</p>${s.headline ? `<p class="av-tl-head">${(0, core_19.inline)(s.headline)}</p>` : ""}${before ? `<p class="av-tl-link">↳ Follows <a href="${open(before.id)}">${(0, core_19.esc)(before.short)}</a> (${(0, core_19.esc)(before.stamp)}) · <a href="${pairHref(before.id, s.id)}">compare before and after</a></p>` : ""}${after.length ? `<p class="av-tl-link">Followed up by ${after.map(x => `<a href="${open(x.id)}">${(0, core_19.esc)(x.short)}</a>`).join(", ")}</p>` : ""}</div></li>`;
+            const time = (0, core_20.isNum)(s.time) ? new Date(s.time).toISOString().slice(11, 16) + " UTC" : "";
+            return `<li class="av-tl-item av-cx-v--${s.verdict}"><span class="av-tl-dot" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><div class="av-tl-body"><p class="av-tl-meta">${time ? `<span>${time}</span>` : ""}${themeLabel(s.theme) ? `<span>${(0, core_20.esc)(themeLabel(s.theme))}</span>` : ""}</p><p class="av-tl-title"><a href="${open(s.id)}">${(0, core_20.esc)(s.short)}</a> ${stampHtml(s)}</p>${s.headline ? `<p class="av-tl-head">${(0, core_20.inline)(s.headline)}</p>` : ""}${before ? `<p class="av-tl-link">↳ Follows <a href="${open(before.id)}">${(0, core_20.esc)(before.short)}</a> (${(0, core_20.esc)(before.stamp)}) · <a href="${pairHref(before.id, s.id)}">compare before and after</a></p>` : ""}${after.length ? `<p class="av-tl-link">Followed up by ${after.map(x => `<a href="${open(x.id)}">${(0, core_20.esc)(x.short)}</a>`).join(", ")}</p>` : ""}</div></li>`;
         };
-        return (0, frame_9.frame)("timeline", input, `<ol class="av-tl">${days.map(([d, list]) => `<li class="av-tl-day"><h3 class="av-tl-date">${d ? (0, core_19.esc)(DAY.format(new Date(`${d}T00:00:00Z`))) : "Date not recorded"}</h3><ol class="av-tl-items">${list.map(item).join("")}</ol></li>`).join("")}</ol>`);
+        return (0, frame_9.frame)("timeline", input, `<ol class="av-tl">${days.map(([d, list]) => `<li class="av-tl-day"><h3 class="av-tl-date">${d ? (0, core_20.esc)(DAY.format(new Date(`${d}T00:00:00Z`))) : "Date not recorded"}</h3><ol class="av-tl-items">${list.map(item).join("")}</ol></li>`).join("")}</ol>`);
     }
     // ------------------------------------------------------------------ suggested pairs
     function differs(a, b) {
-        const decision = a.verdict === b.verdict && a.stamp === b.stamp ? `Same decision: ${(0, core_19.esc)(a.stamp)}` : `Decision ${a.verdict === b.verdict ? "worded differently" : "changed"}: ${(0, core_19.esc)(a.stamp)} → ${(0, core_19.esc)(b.stamp)}`;
+        const decision = a.verdict === b.verdict && a.stamp === b.stamp ? `Same decision: ${(0, core_20.esc)(a.stamp)}` : `Decision ${a.verdict === b.verdict ? "worded differently" : "changed"}: ${(0, core_20.esc)(a.stamp)} → ${(0, core_20.esc)(b.stamp)}`;
         const am = a.models.join(", "), bm = b.models.join(", ");
-        const models = am && bm && am !== bm ? `models ${(0, core_19.esc)(am)} → ${(0, core_19.esc)(bm)}` : am && am === bm ? `both on ${(0, core_19.esc)(am)}` : "";
+        const models = am && bm && am !== bm ? `models ${(0, core_20.esc)(am)} → ${(0, core_20.esc)(bm)}` : am && am === bm ? `both on ${(0, core_20.esc)(am)}` : "";
         return [decision, models].filter(Boolean).join(" · ");
     }
     function matchups(input, ctx) {
@@ -9393,11 +9437,11 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
             .filter(p => p && model.byId.has(p.a) && model.byId.has(p.b) && p.a !== p.b && (chosen.has(p.a) || chosen.has(p.b)));
         if (!pairs.length)
             return (0, frame_9.frame)("matchups", input, (0, frame_9.empty)("No pair to show."));
-        const side = (s, letter) => `<div class="av-mu-side"><span class="av-rc-letter" aria-hidden="true">${letter}</span>${stampHtml(s)}<a class="av-mu-title" href="${open(s.id)}">${(0, core_19.esc)(s.short)}</a>${s.measure ? lanes(s, false) : ""}</div>`;
+        const side = (s, letter) => `<div class="av-mu-side"><span class="av-rc-letter" aria-hidden="true">${letter}</span>${stampHtml(s)}<a class="av-mu-title" href="${open(s.id)}">${(0, core_20.esc)(s.short)}</a>${s.measure ? lanes(s, false) : ""}</div>`;
         return (0, frame_9.frame)("matchups", input, `<ul class="av-mu">${pairs.map(p => {
             const a = model.byId.get(p.a), b = model.byId.get(p.b);
             const kind = p.title || (p.source === "follows" ? "A follow-up and the report it followed" : "Read together");
-            return `<li class="av-mu-card"><p class="av-mu-kind">${(0, core_19.esc)(kind)}</p><div class="av-mu-sides">${side(a, "A")}<span class="av-mu-arrow" aria-hidden="true">${p.source === "follows" ? "→" : "vs"}</span>${side(b, "B")}</div><p class="av-mu-diff">${differs(a, b)}</p>${p.note ? `<p class="av-muted">${(0, core_19.inline)(p.note)}</p>` : ""}<a class="av-btn" href="${pairHref(a.id, b.id)}">Compare side by side<span aria-hidden="true"> →</span></a></li>`;
+            return `<li class="av-mu-card"><p class="av-mu-kind">${(0, core_20.esc)(kind)}</p><div class="av-mu-sides">${side(a, "A")}<span class="av-mu-arrow" aria-hidden="true">${p.source === "follows" ? "→" : "vs"}</span>${side(b, "B")}</div><p class="av-mu-diff">${differs(a, b)}</p>${p.note ? `<p class="av-muted">${(0, core_20.inline)(p.note)}</p>` : ""}<a class="av-btn" href="${pairHref(a.id, b.id)}">Compare side by side<span aria-hidden="true"> →</span></a></li>`;
         }).join("")}</ul>`);
     }
     // ------------------------------------------------------------------ two reports side by side
@@ -9438,13 +9482,13 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
         const A = model.byId.get(input.a), B = model.byId.get(input.b);
         if (!A || !B)
             return (0, frame_9.frame)("report-compare", input, (0, frame_9.empty)(`Not in this collection: ${[!A ? input.a : "", !B ? input.b : ""].filter(Boolean).join(" and ")}.`));
-        const side = (s, letter) => `<div class="av-rc-side av-rc-side--${letter.toLowerCase()}"><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span>${stampHtml(s)}</p><h3 class="av-rc-title"><span class="av-sr">${letter}: </span><a href="${open(s.id)}">${(0, core_19.esc)(s.title)}</a></h3>${s.headline ? `<p class="av-rc-headline">${(0, core_19.inline)(s.headline)}</p>` : ""}${facts(s)}<a class="av-btn" href="${open(s.id)}">Read ${letter} in full<span aria-hidden="true"> →</span></a></div>`;
+        const side = (s, letter) => `<div class="av-rc-side av-rc-side--${letter.toLowerCase()}"><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span>${stampHtml(s)}</p><h3 class="av-rc-title"><span class="av-sr">${letter}: </span><a href="${open(s.id)}">${(0, core_20.esc)(s.title)}</a></h3>${s.headline ? `<p class="av-rc-headline">${(0, core_20.inline)(s.headline)}</p>` : ""}${facts(s)}<a class="av-btn" href="${open(s.id)}">Read ${letter} in full<span aria-hidden="true"> →</span></a></div>`;
         const same = (0, collection_1.sameMeasure)(A, B);
         const m = same ? A.measure : null;
         const matched = same ? (0, collection_1.matchRows)(A, B) : [];
         const pairs = matched.filter(x => x.a && x.b);
         const casesA = new Set(A.cases.map(c => c.id)), sharedCases = B.cases.filter(c => casesA.has(c.id)), onlyA = A.cases.filter(c => !B.cases.some(x => x.id === c.id)), onlyB = B.cases.filter(c => !casesA.has(c.id));
-        const measures = same ? `both measure ${(0, core_19.esc)(m.label)}${m.better === "none" ? "" : ` (${m.better} is better)`}` : A.measure && B.measure ? `${(0, core_19.esc)((0, collection_1.measuresApart)(A, B) || "")}, so their values are shown apart and never subtracted` : "at least one report has no headline value to set against the other's";
+        const measures = same ? `both measure ${(0, core_20.esc)(m.label)}${m.better === "none" ? "" : ` (${m.better} is better)`}` : A.measure && B.measure ? `${(0, core_20.esc)((0, collection_1.measuresApart)(A, B) || "")}, so their values are shown apart and never subtracted` : "at least one report has no headline value to set against the other's";
         const pooled = (s) => { const k = s.rows.reduce((t, r) => t + r.k, 0), n = s.rows.reduce((t, r) => t + r.n, 0); return { k, n }; };
         const pa = pooled(A), pb = pooled(B);
         const diffs = [
@@ -9453,60 +9497,60 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
             same ? `<li>Setups: ${pairs.length ? `${plural(pairs.length, "setup")} matched` : "none matched"}${matched.some(x => x.a && !x.b) ? `; ${matched.filter(x => x.a && !x.b).length} only in A` : ""}${matched.some(x => !x.a && x.b) ? `; ${matched.filter(x => !x.a && x.b).length} only in B` : ""}.</li>` : "",
             // Evidence naming no case is said beside the cases, in the words every count of cases uses.
             `<li>Cases: ${sharedCases.length || (A.noCase && B.noCase) ? (0, comparison_stats_5.casesWords)(sharedCases.length, A.noCase && B.noCase, "in both") : "none in common"}${onlyA.length ? `; ${onlyA.length} only in A` : ""}${onlyB.length ? `; ${onlyB.length} only in B` : ""}${A.noCase !== B.noCase ? `; ${(0, comparison_stats_5.casesWords)(0, true, `only in ${A.noCase ? "A" : "B"}`)}` : ""}.</li>`,
-            same && A.kind === "trial" && B.kind === "trial" ? `<li>Every setup together: A ${pa.k} of ${pa.n} passed (${(0, core_19.fmtPct)(pa.n ? pa.k / pa.n : null)}), B ${pb.k} of ${pb.n} (${(0, core_19.fmtPct)(pb.n ? pb.k / pb.n : null)}).</li>` : "",
+            same && A.kind === "trial" && B.kind === "trial" ? `<li>Every setup together: A ${pa.k} of ${pa.n} passed (${(0, core_20.fmtPct)(pa.n ? pa.k / pa.n : null)}), B ${pb.k} of ${pb.n} (${(0, core_20.fmtPct)(pb.n ? pb.k / pb.n : null)}).</li>` : "",
         ].join("");
         let setups = "";
         if (same && m) {
             // Each matched setup compared case-balanced over the cases both ran; a setup in one report alone at its own balanced value.
             const compared = matched.map(x => ({ x, cmp: x.a && x.b ? (0, collection_1.caseBalanced)(m, x.a, x.b) : null }));
             // One shared scale, drawn to hold every value plotted on it.
-            const plotted = compared.flatMap(({ x, cmp }) => cmp && !("apart" in cmp) ? [cmp.a, cmp.b] : !cmp ? [(x.a || x.b).balanced] : []).filter(core_19.isNum);
+            const plotted = compared.flatMap(({ x, cmp }) => cmp && !("apart" in cmp) ? [cmp.a, cmp.b] : !cmp ? [(x.a || x.b).balanced] : []).filter(core_20.isNum);
             const shared = { ...m, domain: (0, collection_1.measureDomain)(m, plotted) };
             // A value in the measure's own words: a rate, a number with its unit, or a level.
-            const valueWords = (v) => shared.percent ? (0, core_19.fmtPct)(v) : m.kind === "ordinal" ? `“${m.levels?.[Math.round(v)] ?? (0, core_19.fmtNum)(v)}”` : `${(0, core_19.fmtNum)(v)}${m.unit ? ` ${m.unit}` : ""}`;
+            const valueWords = (v) => shared.percent ? (0, core_20.fmtPct)(v) : m.kind === "ordinal" ? `“${m.levels?.[Math.round(v)] ?? (0, core_20.fmtNum)(v)}”` : `${(0, core_20.fmtNum)(v)}${m.unit ? ` ${m.unit}` : ""}`;
             // A mark's tip gives the value it is drawn at, and what that value is, beside the report's own words.
-            const marker = (r, v, letter, near, over) => `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${(0, frame_9.pos)(at(shared, v))};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px" data-av-tip="${(0, core_19.esc)(`${letter} · ${r.label}: ${valueWords(v)}${over ? ` (${over})` : ""}; the report: ${r.text}`)}">${letter}</span>`;
+            const marker = (r, v, letter, near, over) => `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${(0, frame_9.pos)(at(shared, v))};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px" data-av-tip="${(0, core_20.esc)(`${letter} · ${r.label}: ${valueWords(v)}${over ? ` (${over})` : ""}; the report: ${r.text}`)}">${letter}</span>`;
             const slope = compared.map(({ x, cmp }) => {
-                const name = x.a && x.b ? (x.a.label === x.b.label ? (0, core_19.esc)(x.a.label) : `${(0, core_19.esc)(x.a.label)} <span class="av-muted">↔</span> ${(0, core_19.esc)(x.b.label)}`) : (0, core_19.esc)((x.a || x.b).label);
+                const name = x.a && x.b ? (x.a.label === x.b.label ? (0, core_20.esc)(x.a.label) : `${(0, core_20.esc)(x.a.label)} <span class="av-muted">↔</span> ${(0, core_20.esc)(x.b.label)}`) : (0, core_20.esc)((x.a || x.b).label);
                 // The change is taken over the cases both reports ran, each weighted equally, so neither report's mix of cases moves it.
                 const apartWhy = cmp && "apart" in cmp ? cmp.apart : null;
                 const d = cmp && !("apart" in cmp) ? cmp : null;
                 const values = d ? [d.a, d.b] : null;
                 const near = !!values && Math.abs(at(shared, values[0]) - at(shared, values[1])) < 0.04;
                 const line = values ? `<span class="av-cx-shift av-cx-shift--${tone(m, values[1] - values[0])}" style="--a:${(0, frame_9.pos)(at(shared, Math.min(...values)))};--b:${(0, frame_9.pos)(at(shared, Math.max(...values)))}"></span>` : "";
-                const diff = d && d.estimate !== null ? ` · B − A <b>${change(m, d.estimate)}</b> <span class="av-muted">(${d.interval ? span(m, d.interval) : (0, core_19.esc)(d.why || "no interval")})</span>` : "";
-                const nums = `${x.a ? `A ${(0, core_19.esc)(x.a.text)}` : "not in A"} · ${x.b ? `B ${(0, core_19.esc)(x.b.text)}` : "not in B"}${diff}`;
+                const diff = d && d.estimate !== null ? ` · B − A <b>${change(m, d.estimate)}</b> <span class="av-muted">(${d.interval ? span(m, d.interval) : (0, core_20.esc)(d.why || "no interval")})</span>` : "";
+                const nums = `${x.a ? `A ${(0, core_20.esc)(x.a.text)}` : "not in A"} · ${x.b ? `B ${(0, core_20.esc)(x.b.text)}` : "not in B"}${diff}`;
                 // What the line covers, beneath the track and the numbers, where it has the row's width.
-                const covers = d?.label || d?.coverage ? `<p class="av-rc-over">${d.label ? `${(0, core_19.esc)(d.label.charAt(0).toUpperCase() + d.label.slice(1))}: A ${(0, core_19.esc)(valueWords(d.a))}, B ${(0, core_19.esc)(valueWords(d.b))}.` : ""}${d.coverage ? ` ${(0, core_19.esc)(d.coverage.charAt(0).toUpperCase() + d.coverage.slice(1))}.` : ""}</p>` : "";
+                const covers = d?.label || d?.coverage ? `<p class="av-rc-over">${d.label ? `${(0, core_20.esc)(d.label.charAt(0).toUpperCase() + d.label.slice(1))}: A ${(0, core_20.esc)(valueWords(d.a))}, B ${(0, core_20.esc)(valueWords(d.b))}.` : ""}${d.coverage ? ` ${(0, core_20.esc)(d.coverage.charAt(0).toUpperCase() + d.coverage.slice(1))}.` : ""}</p>` : "";
                 const said = `${(x.a || x.b).label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d?.label ? `; ${d.label}: A ${valueWords(d.a)}, B ${valueWords(d.b)}` : ""}${d && d.estimate !== null ? `; B minus A ${changeText(m, d.estimate)}, ${d.interval ? `95% interval ${spanText(m, d.interval)}` : d.why || "no interval"}` : ""}${d?.coverage ? `; ${d.coverage}` : ""}`;
-                const track = x.a && x.b ? (d ? `<div class="av-cx-track av-rc-track" role="img" aria-label="${(0, core_19.esc)(said)}"${(0, core_19.attrs)({ title: d.method })}>${line}${marker(x.a, d.a, "A", near, d.label)}${marker(x.b, d.b, "B", near, d.label)}</div>` : `<p class="av-rc-apart">${(0, core_19.esc)(apartWhy || "")}.</p>`)
-                    : `<div class="av-cx-track av-rc-track" role="img" aria-label="${(0, core_19.esc)(said)}">${(x.a || x.b).balanced !== null ? marker((x.a || x.b), (x.a || x.b).balanced, x.a ? "A" : "B", false, (x.a || x.b).cases > 1 ? "each case weighted equally" : null) : ""}</div>`;
-                return `<div class="av-rc-row"><div class="av-rc-name">${name}${x.how && x.how !== "same label" ? ` <span class="av-chip">${(0, core_19.esc)(x.how)}</span>` : ""}${(x.a || x.b).baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div>${track}<div class="av-rc-nums">${nums}</div>${covers}</div>`;
+                const track = x.a && x.b ? (d ? `<div class="av-cx-track av-rc-track" role="img" aria-label="${(0, core_20.esc)(said)}"${(0, core_20.attrs)({ title: d.method })}>${line}${marker(x.a, d.a, "A", near, d.label)}${marker(x.b, d.b, "B", near, d.label)}</div>` : `<p class="av-rc-apart">${(0, core_20.esc)(apartWhy || "")}.</p>`)
+                    : `<div class="av-cx-track av-rc-track" role="img" aria-label="${(0, core_20.esc)(said)}">${(x.a || x.b).balanced !== null ? marker((x.a || x.b), (x.a || x.b).balanced, x.a ? "A" : "B", false, (x.a || x.b).cases > 1 ? "each case weighted equally" : null) : ""}</div>`;
+                return `<div class="av-rc-row"><div class="av-rc-name">${name}${x.how && x.how !== "same label" ? ` <span class="av-chip">${(0, core_20.esc)(x.how)}</span>` : ""}${(x.a || x.b).baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div>${track}<div class="av-rc-nums">${nums}</div>${covers}</div>`;
             }).join("");
             const [lo, hi] = ends(shared);
-            const scale = shared.percent ? `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(v => `<span style="--x:${(0, frame_9.pos)(v)}">${v * 100}%</span>`).join("")}</div><span></span></div>` : `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div><span style="--x:0%">${(0, core_19.esc)(lo)}</span><span style="--x:100%">${(0, core_19.esc)(hi)}</span></div><span></span></div>`;
+            const scale = shared.percent ? `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(v => `<span style="--x:${(0, frame_9.pos)(v)}">${v * 100}%</span>`).join("")}</div><span></span></div>` : `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div><span style="--x:0%">${(0, core_20.esc)(lo)}</span><span style="--x:100%">${(0, core_20.esc)(hi)}</span></div><span></span></div>`;
             const direction = m.better === "none" ? "the line between them is the change, in grey because this measure names no better direction" : `the line between them is the change, green where B is better and red where it is worse (${m.better} is better)`;
-            setups = `<h4 class="av-rc-sub">Setup by setup</h4><p class="av-muted">Each setup's ${(0, core_19.esc)(m.label)} in A and in B on one scale; ${direction}. Setups are matched by label, then id, then id apart from an ending each side shares, then reference with reference.</p><div class="av-rc-slope">${scale}${slope}</div>`;
+            setups = `<h4 class="av-rc-sub">Setup by setup</h4><p class="av-muted">Each setup's ${(0, core_20.esc)(m.label)} in A and in B on one scale; ${direction}. Setups are matched by label, then id, then id apart from an ending each side shares, then reference with reference.</p><div class="av-rc-slope">${scale}${slope}</div>`;
         }
         else if (A.measure || B.measure) {
             // Each report's values in its own words beside its own track.
-            const apart = (s, letter) => `<div><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span><span>${(0, core_19.esc)(s.metric || "no headline value")}</span></p>${s.measure ? lanes(s, true) : ""}${s.rows.length ? `<ul class="av-rc-values">${s.rows.map(r => `<li>${(0, core_19.esc)(r.label)}: ${(0, core_19.esc)(r.text)}</li>`).join("")}</ul>` : ""}</div>`;
+            const apart = (s, letter) => `<div><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span><span>${(0, core_20.esc)(s.metric || "no headline value")}</span></p>${s.measure ? lanes(s, true) : ""}${s.rows.length ? `<ul class="av-rc-values">${s.rows.map(r => `<li>${(0, core_20.esc)(r.label)}: ${(0, core_20.esc)(r.text)}</li>`).join("")}</ul>` : ""}</div>`;
             setups = `<h4 class="av-rc-sub">Each report on its own measure</h4><div class="av-rc-cols">${apart(A, "A")}${apart(B, "B")}</div>`;
         }
         const heat = (c) => c && c.n ? `<span class="av-rc-cell" style="--p:${Math.round((c.k / c.n) * 100)}%">${c.k}/${c.n}</span>` : `<span class="av-rc-cell av-rc-cell--none">${c ? "0 valid" : "not run"}</span>`;
         // The cases both ran on which the headline metric has a value or an invalid result on either side; a case both ran on
         // other metrics only has no row here.
         const tableCases = same && isRate(m) ? sharedCases.filter(c => pairs.some(x => (0, collection_1.caseCell)(model, A, x.a.id, c.id) || (0, collection_1.caseCell)(model, B, x.b.id, c.id))) : [];
-        const caseTable = same && isRate(m) && tableCases.length && pairs.length ? `<h4 class="av-rc-sub">Case by case</h4><p class="av-muted">Successes of valid observations on each case both reports ran; deeper green is more.</p><div class="av-scroll-x"><table class="av-table av-table--compact av-rc-cases"><thead><tr><th scope="col">Case</th>${pairs.map(x => `<th scope="col" colspan="2">${(0, core_19.esc)(x.a.label)}</th>`).join("")}</tr><tr><th scope="col"><span class="av-sr">Case</span></th>${pairs.map(() => '<th scope="col">A</th><th scope="col">B</th>').join("")}</tr></thead><tbody>${tableCases.map(c => `<tr><th scope="row">${(0, core_19.esc)(c.label)}</th>${pairs.map(x => `<td>${heat((0, collection_1.caseCell)(model, A, x.a.id, c.id))}</td><td>${heat((0, collection_1.caseCell)(model, B, x.b.id, c.id))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${onlyA.length || onlyB.length ? `<p class="av-muted">${onlyA.length ? `Only in A: ${onlyA.map(c => (0, core_19.esc)(c.label)).join(", ")}. ` : ""}${onlyB.length ? `Only in B: ${onlyB.map(c => (0, core_19.esc)(c.label)).join(", ")}.` : ""}</p>` : ""}` : "";
-        const costRows = pairs.filter(x => (0, core_19.isNum)(x.a.cost) || (0, core_19.isNum)(x.b.cost));
-        const cost = costRows.length ? `<h4 class="av-rc-sub">Cost per run</h4><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Setup</th><th scope="col" class="av-num">A median</th><th scope="col" class="av-num">B median</th></tr></thead><tbody>${costRows.map(x => `<tr><th scope="row">${(0, core_19.esc)(x.a.label)}</th><td class="av-num">${(0, core_19.fmtUsd)(x.a.cost)}</td><td class="av-num">${(0, core_19.fmtUsd)(x.b.cost)}</td></tr>`).join("")}</tbody></table></div>` : "";
+        const caseTable = same && isRate(m) && tableCases.length && pairs.length ? `<h4 class="av-rc-sub">Case by case</h4><p class="av-muted">Successes of valid observations on each case both reports ran; deeper green is more.</p><div class="av-scroll-x"><table class="av-table av-table--compact av-rc-cases"><thead><tr><th scope="col">Case</th>${pairs.map(x => `<th scope="col" colspan="2">${(0, core_20.esc)(x.a.label)}</th>`).join("")}</tr><tr><th scope="col"><span class="av-sr">Case</span></th>${pairs.map(() => '<th scope="col">A</th><th scope="col">B</th>').join("")}</tr></thead><tbody>${tableCases.map(c => `<tr><th scope="row">${(0, core_20.esc)(c.label)}</th>${pairs.map(x => `<td>${heat((0, collection_1.caseCell)(model, A, x.a.id, c.id))}</td><td>${heat((0, collection_1.caseCell)(model, B, x.b.id, c.id))}</td>`).join("")}</tr>`).join("")}</tbody></table></div>${onlyA.length || onlyB.length ? `<p class="av-muted">${onlyA.length ? `Only in A: ${onlyA.map(c => (0, core_20.esc)(c.label)).join(", ")}. ` : ""}${onlyB.length ? `Only in B: ${onlyB.map(c => (0, core_20.esc)(c.label)).join(", ")}.` : ""}</p>` : ""}` : "";
+        const costRows = pairs.filter(x => (0, core_20.isNum)(x.a.cost) || (0, core_20.isNum)(x.b.cost));
+        const cost = costRows.length ? `<h4 class="av-rc-sub">Cost per run</h4><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Setup</th><th scope="col" class="av-num">A median</th><th scope="col" class="av-num">B median</th></tr></thead><tbody>${costRows.map(x => `<tr><th scope="row">${(0, core_20.esc)(x.a.label)}</th><td class="av-num">${(0, core_20.fmtUsd)(x.a.cost)}</td><td class="av-num">${(0, core_20.fmtUsd)(x.b.cost)}</td></tr>`).join("")}</tbody></table></div>` : "";
         const letters = (letter) => `<p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span><span class="av-sr">${letter}</span></p>`;
         const results = `<details class="av-rc-full"${same ? "" : " open"}><summary>Each report's results as its own report draws them</summary><div class="av-rc-cols"><div>${letters("A")}${resultsInFull(model, A, "rc-a")}</div><div>${letters("B")}${resultsInFull(model, B, "rc-b")}</div></div></details>`;
         const full = `<details class="av-rc-full"><summary>Each decision as its report states it: the rule, its checks, what holds and what does not</summary><div class="av-rc-cols"><div>${letters("A")}${decisionInFull(model, A, "rc-a")}</div><div>${letters("B")}${decisionInFull(model, B, "rc-b")}</div></div></details>`;
         return (0, frame_9.frame)("report-compare", input, `<div class="av-rc-sides">${side(A, "A")}${side(B, "B")}</div><div class="av-rc-what"><h4 class="av-rc-sub">What differs</h4><ul>${diffs}</ul></div>${setups}${caseTable}${cost}${results}${full}`);
     }
 });
-define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/compare", "blocks/judgments", "blocks/collection", "validate", "reading"], function (require, exports, core_20, model_3, T, G, setup_1, cases_1, failures_1, contrast_1, C, J, K, validate_4, reading_2) {
+define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks/general", "blocks/setup", "blocks/cases", "blocks/failures", "blocks/contrast", "blocks/compare", "blocks/judgments", "blocks/collection", "validate", "reading"], function (require, exports, core_21, model_3, T, G, setup_1, cases_1, failures_1, contrast_1, C, J, K, validate_4, reading_2) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.registerBlock = registerBlock;
@@ -9547,12 +9591,12 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
     function renderBlock(block, ctx) {
         const fn = registry.get(block?.type);
         if (!fn)
-            return `<div class="av-block av-block-error" role="note"><strong>Unknown block type “${(0, core_20.esc)(block?.type ?? "")}”.</strong> Valid types: ${blockTypes().map(t => `<code>${t}</code>`).join(", ")}.</div>`;
+            return `<div class="av-block av-block-error" role="note"><strong>Unknown block type “${(0, core_21.esc)(block?.type ?? "")}”.</strong> Valid types: ${blockTypes().map(t => `<code>${t}</code>`).join(", ")}.</div>`;
         try {
             return fn(block, ctx);
         }
         catch (error) {
-            return `<div class="av-block av-block-error" role="note"><strong>The ${(0, core_20.esc)(block.type)} block could not render.</strong> ${(0, core_20.esc)(error instanceof Error ? error.message : String(error))}</div>`;
+            return `<div class="av-block av-block-error" role="note"><strong>The ${(0, core_21.esc)(block.type)} block could not render.</strong> ${(0, core_21.esc)(error instanceof Error ? error.message : String(error))}</div>`;
         }
     }
     function renderReport(spec) {
@@ -9585,21 +9629,21 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
             const problem = !raw || typeof raw !== "object" ? "This section entry is not an object." : !Array.isArray(s.blocks) ? "This section has no blocks list." : "";
             return { ...s, story: !!raw?.story && i === 0 && told.length > 0, title, blocks: Array.isArray(s.blocks) ? s.blocks : [], problem, id: typeof s.id === "string" && /^[A-Za-z][\w:.-]*$/.test(s.id) ? s.id : ctx.uid(title), n: String(i + 1).padStart(2, "0") };
         });
-        const toc = sections.map(s => `<li><a href="#${(0, core_20.esc)(s.id)}"><span class="av-toc-n">${s.n}</span><span class="av-toc-label">${(0, core_20.esc)(s.label || s.title)}</span></a></li>`).join("");
+        const toc = sections.map(s => `<li><a href="#${(0, core_21.esc)(s.id)}"><span class="av-toc-n">${s.n}</span><span class="av-toc-label">${(0, core_21.esc)(s.label || s.title)}</span></a></li>`).join("");
         const metaItems = (Array.isArray(spec.meta) ? spec.meta : []).filter(m => m && typeof m === "object");
-        const meta = metaItems.length ? `<dl class="av-meta">${metaItems.map(m => `<div><dt>${(0, core_20.esc)(m.label)}</dt><dd>${(0, core_20.esc)(m.value)}</dd></div>`).join("")}</dl>` : "";
-        const body = sections.map(s => `<section class="av-section" id="${(0, core_20.esc)(s.id)}" aria-labelledby="${(0, core_20.esc)(s.id)}-h"><header class="av-section-head"><span class="av-section-n" aria-hidden="true">${s.n}</span><div><h2 id="${(0, core_20.esc)(s.id)}-h" class="av-section-title">${(0, core_20.esc)(s.title)}</h2>${(0, core_20.prose)(s.lead, "av-section-lead")}</div></header>${s.story ? (0, reading_2.storyHtml)(spec.story, ctx) : ""}${s.reading ? `<div class="av-section-reading"><span class="av-read-tag">What this shows</span>${(0, core_20.prose)(s.reading, "av-read-prose")}</div>` : ""}${s.problem ? `<div class="av-block av-block-error" role="note"><strong>${(0, core_20.esc)(s.problem)}</strong> Each section needs a title and a blocks list.</div>` : ""}${s.blocks.map(b => renderBlock(b, ctx)).join("")}</section>`).join("");
+        const meta = metaItems.length ? `<dl class="av-meta">${metaItems.map(m => `<div><dt>${(0, core_21.esc)(m.label)}</dt><dd>${(0, core_21.esc)(m.value)}</dd></div>`).join("")}</dl>` : "";
+        const body = sections.map(s => `<section class="av-section" id="${(0, core_21.esc)(s.id)}" aria-labelledby="${(0, core_21.esc)(s.id)}-h"><header class="av-section-head"><span class="av-section-n" aria-hidden="true">${s.n}</span><div><h2 id="${(0, core_21.esc)(s.id)}-h" class="av-section-title">${(0, core_21.esc)(s.title)}</h2>${(0, core_21.prose)(s.lead, "av-section-lead")}</div></header>${s.story ? (0, reading_2.storyHtml)(spec.story, ctx) : ""}${s.reading ? `<div class="av-section-reading"><span class="av-read-tag">What this shows</span>${(0, core_21.prose)(s.reading, "av-read-prose")}</div>` : ""}${s.problem ? `<div class="av-block av-block-error" role="note"><strong>${(0, core_21.esc)(s.problem)}</strong> Each section needs a title and a blocks list.</div>` : ""}${s.blocks.map(b => renderBlock(b, ctx)).join("")}</section>`).join("");
         return `<div class="av-report" data-av-report>
-<a class="av-skip" href="#${(0, core_20.esc)(sections[0]?.id || "top")}">Skip to the first section</a>
-<header class="av-topbar"><div class="av-topbar-inner"><a class="av-brand" href="#av-top"><span class="av-brand-mark" aria-hidden="true"></span><span class="av-brand-text">${(0, core_20.esc)(spec.kicker || "Report")}</span></a><nav class="av-toc" aria-label="Sections"><ol>${toc}</ol></nav><button type="button" class="av-theme-toggle" data-av-theme-toggle hidden><span class="av-theme-icon" aria-hidden="true"></span><span class="av-theme-word">Auto</span></button></div></header>
-<header class="av-masthead" id="av-top"><div class="av-masthead-inner">${spec.kicker ? `<p class="av-kicker">${(0, core_20.esc)(spec.kicker)}</p>` : ""}<h1 class="av-title">${(0, core_20.esc)(spec.title)}</h1>${(0, core_20.prose)(spec.summary, "av-summary")}${meta}</div></header>
+<a class="av-skip" href="#${(0, core_21.esc)(sections[0]?.id || "top")}">Skip to the first section</a>
+<header class="av-topbar"><div class="av-topbar-inner"><a class="av-brand" href="#av-top"><span class="av-brand-mark" aria-hidden="true"></span><span class="av-brand-text">${(0, core_21.esc)(spec.kicker || "Report")}</span></a><nav class="av-toc" aria-label="Sections"><ol>${toc}</ol></nav><button type="button" class="av-theme-toggle" data-av-theme-toggle hidden><span class="av-theme-icon" aria-hidden="true"></span><span class="av-theme-word">Auto</span></button></div></header>
+<header class="av-masthead" id="av-top"><div class="av-masthead-inner">${spec.kicker ? `<p class="av-kicker">${(0, core_21.esc)(spec.kicker)}</p>` : ""}<h1 class="av-title">${(0, core_21.esc)(spec.title)}</h1>${(0, core_21.prose)(spec.summary, "av-summary")}${meta}</div></header>
 <main class="av-sections">${(0, validate_4.renderProblems)([...(Array.isArray(spec.problems) ? spec.problems.filter(p => p && typeof p === "object") : []), ...(0, validate_4.validateSpec)(spec)])}${body}</main>
-<footer class="av-footer"><p>${(0, core_20.esc)(spec.footer || "A self-contained report: every view is drawn from the data embedded in this file, and each run names its native record.")}</p></footer>
+<footer class="av-footer"><p>${(0, core_21.esc)(spec.footer || "A self-contained report: every view is drawn from the data embedded in this file, and each run names its native record.")}</p></footer>
 <dialog class="av-drawer" data-av-drawer aria-labelledby="av-drawer-title"><div class="av-drawer-inner" data-av-drawer-body></div></dialog>
 </div>`;
     }
 });
-define("validate", ["require", "exports", "core", "report", "trial-model", "stats"], function (require, exports, core_21, report_2, trial_model_12, stats_14) {
+define("validate", ["require", "exports", "core", "report", "trial-model", "sections", "stats"], function (require, exports, core_22, report_2, trial_model_12, sections_4, stats_14) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.FILE_REF = void 0;
@@ -9761,9 +9805,9 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
     const DEFAULT_SECTIONS = ["verdict", "setup", "arms", "cases", "grid", "failures", "checks", "pairwise", "cost", "invalid", "runs"];
     /** Sections composed only when include names them. */
     const OPT_IN_SECTIONS = ["grid"];
-    const SECTION_ALIASES = { plan: "setup" };
+    const SECTION_ALIASES = sections_4.TRIAL_SECTION_ALIASES;
     const SECTION_NAMES = [...DEFAULT_SECTIONS, ...Object.keys(SECTION_ALIASES)];
-    const sectionKey = (id) => Object.prototype.hasOwnProperty.call(SECTION_ALIASES, id) ? SECTION_ALIASES[id] : id;
+    const sectionKey = sections_4.trialSection;
     const NARRATIVE = {
         fields: {
             title: "text", question: "text", summary: "prose", kicker: "text",
@@ -9804,9 +9848,9 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
     };
     /** Section ids of the comparison composition (comparison-compose.ts), and other names it accepts. */
     const COMPARISON_SECTIONS = ["verdict", "compared", "results", "differences", "groups", "cases", "judgments", "decision", "observations", "sources"];
-    const COMPARISON_ALIASES = { setup: "compared", alternatives: "compared", metrics: "results", hierarchy: "groups", preferences: "judgments", pairwise: "judgments", matrix: "decision", ledger: "observations", runs: "observations" };
+    const COMPARISON_ALIASES = sections_4.COMPARISON_SECTION_ALIASES;
     const COMPARISON_NAMES = [...COMPARISON_SECTIONS, ...Object.keys(COMPARISON_ALIASES)];
-    const comparisonKey = (id) => Object.prototype.hasOwnProperty.call(COMPARISON_ALIASES, id) ? COMPARISON_ALIASES[id] : id;
+    const comparisonKey = sections_4.comparisonSection;
     const COMPARISON_NARRATIVE = {
         fields: {
             title: "text", question: "text", summary: "prose", kicker: "text",
@@ -9828,7 +9872,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
     const isNumber = (v) => typeof v === "number" && Number.isFinite(v);
     const isText = (v) => typeof v === "string" || isNumber(v);
     /** A map's keys as entriesOf lists them ("$" keys are notes), sorted so both checkers list problems in one order. */
-    const keysOf = (v) => (0, core_21.keysIn)(v).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    const keysOf = (v) => (0, core_22.keysIn)(v).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     /** A supplied value as it reads in a message: text in quotes, cut to 60 characters. */
     function clip(value, max = 60) {
         const chars = Array.from(value);
@@ -10044,7 +10088,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
             list.push(v); };
         const plan = isObj(trial.plan) ? trial.plan : {};
         if (isObj(plan.arms))
-            for (const [a, entry] of (0, core_21.entriesOf)(plan.arms)) {
+            for (const [a, entry] of (0, core_22.entriesOf)(plan.arms)) {
                 add(known.arms, a);
                 if (isObj(entry))
                     known.settings[a] = entry;
@@ -10061,12 +10105,12 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
             add(known.ranArms, r.arm);
             add(known.ranCases, r.scenario);
             if ((r.passed === true || r.passed === false) && isObj(r.checks))
-                for (const [k, v] of (0, core_21.entriesOf)(r.checks))
+                for (const [k, v] of (0, core_22.entriesOf)(r.checks))
                     if (typeof v === "boolean")
                         add(known.checks, k);
         }
         if (isObj(trial.pairwise))
-            for (const k of (0, core_21.keysIn)(trial.pairwise))
+            for (const k of (0, core_22.keysIn)(trial.pairwise))
                 add(known.pairs, k);
         return known;
     }
@@ -10155,13 +10199,13 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
                     this.type(x, "text", this.join(where, i)); });
             if (kind === "member-id" && !/^[A-Za-z][\w.-]*$/.test(v))
                 this.add("error", where, `"${clip(v)}" cannot be a report id, since links name reports by id`, "start with a letter and use only letters, digits, _ . or -");
-            if (kind === "theme-id" && !v.trim())
+            if (kind === "theme-id" && (0, core_22.isBlank)(v))
                 this.add("error", where, "a theme id cannot be blank, since reports join their theme by its id", "name the theme");
             if (kind === "section-id" && !/^[A-Za-z][\w:.-]*$/.test(v))
                 this.add("warning", where, `"${clip(v)}" cannot be used as a section id, so the section gets a generated one`, "start with a letter and use only letters, digits, _ : . or -");
             // An id that is not blank but breaks the identifier rule is refused here; a blank one is told by its kind's own check.
-            if (ID_KINDS.includes(kind) && v.trim() !== "" && !(0, core_21.isId)(v))
-                return this.add("error", where, `"${clip(v)}" cannot be an id: an id starts with no "$" (kept for notes) and has no space or tab at either end`, "write the id without them");
+            if (ID_KINDS.includes(kind) && !(0, core_22.isBlank)(v) && !(0, core_22.isId)(v))
+                return this.add("error", where, `"${clip(v)}" cannot be an id: an id starts with no "$" (kept for notes) and has no whitespace at either end`, "write the id without them");
             if (kind in IDS)
                 this.id(v, kind, where);
         }
@@ -10414,7 +10458,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
             if (!needed)
                 return;
             // The descriptions the story view draws (entriesOf: a "$" key is a note), so a note never counts as one.
-            const ids = [...needed.keys()], given = isObj(story[key]) ? story[key] : {}, drawn = new Map((0, core_21.entriesOf)(given));
+            const ids = [...needed.keys()], given = isObj(story[key]) ? story[key] : {}, drawn = new Map((0, core_22.entriesOf)(given));
             for (const [id, noun] of needed)
                 if (!said(drawn.get(id)))
                     c.add("error", c.join(where, key), `does not describe ${noun} "${clip(id)}"`, key === "alternatives" ? "say in plain words what each one is and how it differs from the others" : "say in plain words why each case exists and what it checks for");
@@ -10448,7 +10492,11 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
     function readingsChecks(c, owner, at, required, names, key) {
         const where = c.join(at, "readings");
         const given = isObj(owner.readings) ? owner.readings : {};
-        const covered = keysOf(given).filter(k => said(given[k])).map(key);
+        // The readings exactly as the composition shows them (resolveSections); two keys for one section are refused, naming both.
+        const resolved = (0, sections_4.resolveSections)(given, key);
+        for (const x of resolved.clashes)
+            c.add("error", c.join(where, x.again), `"${clip(x.again)}" names the "${x.section}" section, as "${clip(x.first)}" does, so only "${clip(x.first)}" is shown`, `give the "${x.section}" reading once`);
+        const covered = [...resolved.values].filter(([, v]) => said(v)).map(([s]) => s);
         for (const id of required)
             if (!covered.includes(id))
                 c.add("error", where, `no reading for the "${id}" section`, `add readings.${id}: what a newcomer should take from that section's views for this data, in plain words, with the numbers that matter`);
@@ -10471,7 +10519,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
                 shown.push("arms");
             if (valid.some(r => r.passed === false))
                 shown.push("failures");
-            if (isObj(trial.pairwise) && (0, core_21.keysIn)(trial.pairwise).length)
+            if (isObj(trial.pairwise) && (0, core_22.keysIn)(trial.pairwise).length)
                 shown.push("pairwise");
             const positive = (v) => isNumber(v) && v > 0;
             if (valid.some(r => positive(r.seconds) || positive(r.commands) || (isObj(r.usage) && ["output_tokens", "input_tokens", "cost_usd", "total_cost_usd"].some(k => positive(r.usage[k])))))
@@ -10506,7 +10554,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
         if (arms.size > 1) {
             const names = new Map();
             for (const r of recorded)
-                for (const [k, v] of (0, core_21.entriesOf)(checksOf(r)))
+                for (const [k, v] of (0, core_22.entriesOf)(checksOf(r)))
                     names.set(k, typeof v === "boolean" ? names.get(k) ?? true : false);
             return [...names.values()].some(Boolean) || runs.some(r => isObj(r.judge) && (r.judge.verdict === "pass" || r.judge.verdict === "fail"));
         }
@@ -10516,7 +10564,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
             const required = plan && Array.isArray(plan.required) ? plan.required.filter(x => typeof x === "string") : [];
             const kinds = new Map();
             for (const r of recorded.filter(x => x.scenario === cs))
-                for (const [k, v] of (0, core_21.entriesOf)(checksOf(r))) {
+                for (const [k, v] of (0, core_22.entriesOf)(checksOf(r))) {
                     if (required.includes(k))
                         continue;
                     const t = typeof v === "boolean" ? "boolean" : isNumber(v) ? "number" : "other";
@@ -10691,14 +10739,14 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
             known.ranCases.forEach(kase);
             // The pairwise view reads its own arms and cases, whatever the runs name.
             const pairwise = isObj(trial) && isObj(trial.pairwise) ? trial.pairwise : {};
-            for (const k of (0, core_21.keysIn)(pairwise)) {
+            for (const k of (0, core_22.keysIn)(pairwise)) {
                 const p = pairwise[k];
                 if (!isObj(p))
                     continue;
                 if (Array.isArray(p.arms))
                     p.arms.slice(0, 2).forEach(a => alt(a, "arm"));
                 if (isObj(p.scenarios))
-                    (0, core_21.keysIn)(p.scenarios).forEach(kase);
+                    (0, core_22.keysIn)(p.scenarios).forEach(kase);
             }
         }
         const fromComparison = (data) => { any = true; for (const a of data.alternatives)
@@ -10758,7 +10806,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
         return specNeeds(spec, knownFrom(trial, comparison), trial, comparison).cases || [];
     }
     /** An identifier the views group or label by: text with something in it. */
-    const ID_HINT = 'an id is text that starts with no "$" (kept for notes) and has no space or tab at either end, as trial.py report RUN_DIR --out FILE writes it';
+    const ID_HINT = 'an id is text that starts with no "$" (kept for notes) and has no whitespace at either end, as trial.py report RUN_DIR --out FILE writes it';
     /** The one check of trial data, however it enters: a specification's own `trial`, a trial supplied beside a
      * specification, a narrative's trial (so every composed trial report), and a collection member's. It must be trial report
      * data, and every identifier the views group or label by must be text: each run's arm and scenario (and its job, when
@@ -10774,47 +10822,47 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
         trial.runs.forEach((r, i) => {
             if (!isObj(r))
                 return;
-            if (!(0, core_21.isId)(r.arm))
+            if (!(0, core_22.isId)(r.arm))
                 c.add("error", `${where}.runs[${i}].arm`, "a trial run must name its arm", ID_HINT);
-            if (!(0, core_21.isId)(r.scenario))
+            if (!(0, core_22.isId)(r.scenario))
                 c.add("error", `${where}.runs[${i}].scenario`, "a trial run must name its scenario", ID_HINT);
-            if (r.job !== undefined && r.job !== null && !(0, core_21.isId)(r.job))
+            if (r.job !== undefined && r.job !== null && !(0, core_22.isId)(r.job))
                 c.add("error", `${where}.runs[${i}].job`, "a trial run's job, when given, must name its record", ID_HINT);
             if (!isVerdict(r.passed))
                 c.add("error", `${where}.runs[${i}].passed`, "a trial run must say whether it passed: true, false, or null for no verdict", "write the trial with trial.py report RUN_DIR --out FILE, which writes each run's verdict");
         });
         if (isObj(trial.plan) && Array.isArray(trial.plan.scenarios))
-            trial.plan.scenarios.forEach((sc, i) => { if (isObj(sc) && !(0, core_21.isId)(sc.name))
+            trial.plan.scenarios.forEach((sc, i) => { if (isObj(sc) && !(0, core_22.isId)(sc.name))
                 c.add("error", `${where}.plan.scenarios[${i}].name`, "a plan scenario must have a name", ID_HINT); });
         // A plan's arms are keyed by their ids.
         if (isObj(trial.plan))
-            for (const k of (0, core_21.keysIn)(trial.plan.arms))
-                if (!(0, core_21.isId)(k))
+            for (const k of (0, core_22.keysIn)(trial.plan.arms))
+                if (!(0, core_22.isId)(k))
                     c.add("error", c.join(c.join(c.join(where, "plan"), "arms"), k), `"${clip(k)}" cannot be an arm id`, ID_HINT);
         // A pairwise judgment names exactly two different arms this trial knows, with its overall counts and its counts by case.
         if (isObj(trial.pairwise)) {
             const known = (0, trial_model_12.trialArms)(trial);
             for (const k of keysOf(trial.pairwise)) {
                 const p = trial.pairwise[k], at = c.join(c.join(where, "pairwise"), k);
-                if (!(0, core_21.isId)(k))
+                if (!(0, core_22.isId)(k))
                     c.add("error", at, `"${clip(k)}" cannot be a pairwise judgment's id`, ID_HINT);
                 if (!isObj(p)) {
                     c.add("error", at, "a pairwise judgment must be an object with its arms and counts", ID_HINT);
                     continue;
                 }
-                for (const s of (0, core_21.keysIn)(p.scenarios))
-                    if (!(0, core_21.isId)(s))
+                for (const s of (0, core_22.keysIn)(p.scenarios))
+                    if (!(0, core_22.isId)(s))
                         c.add("error", c.join(c.join(at, "scenarios"), s), `"${clip(s)}" cannot be a case id`, ID_HINT);
                 if (!Array.isArray(p.arms) || p.arms.length !== 2)
                     c.add("error", c.join(at, "arms"), "a pairwise judgment must name its two arms", ID_HINT);
                 else {
                     p.arms.forEach((a, i) => {
-                        if (!(0, core_21.isId)(a))
+                        if (!(0, core_22.isId)(a))
                             c.add("error", `${c.join(at, "arms")}[${i}]`, "a pairwise judgment must name its arms", ID_HINT);
                         else if (!known.includes(a))
                             c.add("error", `${c.join(at, "arms")}[${i}]`, `"${clip(a)}" is not an arm of this trial`, known.length ? `arms of this trial: ${listOf(known)}` : "this trial has no arms");
                     });
-                    if ((0, core_21.isId)(p.arms[0]) && p.arms[0] === p.arms[1])
+                    if ((0, core_22.isId)(p.arms[0]) && p.arms[0] === p.arms[1])
                         c.add("error", c.join(at, "arms"), "a pairwise judgment must name two different arms", ID_HINT);
                 }
                 if (!isObj(p.overall))
@@ -10832,10 +10880,9 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
     function wellFormedTrial(trial) {
         if (!isObj(trial) || !Array.isArray(trial.runs))
             return trial;
-        const runs = trial.runs.filter(r => !isObj(r) || ((0, core_21.isId)(r.arm) && (0, core_21.isId)(r.scenario) && (r.job === undefined || r.job === null || (0, core_21.isId)(r.job)) && isVerdict(r.passed)));
-        const plan = isObj(trial.plan) && Array.isArray(trial.plan.scenarios) ? { ...trial.plan, scenarios: trial.plan.scenarios.filter(sc => !isObj(sc) || (0, core_21.isId)(sc.name)) } : trial.plan;
-        const known = (0, trial_model_12.trialArms)(trial);
-        const pairwise = isObj(trial.pairwise) ? Object.fromEntries((0, core_21.entriesOf)(trial.pairwise).filter(([k, p]) => (0, core_21.isId)(k) && (0, trial_model_12.wellFormedPair)(p, known))) : trial.pairwise;
+        const runs = trial.runs.filter(r => !isObj(r) || ((0, core_22.isId)(r.arm) && (0, core_22.isId)(r.scenario) && (r.job === undefined || r.job === null || (0, core_22.isId)(r.job)) && isVerdict(r.passed)));
+        const plan = isObj(trial.plan) && Array.isArray(trial.plan.scenarios) ? { ...trial.plan, scenarios: trial.plan.scenarios.filter(sc => !isObj(sc) || (0, core_22.isId)(sc.name)) } : trial.plan;
+        const pairwise = isObj(trial.pairwise) ? Object.fromEntries((0, trial_model_12.wellFormedPairs)(trial)) : trial.pairwise;
         return { ...trial, runs, ...(plan !== undefined ? { plan } : {}), ...(pairwise !== undefined ? { pairwise } : {}) };
     }
     /** A check's problems, moved from the place it names its input (`from`, such as "comparison") to where the input
@@ -11019,7 +11066,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
                         if (typeof arm !== "string" || arm === first || !other)
                             return;
                         // Settings listed as the setup view lists them (entriesOf: a "$" key is a note).
-                        const differ = [...new Set([...(0, core_21.keysIn)(base), ...(0, core_21.keysIn)(other)])].filter(k => !MATERIAL_TEXT.includes(k) && canon(base[k]) !== canon(other[k])).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+                        const differ = [...new Set([...(0, core_22.keysIn)(base), ...(0, core_22.keysIn)(other)])].filter(k => !MATERIAL_TEXT.includes(k) && canon(base[k]) !== canon(other[k])).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
                         if (differ.length)
                             c.add("error", c.join(c.join(where, i), j), `"${clip(arm)}" differs from "${clip(first)}" in ${listOf(differ)}, so the gap between them is not chance alone`, "identical is for copies whose every recorded setting matches; leave these arms out of it");
                     });
@@ -11433,18 +11480,18 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
             : "These do not change what any view shows, but some of what the author supplied was not used as written.";
         // Sentences start with a capital on the page; a quoted value or a one-letter name such as k keeps its case.
         const sentence = (text) => /^[a-z][a-z]/.test(text) ? text[0].toUpperCase() + text.slice(1) : text;
-        const item = (p) => `<li class="av-problem av-problem--${p.level}"><span class="av-problem-level">${p.level === "error" ? "Error" : "Warning"}</span><div class="av-problem-body"><p class="av-problem-msg">${(0, core_21.esc)(sentence(p.message))}</p><code class="av-problem-where">${(0, core_21.esc)(p.where)}</code>${p.hint ? `<p class="av-problem-hint">${(0, core_21.esc)(sentence(p.hint))}</p>` : ""}</div></li>`;
+        const item = (p) => `<li class="av-problem av-problem--${p.level}"><span class="av-problem-level">${p.level === "error" ? "Error" : "Warning"}</span><div class="av-problem-body"><p class="av-problem-msg">${(0, core_22.esc)(sentence(p.message))}</p><code class="av-problem-where">${(0, core_22.esc)(p.where)}</code>${p.hint ? `<p class="av-problem-hint">${(0, core_22.esc)(sentence(p.hint))}</p>` : ""}</div></li>`;
         const SHOWN = 8;
         const more = list.length > SHOWN
             ? `<details class="av-problems-more"><summary>Show ${plural(list.length - SHOWN, "more problem")}</summary><ol class="av-problems-list" start="${SHOWN + 1}">${list.slice(SHOWN).map(item).join("")}</ol></details>`
             : "";
         return `<aside class="av-problems av-problems--${errors ? "error" : "warning"}" aria-labelledby="av-problems-title" data-av-problems="${list.length}">
-<div class="av-problems-head"><span class="av-problems-icon" aria-hidden="true">!</span><div class="av-problems-text"><p class="av-eyebrow">Input check</p><h2 class="av-problems-title" id="av-problems-title">This report's input has ${(0, core_21.esc)(counts)}</h2><p class="av-problems-lead">${(0, core_21.esc)(lead)}</p></div></div>
+<div class="av-problems-head"><span class="av-problems-icon" aria-hidden="true">!</span><div class="av-problems-text"><p class="av-eyebrow">Input check</p><h2 class="av-problems-title" id="av-problems-title">This report's input has ${(0, core_22.esc)(counts)}</h2><p class="av-problems-lead">${(0, core_22.esc)(lead)}</p></div></div>
 <details class="av-problems-details"${errors ? " open" : ""}><summary><span class="av-problems-show">Show the list</span><span class="av-problems-hide">Hide the list</span></summary><ol class="av-problems-list">${list.slice(0, SHOWN).map(item).join("")}</ol>${more}</details>
 </aside>`;
     }
 });
-define("model", ["require", "exports", "core"], function (require, exports, core_22) {
+define("model", ["require", "exports", "core"], function (require, exports, core_23) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.ArmRegistry = void 0;
@@ -11480,7 +11527,7 @@ define("model", ["require", "exports", "core"], function (require, exports, core
         /** Glyph and label; the raw id stays visible when a label replaces it. */
         tag(id, opts = {}) {
             const label = this.label(id), showId = opts.id !== false && label !== id;
-            return `<span class="av-arm"${(0, core_22.attrs)({ "data-arm": id, style: `--c:${this.color(id)}` })}>${this.glyph(id)}<span class="av-arm-label">${(0, core_22.esc)(label)}</span>${showId ? `<code class="av-arm-id">${(0, core_22.esc)(id)}</code>` : ""}</span>`;
+            return `<span class="av-arm"${(0, core_23.attrs)({ "data-arm": id, style: `--c:${this.color(id)}` })}>${this.glyph(id)}<span class="av-arm-label">${(0, core_23.esc)(label)}</span>${showId ? `<code class="av-arm-id">${(0, core_23.esc)(id)}</code>` : ""}</span>`;
         }
     }
     exports.ArmRegistry = ArmRegistry;
@@ -11497,14 +11544,14 @@ define("model", ["require", "exports", "core"], function (require, exports, core
         return {
             arms, comparison: spec.comparison, trial: spec.trial, collection: spec.collection, runs, runIndex: new Map(runs.map((r, i) => [r, i])), caseLabels,
             uid(base) {
-                const id = (0, core_22.slug)(base), n = used.get(id) || 0;
+                const id = (0, core_23.slug)(base), n = used.get(id) || 0;
                 used.set(id, n + 1);
                 return n ? `${id}-${n}` : id;
             },
         };
     }
 });
-define("reader", ["require", "exports", "core", "collection", "validate"], function (require, exports, core_23, collection_2, validate_5) {
+define("reader", ["require", "exports", "core", "collection", "validate"], function (require, exports, core_24, collection_2, validate_5) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.readerRoute = readerRoute;
@@ -11681,9 +11728,9 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
         }
         // ---------------------------------------------------------------- the reader
         const where = (s) => model.themes.find(t => t.members.includes(s))?.label || "";
-        const options = (current) => model.themes.map(t => `<optgroup label="${(0, core_23.esc)(t.label)}">${t.members.filter(s => s.id !== current).map(s => `<option value="${(0, core_23.esc)(s.id)}">${(0, core_23.esc)(s.short)}</option>`).join("")}</optgroup>`).join("");
+        const options = (current) => model.themes.map(t => `<optgroup label="${(0, core_24.esc)(t.label)}">${t.members.filter(s => s.id !== current).map(s => `<option value="${(0, core_24.esc)(s.id)}">${(0, core_24.esc)(s.short)}</option>`).join("")}</optgroup>`).join("");
         const bar = (r) => {
-            const backLink = `<a class="av-reader-back" href="${(0, core_23.esc)(back.hash)}" data-av-reader-back><span aria-hidden="true">←</span> All reports</a>`;
+            const backLink = `<a class="av-reader-back" href="${(0, core_24.esc)(back.hash)}" data-av-reader-back><span aria-hidden="true">←</span> All reports</a>`;
             if (r.kind === "compare") {
                 const a = model.byId.get(r.a), b = model.byId.get(r.b);
                 return `<nav class="av-reader-bar" aria-label="Collection">${backLink}<span class="av-reader-where">Side by side</span><span class="av-reader-actions">${a && b ? `<a class="av-btn av-btn--small" href="#compare/${encodeURIComponent(r.b)}/${encodeURIComponent(r.a)}">Swap A and B</a>` : ""}${a ? `<a class="av-btn av-btn--small" href="#report/${encodeURIComponent(r.a)}">Read A</a>` : ""}${b ? `<a class="av-btn av-btn--small" href="#report/${encodeURIComponent(r.b)}">Read B</a>` : ""}</span></nav>`;
@@ -11694,7 +11741,7 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
                 return `<nav class="av-reader-bar" aria-label="Collection">${backLink}<span class="av-reader-where">Not in this collection</span></nav>`;
             const list = model.themes.flatMap(t => t.members), at = list.indexOf(s);
             const prev = list[at - 1], next = list[at + 1];
-            return `<nav class="av-reader-bar" aria-label="Collection">${backLink}<span class="av-reader-where">${(0, core_23.esc)(where(s))}<span class="av-muted"> · report ${at + 1} of ${list.length}</span></span><span class="av-reader-actions">${prev ? `<a class="av-btn av-btn--small" rel="prev" href="#report/${encodeURIComponent(prev.id)}" title="${(0, core_23.esc)(prev.short)}"><span aria-hidden="true">← </span>Previous</a>` : ""}${next ? `<a class="av-btn av-btn--small" rel="next" href="#report/${encodeURIComponent(next.id)}" title="${(0, core_23.esc)(next.short)}">Next<span aria-hidden="true"> →</span></a>` : ""}${list.length > 1 ? `<label class="av-reader-compare"><span>Compare with</span><select data-av-reader-compare><option value="">another report…</option>${options(s.id)}</select></label>` : ""}</span></nav>`;
+            return `<nav class="av-reader-bar" aria-label="Collection">${backLink}<span class="av-reader-where">${(0, core_24.esc)(where(s))}<span class="av-muted"> · report ${at + 1} of ${list.length}</span></span><span class="av-reader-actions">${prev ? `<a class="av-btn av-btn--small" rel="prev" href="#report/${encodeURIComponent(prev.id)}" title="${(0, core_24.esc)(prev.short)}"><span aria-hidden="true">← </span>Previous</a>` : ""}${next ? `<a class="av-btn av-btn--small" rel="next" href="#report/${encodeURIComponent(next.id)}" title="${(0, core_24.esc)(next.short)}">Next<span aria-hidden="true"> →</span></a>` : ""}${list.length > 1 ? `<label class="av-reader-compare"><span>Compare with</span><select data-av-reader-compare><option value="">another report…</option>${options(s.id)}</select></label>` : ""}</span></nav>`;
         };
         // A notice the library writes itself: it has no story to tell, and nothing in it needs checking.
         const notice = (title, heading, said) => (0, validate_5.composed)({
@@ -11735,7 +11782,7 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
             // A back link in the report's own sticky bar keeps the way home in reach while reading.
             const topbar = body.querySelector(".av-topbar-inner");
             if (topbar)
-                topbar.insertAdjacentHTML("afterbegin", `<a class="av-reader-topback" href="${(0, core_23.esc)(back.hash)}" aria-label="All reports" data-av-reader-back><span aria-hidden="true">←</span></a>`);
+                topbar.insertAdjacentHTML("afterbegin", `<a class="av-reader-topback" href="${(0, core_24.esc)(back.hash)}" aria-label="All reports" data-av-reader-back><span aria-hidden="true">←</span></a>`);
             // A link inside the open report (its section index, its brand, an alert's link) stays inside it: it is followed under
             // the report's own address, even when the collection behind it has an element with the same id (both have av-top).
             onView(host, "click", (e) => {
@@ -11844,7 +11891,7 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
         };
     }
 });
-define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", "report", "reader", "trial-model"], function (require, exports, core_24, failure_4, mermaid_1, model_4, report_3, reader_1, trial_model_13) {
+define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", "report", "reader", "trial-model"], function (require, exports, core_25, failure_4, mermaid_1, model_4, report_3, reader_1, trial_model_13) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.csvCell = csvCell;
@@ -11914,12 +11961,12 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         const checkNames = [];
         const seen = new Set();
         for (const i of picked)
-            for (const k of (0, core_24.keysIn)(runs[i].checks && typeof runs[i].checks === "object" ? runs[i].checks : {}))
+            for (const k of (0, core_25.keysIn)(runs[i].checks && typeof runs[i].checks === "object" ? runs[i].checks : {}))
                 if (!seen.has(k)) {
                     seen.add(k);
                     checkNames.push(k);
                 }
-        const usage = (r, k) => { const v = r.usage && typeof r.usage === "object" ? r.usage[k] : undefined; return (0, core_24.isNum)(v) ? v : null; };
+        const usage = (r, k) => { const v = r.usage && typeof r.usage === "object" ? r.usage[k] : undefined; return (0, core_25.isNum)(v) ? v : null; };
         const head = ["n", "job", "case", "case_label", "arm", "arm_label", "repeat", "outcome", "cause", "invalid_reason", "judge_verdict", "judge_reason",
             "seconds", "output_tokens", "input_tokens", "total_cost_usd", "commands", "record_path", ...checkNames.map(k => `check.${k}`)];
         const lines = [head.map(csvCell).join(",")];
@@ -11935,9 +11982,9 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             const scenario = String(r.scenario ?? ""), arm = String(r.arm ?? "");
             lines.push([
                 i + 1, r.job ?? "", scenario, labels.case ? labels.case(scenario) : scenario, arm, labels.arm ? labels.arm(arm) : arm,
-                (0, core_24.isNum)(r.repeat) ? r.repeat : "", o, cause, o === "invalid" ? (r.invalid_reason || r.status || "") : "",
-                r.judge?.verdict ?? "", r.judge?.reason ?? "", (0, core_24.isNum)(r.seconds) ? r.seconds : "", usage(r, "output_tokens"), usage(r, "input_tokens"),
-                (0, trial_model_13.costUsd)(r) ?? "", (0, core_24.isNum)(r.commands) ? r.commands : "", (0, trial_model_13.recordPath)(data, r) ?? "",
+                (0, core_25.isNum)(r.repeat) ? r.repeat : "", o, cause, o === "invalid" ? (r.invalid_reason || r.status || "") : "",
+                r.judge?.verdict ?? "", r.judge?.reason ?? "", (0, core_25.isNum)(r.seconds) ? r.seconds : "", usage(r, "output_tokens"), usage(r, "input_tokens"),
+                (0, trial_model_13.costUsd)(r) ?? "", (0, core_25.isNum)(r.commands) ? r.commands : "", (0, trial_model_13.recordPath)(data, r) ?? "",
                 ...checkNames.map(k => r.checks && Object.prototype.hasOwnProperty.call(r.checks, k) ? r.checks[k] : null),
             ].map(csvCell).join(","));
         }
@@ -12431,7 +12478,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             catch {
                 cause = "";
             }
-            return `Run ${i + 1} of ${data.runs.length}: ${ctx.caseLabels[r.scenario] || r.scenario}, ${ctx.arms.label(r.arm)}, repeat ${r.repeat ?? "?"}, ${core_24.outcomeLabel[o]}.${cause ? " " + cause.replace(/`/g, "") : ""}`;
+            return `Run ${i + 1} of ${data.runs.length}: ${ctx.caseLabels[r.scenario] || r.scenario}, ${ctx.arms.label(r.arm)}, repeat ${r.repeat ?? "?"}, ${core_25.outcomeLabel[o]}.${cause ? " " + cause.replace(/`/g, "") : ""}`;
         };
         const openRun = (i, opener, focus = ".av-drawer-close") => {
             if (!dialog || !data || !ctx || !data.runs[i])
@@ -13016,17 +13063,17 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         if (o !== "pass") {
             const text = cause.text || (o === "invalid" ? "No valid result, and no reason was recorded." : "Failed; this report could not name a cause. Everything the run recorded is below.");
             const remedy = o === "invalid" ? (0, failure_4.invalidReason)(r.invalid_reason || r.status || "").remedy : "";
-            why = `<div class="av-drawer-why av-drawer-why--${o}"><p><span class="av-drawer-why-label">${o === "invalid" ? "Why there is no result" : "Why it failed"}</span>${(0, core_24.inline)(text)}</p>${remedy ? `<p class="av-drawer-remedy"><span class="av-drawer-why-label">What gives it a result</span>${(0, core_24.inline)(remedy)}</p>` : ""}</div>`;
+            why = `<div class="av-drawer-why av-drawer-why--${o}"><p><span class="av-drawer-why-label">${o === "invalid" ? "Why there is no result" : "Why it failed"}</span>${(0, core_25.inline)(text)}</p>${remedy ? `<p class="av-drawer-remedy"><span class="av-drawer-why-label">What gives it a result</span>${(0, core_25.inline)(remedy)}</p>` : ""}</div>`;
         }
-        const positive = (v) => (0, core_24.isNum)(v) && v > 0;
+        const positive = (v) => (0, core_25.isNum)(v) && v > 0;
         const facts = [
-            ["Status", r.status ? `<code>${(0, core_24.esc)(r.status)}</code>` : '<span class="av-missing">not recorded</span>'],
-            ...(o === "invalid" ? [["Invalid because", `<code>${(0, core_24.esc)(r.invalid_reason || r.status || "unknown")}</code>`]] : []),
-            ["Executor time", (0, core_24.isNum)(r.seconds) ? (0, core_24.esc)((0, core_24.fmtSeconds)(r.seconds)) : '<span class="av-missing">not recorded</span>'],
-            ...(positive(r.setup_seconds) ? [["Setup", (0, core_24.esc)((0, core_24.fmtSeconds)(r.setup_seconds))]] : []),
-            ...(positive(r.checks_seconds) ? [["Checks", (0, core_24.esc)((0, core_24.fmtSeconds)(r.checks_seconds))]] : []),
-            ...(r.judge || positive(r.judge_seconds) ? [["Judge", (0, core_24.isNum)(r.judge_seconds) ? (0, core_24.esc)((0, core_24.fmtSeconds)(r.judge_seconds)) : '<span class="av-missing">not recorded</span>']] : []),
-            ...((0, core_24.isNum)(r.commands) ? [["Commands", (0, core_24.esc)((0, core_24.fmtNum)(r.commands))]] : []),
+            ["Status", r.status ? `<code>${(0, core_25.esc)(r.status)}</code>` : '<span class="av-missing">not recorded</span>'],
+            ...(o === "invalid" ? [["Invalid because", `<code>${(0, core_25.esc)(r.invalid_reason || r.status || "unknown")}</code>`]] : []),
+            ["Executor time", (0, core_25.isNum)(r.seconds) ? (0, core_25.esc)((0, core_25.fmtSeconds)(r.seconds)) : '<span class="av-missing">not recorded</span>'],
+            ...(positive(r.setup_seconds) ? [["Setup", (0, core_25.esc)((0, core_25.fmtSeconds)(r.setup_seconds))]] : []),
+            ...(positive(r.checks_seconds) ? [["Checks", (0, core_25.esc)((0, core_25.fmtSeconds)(r.checks_seconds))]] : []),
+            ...(r.judge || positive(r.judge_seconds) ? [["Judge", (0, core_25.isNum)(r.judge_seconds) ? (0, core_25.esc)((0, core_25.fmtSeconds)(r.judge_seconds)) : '<span class="av-missing">not recorded</span>']] : []),
+            ...((0, core_25.isNum)(r.commands) ? [["Commands", (0, core_25.esc)((0, core_25.fmtNum)(r.commands))]] : []),
             ...(r.confined === false ? [["Sandbox", "<strong>unconfined</strong>"]] : []),
             ...(r.artifact_missing ? [["Artifact", "<strong>not produced</strong>"]] : []),
         ];
@@ -13035,39 +13082,39 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         const checks = r.checks && typeof r.checks === "object" ? r.checks : {};
         const has = (k) => Object.prototype.hasOwnProperty.call(checks, k);
         const value = (v) => typeof v === "boolean"
-            ? `${(0, core_24.outcomeMark)(v ? "pass" : "fail")}<span>${v ? "true" : "false"}</span>`
-            : v === undefined || v === null ? '<span class="av-missing">not recorded</span>' : `<code>${(0, core_24.esc)(typeof v === "string" ? v : JSON.stringify(v))}</code>`;
+            ? `${(0, core_25.outcomeMark)(v ? "pass" : "fail")}<span>${v ? "true" : "false"}</span>`
+            : v === undefined || v === null ? '<span class="av-missing">not recorded</span>' : `<code>${(0, core_25.esc)(typeof v === "string" ? v : JSON.stringify(v))}</code>`;
         const rank = (k) => { const v = checks[k]; return v === false ? 0 : v === true ? 2 : 1; };
         // An invalid run has no result, so its checks decide nothing: listed, not flagged.
         const decides = o !== "invalid";
         const reqRows = requiredList.slice().sort((a, b) => decides ? rank(a) - rank(b) : 0).map(k => {
             const held = checks[k] === true || !decides;
-            return `<tr class="av-req${held ? "" : " av-req--unmet"}"><th scope="row"><code>${(0, core_24.esc)(k).replace(/_/g, "_<wbr>")}</code> <span class="av-chip av-chip--req">required</span></th><td>${has(k) ? value(checks[k]) : value(undefined)}</td></tr>`;
+            return `<tr class="av-req${held ? "" : " av-req--unmet"}"><th scope="row"><code>${(0, core_25.esc)(k).replace(/_/g, "_<wbr>")}</code> <span class="av-chip av-chip--req">required</span></th><td>${has(k) ? value(checks[k]) : value(undefined)}</td></tr>`;
         }).join("");
-        const others = (0, core_24.entriesOf)(checks).filter(([k]) => !required.has(k));
+        const others = (0, core_25.entriesOf)(checks).filter(([k]) => !required.has(k));
         const bools = others.filter(([, v]) => typeof v === "boolean"), values = others.filter(([, v]) => typeof v !== "boolean");
         const unmet = requiredList.filter(k => checks[k] !== true).length;
         const table = (body) => `<table class="av-table av-table--compact av-drawer-checks"><tbody>${body}</tbody></table>`;
-        const plainRows = (items) => items.map(([k, v]) => `<tr><th scope="row"><code>${(0, core_24.esc)(k).replace(/_/g, "_<wbr>")}</code></th><td>${value(v)}</td></tr>`).join("");
+        const plainRows = (items) => items.map(([k, v]) => `<tr><th scope="row"><code>${(0, core_25.esc)(k).replace(/_/g, "_<wbr>")}</code></th><td>${value(v)}</td></tr>`).join("");
         const checkSecs = [
             requiredList.length ? `<section class="av-drawer-sec"><h3>Required checks <span class="av-muted">· ${!decides ? "as recorded; a run with no result is not scored" : unmet ? `${unmet} of ${requiredList.length} did not hold` : requiredList.length === 1 ? "it held" : `all ${requiredList.length} held`}</span></h3>${table(reqRows)}</section>` : "",
             bools.length ? `<section class="av-drawer-sec"><h3>${requiredList.length ? "Other checks" : "Checks"} <span class="av-muted">· recorded${requiredList.length ? ", not required" : ""}</span></h3>${table(plainRows(bools))}</section>` : "",
             values.length ? `<details class="av-drawer-sec av-drawer-values"${values.length <= 4 ? " open" : ""}><summary>${values.length} recorded value${values.length === 1 ? "" : "s"} <span class="av-muted">· text and numbers the checks wrote</span></summary>${table(plainRows(values))}</details>` : "",
         ].join("");
-        const usage = (0, core_24.entriesOf)(r.usage && typeof r.usage === "object" ? r.usage : {}).filter(([, v]) => (0, core_24.isNum)(v) && v !== 0);
+        const usage = (0, core_25.entriesOf)(r.usage && typeof r.usage === "object" ? r.usage : {}).filter(([, v]) => (0, core_25.isNum)(v) && v !== 0);
         const path = (0, trial_model_13.recordPath)(data, r);
         const q = (0, trial_model_13.judgeQuestion)(scenario);
-        return `<header class="av-drawer-head"><div class="av-drawer-id"><p class="av-eyebrow">Run ${i + 1} of ${total}${r.job ? ` · <code>${(0, core_24.esc)(r.job)}</code>` : ""}${(0, core_24.esc)(view)}</p><h2 id="av-drawer-title" class="av-drawer-title">${(0, core_24.esc)(caseName)}</h2><p class="av-drawer-sub">${ctx.arms.tag(r.arm)}<span>repeat ${(0, core_24.esc)(r.repeat ?? "?")}</span>${(0, core_24.outcomeBadge)(o)}</p></div><div class="av-drawer-actions"><button type="button" class="av-btn av-btn--small" data-av-copy-link aria-label="Copy a link to this run"><span data-av-word>Copy link</span></button><button type="button" class="av-drawer-close" aria-label="Close run record">✕</button></div></header>
+        return `<header class="av-drawer-head"><div class="av-drawer-id"><p class="av-eyebrow">Run ${i + 1} of ${total}${r.job ? ` · <code>${(0, core_25.esc)(r.job)}</code>` : ""}${(0, core_25.esc)(view)}</p><h2 id="av-drawer-title" class="av-drawer-title">${(0, core_25.esc)(caseName)}</h2><p class="av-drawer-sub">${ctx.arms.tag(r.arm)}<span>repeat ${(0, core_25.esc)(r.repeat ?? "?")}</span>${(0, core_25.outcomeBadge)(o)}</p></div><div class="av-drawer-actions"><button type="button" class="av-btn av-btn--small" data-av-copy-link aria-label="Copy a link to this run"><span data-av-word>Copy link</span></button><button type="button" class="av-drawer-close" aria-label="Close run record">✕</button></div></header>
 <div class="av-drawer-scroll">
 ${why}
-<dl class="av-facts av-facts--tight">${facts.map(([k, v]) => `<div><dt>${(0, core_24.esc)(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>
-${r.judge ? `<section class="av-drawer-sec"><h3>Judge <span class="av-judge av-judge--${(0, core_24.esc)(r.judge.verdict || "none")}">${(0, core_24.esc)(r.judge.verdict || "no verdict")}</span></h3>${r.judge.reason ? `<p class="av-drawer-text">${(0, core_24.inline)(String(r.judge.reason))}</p>` : '<p class="av-muted">The judge gave no reason.</p>'}${q ? `<details class="av-drawer-q"><summary>Question the judge answered</summary><p class="av-drawer-text">${(0, core_24.esc)(q)}</p></details>` : ""}</section>` : ""}
+<dl class="av-facts av-facts--tight">${facts.map(([k, v]) => `<div><dt>${(0, core_25.esc)(k)}</dt><dd>${v}</dd></div>`).join("")}</dl>
+${r.judge ? `<section class="av-drawer-sec"><h3>Judge <span class="av-judge av-judge--${(0, core_25.esc)(r.judge.verdict || "none")}">${(0, core_25.esc)(r.judge.verdict || "no verdict")}</span></h3>${r.judge.reason ? `<p class="av-drawer-text">${(0, core_25.inline)(String(r.judge.reason))}</p>` : '<p class="av-muted">The judge gave no reason.</p>'}${q ? `<details class="av-drawer-q"><summary>Question the judge answered</summary><p class="av-drawer-text">${(0, core_25.esc)(q)}</p></details>` : ""}</section>` : ""}
 ${checkSecs}
-${r.final_message_excerpt ? `<section class="av-drawer-sec"><h3>Final output${r.final_message_excerpt.length >= 2000 ? ' <span class="av-muted">· first 2,000 characters; the full text is in the native record</span>' : ""}</h3><pre class="av-pre av-pre--tall">${(0, core_24.esc)(r.final_message_excerpt)}</pre></section>` : ""}
-${usage.length ? `<section class="av-drawer-sec"><h3>Usage <span class="av-muted">· as the executor reported it</span></h3><dl class="av-facts av-facts--tight av-drawer-usage">${usage.map(([k, v]) => `<div><dt><code>${(0, core_24.esc)(k)}</code></dt><dd>${(0, core_24.esc)((0, core_24.fmtNum)(v))}</dd></div>`).join("")}</dl></section>` : ""}
-${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-drawer-path"><code>${(0, core_24.esc)((0, trial_model_13.displayPath)(path))}</code><button type="button" class="av-btn av-btn--small" data-av-copy="${(0, core_24.esc)(path)}"><span data-av-word>Copy path</span></button></p><p class="av-muted">The full transcript, events, checks and judge prompt live in this directory.</p></section>` : ""}
+${r.final_message_excerpt ? `<section class="av-drawer-sec"><h3>Final output${r.final_message_excerpt.length >= 2000 ? ' <span class="av-muted">· first 2,000 characters; the full text is in the native record</span>' : ""}</h3><pre class="av-pre av-pre--tall">${(0, core_25.esc)(r.final_message_excerpt)}</pre></section>` : ""}
+${usage.length ? `<section class="av-drawer-sec"><h3>Usage <span class="av-muted">· as the executor reported it</span></h3><dl class="av-facts av-facts--tight av-drawer-usage">${usage.map(([k, v]) => `<div><dt><code>${(0, core_25.esc)(k)}</code></dt><dd>${(0, core_25.esc)((0, core_25.fmtNum)(v))}</dd></div>`).join("")}</dl></section>` : ""}
+${path ? `<section class="av-drawer-sec"><h3>Native record</h3><p class="av-drawer-path"><code>${(0, core_25.esc)((0, trial_model_13.displayPath)(path))}</code><button type="button" class="av-btn av-btn--small" data-av-copy="${(0, core_25.esc)(path)}"><span data-av-word>Copy path</span></button></p><p class="av-muted">The full transcript, events, checks and judge prompt live in this directory.</p></section>` : ""}
 </div>
-<footer class="av-drawer-foot"><button type="button" class="av-btn" data-av-nav="prev" aria-label="Previous run">← Previous</button><span class="av-muted">${(0, core_24.esc)(core_24.outcomeLabel[o])}<span class="av-drawer-keys"> · ← → to move</span></span><button type="button" class="av-btn" data-av-nav="next" aria-label="Next run">Next →</button></footer>`;
+<footer class="av-drawer-foot"><button type="button" class="av-btn" data-av-nav="prev" aria-label="Previous run">← Previous</button><span class="av-muted">${(0, core_25.esc)(core_25.outcomeLabel[o])}<span class="av-drawer-keys"> · ← → to move</span></span><button type="button" class="av-btn" data-av-nav="next" aria-label="Next run">Next →</button></footer>`;
     }
     /** Render a specification into a target and enhance it. A specification with a collection also gets its
      * reader: #report/ID opens a member's full report in the page and #compare/A/B two members side by side. */
@@ -13154,13 +13201,13 @@ define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", 
     Object.defineProperty(exports, "reportCompare", { enumerable: true, get: function () { return collection_3.reportCompare; } });
     Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_10.frame; } });
 });
-define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_25, model_5, report_4, compose_3, trial_model_14, enhance_2, figures_3, validate_6, comparison_compose_3, comparison_stats_6, collection_5, reader_2, failure_5, stats_15, diff_3, text_layout_3, blocks) {
+define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_26, model_5, report_4, compose_3, trial_model_14, enhance_2, figures_3, validate_6, comparison_compose_3, comparison_stats_6, collection_5, reader_2, failure_5, stats_15, diff_3, text_layout_3, blocks) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.readerRoute = exports.COLLECTION_SECTION_IDS = exports.collectionModel = exports.memberReport = exports.compareReport = exports.collectionReport = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.NO_CASE_WORDS = exports.caseSplit = exports.casesWords = exports.caseKey = exports.evidenceAs = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.reportCases = exports.validateCollection = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
     exports.autoMount = autoMount;
-    Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_25.escapeText; } });
-    Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_25.wilson; } });
+    Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_26.escapeText; } });
+    Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_26.wilson; } });
     Object.defineProperty(exports, "ArmRegistry", { enumerable: true, get: function () { return model_5.ArmRegistry; } });
     Object.defineProperty(exports, "createContext", { enumerable: true, get: function () { return model_5.createContext; } });
     Object.defineProperty(exports, "renderReport", { enumerable: true, get: function () { return report_4.renderReport; } });

@@ -119,6 +119,8 @@ def written_corpus() -> list[dict]:
         n({}, "blank"),
         # The same trial borrowed beside a specification, and a filter on an empty or blank case.
         s([{"type": "ladder"}], "blank"),
+        # Two names for one section's reading, the second empty: refused, naming both keys.
+        n({"readings": {"setup": "Read.", "plan": ""}}), n({"readings": {"plan": "Read.", "setup": "Read too."}}),
         # The bad trial of the entry-path matrix: embedded, supplied beside, and a narrative's.
         s([], None, trial=BAD_TRIAL), s([], "bad"), n({}, "bad"),
         s([{"type": "text", "text": "x"}], None, arms=[{"id": "a"}, {"id": "a"}], meta=[{"label": "L"}], cases={"zz": "Z"}),
@@ -224,6 +226,8 @@ def comparison_corpus() -> list[dict]:
         {"kind": "spec", "input": view(BAD_COMPARISON), "comparison": None},
         {"kind": "spec", "input": {**view(BAD_COMPARISON), "sections": [{"title": "S", "reading": "r", "blocks": [{"type": "scorecard", "data": {"rows": []}}, {"type": "decision-matrix", "data": "none"}]}]}, "comparison": None},
         {"kind": "comparison", "input": BAD_COMPARISON},
+        {"kind": "comparison", "input": BASE, "narrative": {"readings": {"results": "Read.", "metrics": ""}}},
+        {"kind": "comparison", "input": BASE, "narrative": {"readings": {"setup": "Read.", "alternatives": "Read too.", "compared": "And again."}}},
         {"kind": "comparison", "input": BASE, "narrative": {"sections": [{"title": "More", "blocks": [{"type": "metric", "metric": "m", "data": BAD_COMPARISON}]}], "append": {"results": [{"type": "scorecard", "data": BAD_COMPARISON}]}}},
     ]
     return corpus
@@ -461,7 +465,9 @@ class EntryPathMatrixTest(unittest.TestCase):
 # Every identifier field of each kind of data, and the malformed values each must be refused (or, where the field may be
 # left out, accepted as left out). Each entry's path names the field; "*" marks its index in the base input.
 # An identifier is text with something in it, starting with no "$" (a note) and with no space or tab at either end.
-BAD_IDS = [None, False, 0, {}, [], "", "  ", "$x", " x", "x ", "\t"]
+# Whitespace is one explicit set in both checkers: ASCII space and tab, and all Unicode whitespace (no-break and em
+# spaces, the byte-order mark, next-line among them).
+BAD_IDS = [None, False, 0, {}, [], "", "  ", "$x", " x", "x ", "\t", "\u00a0x", "x\u2003", "\ufeffx", "\u0085x", "\u00a0"]
 
 
 def id_base_trial() -> dict:
@@ -499,7 +505,7 @@ ID_FIELDS = {
 OPTIONAL = {"case", "winner", "metric", "job", "theme", "follows"}
 # A member's theme that names no declared theme, a blank one among them, leaves the report among the other reports: a
 # warning, as for any theme the collection does not declare.
-ALLOWED = {(name, blank): ["warning"] for name in ("case", "theme") for blank in ("", "  ", "\t")}
+ALLOWED = {(name, blank): ["warning"] for name in ("case", "theme") for blank in ("", "  ", "\t", "\u00a0")}
 
 
 def with_value(base: dict, path: tuple, value) -> dict:

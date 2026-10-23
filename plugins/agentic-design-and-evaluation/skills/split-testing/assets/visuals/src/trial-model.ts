@@ -383,3 +383,9 @@ export function trialArms(trial: unknown): string[] {
 export function wellFormedPair(p: unknown, known: string[]): boolean {
   return isPlain(p) && Array.isArray(p.arms) && p.arms.length === 2 && p.arms.every(a => isId(a) && known.includes(a)) && p.arms[0] !== p.arms[1] && isPlain(p.overall) && isPlain(p.scenarios) && keysIn(p.scenarios).every(isId);
 }
+/** The pairwise judgments every check and every view reads, listed one way (entriesOf): each named by an id and
+ * well formed (wellFormedPair). The checks refuse the rest, and the pairwise view draws none of them. */
+export function wellFormedPairs(trial: unknown): Array<[string, unknown]> {
+  const known = trialArms(trial);
+  return entriesOf(isPlain(trial) ? trial.pairwise : undefined).filter(([k, p]) => isId(k) && wellFormedPair(p, known));
+}

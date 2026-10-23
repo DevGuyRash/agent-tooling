@@ -7,7 +7,7 @@ import { attrs, axisTicks, count, esc, fmtDelta, fmtInt, fmtNum, fmtPct, fmtSeco
 import type { RenderContext } from "../model";
 import { failureCause } from "../failure";
 import { casesWords, countPooling } from "../stats";
-import { armCases, armTally, CasePair, caseChecks, checkTable, costMeasures, displayPath, invalidReason, judgePassWhen, judgeQuestion, outcomeOf, pairedOrder, scenarioOf, tally, TrialReport, TrialRun, trialArms, trialAxes, wellFormedPair } from "../trial-model";
+import { armCases, armTally, CasePair, caseChecks, checkTable, costMeasures, displayPath, invalidReason, judgePassWhen, judgeQuestion, outcomeOf, pairedOrder, scenarioOf, tally, TrialReport, TrialRun, trialAxes, wellFormedPairs } from "../trial-model";
 import { empty, frame, FrameInput, pos } from "./frame";
 
 const caseLabel = (ctx: RenderContext, id: string) => ctx.caseLabels[id] || id;
@@ -485,8 +485,7 @@ export function pairwise(input: PairwiseInput, ctx: RenderContext): string {
   const data = trialOf(ctx, "pairwise");
   // Only the judgments the checks accept (wellFormedPair: two different arms this trial knows, with their counts), listed
   // as the checks list them (entriesOf, where a "$" key is a note): a malformed one is refused there and not drawn here.
-  const known = trialArms(data);
-  const pairs = entriesOf(data.pairwise).filter(([k, p]) => wellFormedPair(p, known) && (!input.pair || k === input.pair));
+  const pairs = (wellFormedPairs(data) as Array<[string, NonNullable<TrialReport["pairwise"]>[string]]>).filter(([k]) => !input.pair || k === input.pair);
   if (!pairs.length) return frame("pairwise", input, empty("No pairwise judgments were run."));
   const segs = ["a_wins", "tie", "b_wins", "inconsistent", "invalid"] as const;
   const clean = (st: Partial<Record<string, unknown>> | undefined) => {

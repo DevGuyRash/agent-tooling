@@ -4,10 +4,11 @@
  * input that would break a view or make it misread; a warning is input the
  * report does not use as written. report.py --check applies the same rules
  * without a browser; tests/test_validate.py keeps the two in agreement. */
-import { esc, entriesOf, isId, keysIn } from "./core";
+import { esc, entriesOf, isBlank, isId, keysIn } from "./core";
 import type { ReportSpec } from "./model";
 import { blockTypes } from "./report";
-import { casePairs, trialArms, wellFormedPair } from "./trial-model";
+import { casePairs, trialArms, wellFormedPairs } from "./trial-model";
+import { COMPARISON_SECTION_ALIASES, comparisonSection, resolveSections, TRIAL_SECTION_ALIASES, trialSection } from "./sections";
 import { caseKey, NO_CASE } from "./stats";
 import type { TrialReport } from "./trial-model";
 
@@ -177,9 +178,9 @@ const COLLECTION: Shape = {
 const DEFAULT_SECTIONS = ["verdict", "setup", "arms", "cases", "grid", "failures", "checks", "pairwise", "cost", "invalid", "runs"];
 /** Sections composed only when include names them. */
 const OPT_IN_SECTIONS = ["grid"];
-const SECTION_ALIASES: Record<string, string> = { plan: "setup" };
+const SECTION_ALIASES = TRIAL_SECTION_ALIASES;
 const SECTION_NAMES = [...DEFAULT_SECTIONS, ...Object.keys(SECTION_ALIASES)];
-const sectionKey = (id: string) => Object.prototype.hasOwnProperty.call(SECTION_ALIASES, id) ? SECTION_ALIASES[id] : id;
+const sectionKey = trialSection;
 const NARRATIVE: Shape = {
   fields: {
     title: "text", question: "text", summary: "prose", kicker: "text",
@@ -221,9 +222,9 @@ const COMPARISON: Shape = {
 };
 /** Section ids of the comparison composition (comparison-compose.ts), and other names it accepts. */
 const COMPARISON_SECTIONS = ["verdict", "compared", "results", "differences", "groups", "cases", "judgments", "decision", "observations", "sources"];
-const COMPARISON_ALIASES: Record<string, string> = { setup: "compared", alternatives: "compared", metrics: "results", hierarchy: "groups", preferences: "judgments", pairwise: "judgments", matrix: "decision", ledger: "observations", runs: "observations" };
+const COMPARISON_ALIASES = COMPARISON_SECTION_ALIASES;
 const COMPARISON_NAMES = [...COMPARISON_SECTIONS, ...Object.keys(COMPARISON_ALIASES)];
-const comparisonKey = (id: string) => Object.prototype.hasOwnProperty.call(COMPARISON_ALIASES, id) ? COMPARISON_ALIASES[id] : id;
+const comparisonKey = comparisonSection;
 const COMPARISON_NARRATIVE: Shape = {
   fields: {
     title: "text", question: "text", summary: "prose", kicker: "text",
@@ -502,11 +503,11 @@ class Checker {
     if (kind === "prose" && Array.isArray(v)) v.forEach((x, i) => { if (!isText(x)) this.type(x, "text", this.join(where, i)); });
     if (kind === "member-id" && !/^[A-Za-z][\w.-]*$/.test(v as string))
       this.add("error", where, `"${clip(v as string)}" cannot be a report id, since links name reports by id`, "start with a letter and use only letters, digits, _ . or -");
-    if (kind === "theme-id" && !(v as string).trim()) this.add("error", where, "a theme id cannot be blank, since reports join their theme by its id", "name the theme");
+    if (kind === "theme-id" && isBlank(v as string)) this.add("error", where, "a theme id cannot be blank, since reports join their theme by its id", "name the theme");
     if (kind === "section-id" && !/^[A-Za-z][\w:.-]*$/.test(v as string))
       this.add("warning", where, `"${clip(v as string)}" cannot be used as a section id, so the section gets a generated one`, "start with a letter and use only letters, digits, _ : . or -");
     // An id that is not blank but breaks the identifier rule is refused here; a blank one is told by its kind's own check.
-    if (ID_KINDS.includes(kind) && (v as string).trim() !== "" && !isId(v)) return this.add("error", where, `"${clip(v as string)}" cannot be an id: an id starts with no "$" (kept for notes) and has no space or tab at either end`, "write the id without them");
+    if (ID_KINDS.includes(kind) && !isBlank(v as string) && !isId(v)) return this.add("error", where, `"${clip(v as string)}" cannot be an id: an id starts with no "$" (kept for notes) and has no whitespace at either end`, "write the id without them");
     if (kind in IDS) this.id(v as string, kind, where);
   }
 
@@ -756,7 +757,10 @@ function pointedRule(c: Checker, narrative: Obj, recorded: unknown, whose: strin
 function readingsChecks(c: Checker, owner: Obj, at: string, required: string[], names: string[], key: (id: string) => string): void {
   const where = c.join(at, "readings");
   const given = isObj(owner.readings) ? owner.readings as Obj : {};
-  const covered = keysOf(given).filter(k => said(given[k])).map(key);
+  // The readings exactly as the composition shows them (resolveSections); two keys for one section are refused, naming both.
+  const resolved = resolveSections(given, key);
+  for (const x of resolved.clashes) c.add("error", c.join(where, x.again), `"${clip(x.again)}" names the "${x.section}" section, as "${clip(x.first)}" does, so only "${clip(x.first)}" is shown`, `give the "${x.section}" reading once`);
+  const covered = [...resolved.values].filter(([, v]) => said(v)).map(([s]) => s);
   for (const id of required) if (!covered.includes(id)) c.add("error", where, `no reading for the "${id}" section`, `add readings.${id}: what a newcomer should take from that section's views for this data, in plain words, with the numbers that matter`);
   for (const k of keysOf(given)) {
     if (!names.includes(k)) {
@@ -973,7 +977,7 @@ export function reportCases(spec: ReportSpec | unknown, options: { trial?: unkno
   return specNeeds(spec, knownFrom(trial, comparison), trial, comparison).cases || [];
 }
 /** An identifier the views group or label by: text with something in it. */
-const ID_HINT = 'an id is text that starts with no "$" (kept for notes) and has no space or tab at either end, as trial.py report RUN_DIR --out FILE writes it';
+const ID_HINT = 'an id is text that starts with no "$" (kept for notes) and has no whitespace at either end, as trial.py report RUN_DIR --out FILE writes it';
 /** The one check of trial data, however it enters: a specification's own `trial`, a trial supplied beside a
  * specification, a narrative's trial (so every composed trial report), and a collection member's. It must be trial report
  * data, and every identifier the views group or label by must be text: each run's arm and scenario (and its job, when
@@ -1024,8 +1028,7 @@ function wellFormedTrial(trial: unknown): unknown {
   if (!isObj(trial) || !Array.isArray(trial.runs)) return trial;
   const runs = trial.runs.filter(r => !isObj(r) || (isId(r.arm) && isId(r.scenario) && (r.job === undefined || r.job === null || isId(r.job)) && isVerdict(r.passed)));
   const plan = isObj(trial.plan) && Array.isArray(trial.plan.scenarios) ? { ...trial.plan, scenarios: trial.plan.scenarios.filter(sc => !isObj(sc) || isId(sc.name)) } : trial.plan;
-  const known = trialArms(trial);
-  const pairwise = isObj(trial.pairwise) ? Object.fromEntries(entriesOf(trial.pairwise).filter(([k, p]) => isId(k) && wellFormedPair(p, known))) : trial.pairwise;
+  const pairwise = isObj(trial.pairwise) ? Object.fromEntries(wellFormedPairs(trial)) : trial.pairwise;
   return { ...trial, runs, ...(plan !== undefined ? { plan } : {}), ...(pairwise !== undefined ? { pairwise } : {}) };
 }
 /** A check's problems, moved from the place it names its input (`from`, such as "comparison") to where the input

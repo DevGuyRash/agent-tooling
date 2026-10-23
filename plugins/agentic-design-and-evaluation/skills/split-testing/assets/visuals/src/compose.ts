@@ -12,6 +12,7 @@
  * left out, and no view repeats another. The run grid ("grid") is drawn only
  * when a narrative's include names it, since the case dossiers already place
  * every run. */
+import { resolveSections, trialSection } from "./sections";
 import { fmtInt, fmtPct, entriesOf, keysIn } from "./core";
 import { casesWords } from "./stats";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
@@ -62,9 +63,8 @@ export interface Narrative {
 /** The default sections' ids, in reading order. A section with nothing to show for a trial is left out;
  * "grid" is drawn only when include names it. */
 export const SECTION_IDS = ["verdict", "setup", "arms", "cases", "grid", "failures", "checks", "pairwise", "cost", "invalid", "runs"] as const;
-/** Earlier ids that still name a default section. */
-const ALIASES: Record<string, string> = { plan: "setup" };
-const alias = (id: unknown) => { const k = String(id); return ALIASES[k] || k; };
+/** The section a name stands for (an earlier id still names a default section). */
+const alias = trialSection;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 /** A date range in words (UTC), such as "4–5 Oct 2026"; unreadable dates are shown as written. */
@@ -163,7 +163,8 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   for (const [k, blocks] of entriesOf(isObject(narrative.append) ? narrative.append : {})) if (Array.isArray(blocks)) appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
   const sections: Array<{ key: string; section: SectionSpec }> = [];
   // What each section's views say for this data, from the narrative's readings (keyed by section id or an earlier name).
-  const readings = new Map<string, unknown>(isObject(narrative.readings) ? entriesOf(narrative.readings).map(([k, v]) => [alias(k), v]) : []);
+  // Resolved as the checks resolve them (resolveSections): the first key naming a section gives its reading.
+  const readings = resolveSections(narrative.readings, alias).values;
   const add = (key: string, s: SectionSpec) => sections.push({ key, section: { ...s, id: key, ...(readings.has(key) ? { reading: readings.get(key) as string | string[] } : {}), blocks: [...s.blocks, ...(appended.get(key) || [])] } });
 
   // ---------------------------------------------------------------- verdict

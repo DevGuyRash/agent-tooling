@@ -8,6 +8,7 @@
  * a two-alternative taste test and a study of research directions with many
  * concepts each get the same reader-first page at their own size. A narrative
  * can include, exclude, reorder (after) and append, as with the trial report. */
+import { comparisonSection, resolveSections } from "./sections";
 import { fmtInt, entriesOf, keysIn } from "./core";
 import type { Alternative, Case, Comparison, Metric, Observation, Preference } from "./comparison-model";
 import { alternativeIds, caseKey, casesWords, groupPath, invalidJudgments, judgmentMetric, NO_CASE, NO_CASE_WORDS, observationStatus, winMatrix } from "./comparison-stats";
@@ -57,8 +58,9 @@ export interface ComparisonNarrative {
 /** The default sections' ids, in reading order; each appears only when the comparison holds its data. */
 export const COMPARISON_SECTION_IDS = ["verdict", "compared", "results", "differences", "groups", "cases", "judgments", "decision", "observations", "sources"] as const;
 /** Other names readers reach for, mapped to a default section. */
-export const COMPARISON_SECTION_ALIASES: Record<string, string> = { setup: "compared", alternatives: "compared", metrics: "results", hierarchy: "groups", preferences: "judgments", pairwise: "judgments", matrix: "decision", ledger: "observations", runs: "observations" };
-const alias = (id: unknown) => { const k = String(id); return Object.prototype.hasOwnProperty.call(COMPARISON_SECTION_ALIASES, k) ? COMPARISON_SECTION_ALIASES[k] : k; };
+export { COMPARISON_SECTION_ALIASES } from "./sections";
+/** The section a name stands for. */
+const alias = comparisonSection;
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const strings = (v: unknown): string[] => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
@@ -123,7 +125,8 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
   for (const [k, blocks] of entriesOf(isObject(narrative.append) ? narrative.append : {})) if (Array.isArray(blocks)) appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
   const sections: Array<{ key: string; section: SectionSpec }> = [];
   // What each section's views say for this data, from the narrative's readings (keyed by section id or another name).
-  const readings = new Map<string, unknown>(isObject(narrative.readings) ? entriesOf(narrative.readings).map(([k, v]) => [alias(k), v]) : []);
+  // Resolved as the checks resolve them (resolveSections): the first key naming a section gives its reading.
+  const readings = resolveSections(narrative.readings, alias).values;
   const add = (key: string, s: SectionSpec) => sections.push({ key, section: { ...s, id: key, ...(readings.has(key) ? { reading: readings.get(key) as string | string[] } : {}), blocks: [...s.blocks, ...(appended.get(key) || [])] } });
 
   // ---------------------------------------------------------------- verdict

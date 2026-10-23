@@ -458,4 +458,51 @@ test("round 23: an id starts with no $ and has no space or tab at either end, an
   for (const at of ['trial.plan.arms[" b"]', 'trial.pairwise[" p"]', 'trial.pairwise[" p"].scenarios["c1 "]']) H.ok(keyErrors.includes(at), `${at} refused: ${keyErrors.join(", ")}`);
 });
 
+test("round 24: two names for one section's reading are refused, and composition shows the one the checks assessed", () => {
+  const trial = JSON.parse(fs.readFileSync(path.join(H.VISUALS, "examples", "fictional-trial.json"), "utf8"));
+  const narrative = JSON.parse(fs.readFileSync(path.join(H.VISUALS, "examples", "fictional-narrative.json"), "utf8"));
+  // The reviewer's trial narrative: setup's reading, then "plan" (another name for setup) left empty.
+  const told = { ...narrative, readings: { ...narrative.readings, setup: "Essential interpretation.", plan: "" } };
+  const clash = H.plain(V.validateNarrative(told, trial)).filter(p => p.where === "narrative.readings.plan");
+  H.ok(clash.length === 1 && clash[0].level === "error" && /"plan"/.test(clash[0].message) && /"setup"/.test(clash[0].message), `the two keys named: ${JSON.stringify(clash)}`);
+  const setup = V.trialReport(trial, told).sections.find(s => s.id === "setup");
+  H.equal(setup.reading, "Essential interpretation.", "composition shows the reading the checks assessed");
+  H.ok(H.plain(V.validateSpec(V.trialReport(trial, told))).some(p => p.where === "narrative.readings.plan" && p.level === "error"), "the composed report carries the refusal");
+  // The reviewer's comparison narrative: results's reading, then "metrics" (another name for results) left empty.
+  const sandwich = JSON.parse(fs.readFileSync(path.join(H.VISUALS, "examples", "comparisons", "sandwich.json"), "utf8"));
+  const sandwichTold = JSON.parse(fs.readFileSync(path.join(H.VISUALS, "examples", "comparisons", "sandwich-narrative.json"), "utf8"));
+  const cTold = { ...sandwichTold, readings: { ...sandwichTold.readings, results: "Essential interpretation.", metrics: "" } };
+  H.ok(H.plain(V.validateComparison(sandwich, cTold)).some(p => p.where === "narrative.readings.metrics" && p.level === "error" && /"results"/.test(p.message)), "the comparison narrative's clash is refused");
+  H.equal(V.comparisonReport(sandwich, cTold).sections.find(s => s.id === "results").reading, "Essential interpretation.", "and composition shows the assessed reading");
+});
+
+test("round 24: a pairwise judgment whose name the checks refuse is not drawn", () => {
+  const runs = [{ arm: "a", scenario: "c1", passed: true }, { arm: "b", scenario: "c1", passed: false }];
+  const pairwise = { " p": { arms: ["a", "b"], overall: { a_wins: 1, b_wins: 0 }, scenarios: { c1: { a_wins: 1, b_wins: 0 } } } };
+  H.excludes(V.renderReport({ title: "T", sections: [{ title: "S", reading: "r", blocks: [{ type: "pairwise" }] }], trial: { runs, pairwise } }), 'data-pair="', "not drawn");
+});
+
+test("sweep (a selected matrix): every other name for a section, given beside its own, is refused and composition shows the first", () => {
+  // The names each report's sections answer to, as the catalog lists them.
+  const read = name => JSON.parse(fs.readFileSync(path.join(H.VISUALS, "examples", ...name.split("/")), "utf8"));
+  const kinds = [
+    ["trial", { plan: "setup" }, read("fictional-trial.json"), read("fictional-narrative.json"), (d, n) => V.validateNarrative(n, d), (d, n) => V.trialReport(d, n)],
+    ["comparison", { setup: "compared", alternatives: "compared", metrics: "results", hierarchy: "groups", preferences: "judgments", pairwise: "judgments", matrix: "decision", ledger: "observations", runs: "observations" },
+      read("comparisons/sandwich.json"), read("comparisons/sandwich-narrative.json"), (d, n) => V.validateComparison(d, n), (d, n) => V.comparisonReport(d, n)],
+  ];
+  for (const [kind, aliases, data, narrative, check, compose] of kinds) {
+    for (const [other, section] of Object.entries(aliases)) {
+      for (const [first, again] of [[section, other], [other, section]]) {
+        const readings = { ...narrative.readings };
+        delete readings[section]; delete readings[other];
+        const told = { ...narrative, readings: { ...readings, [first]: "The first reading.", [again]: "" } };
+        const refused = H.plain(check(data, told)).filter(p => p.where === `narrative.readings.${again}` && p.level === "error");
+        H.ok(refused.length === 1 && refused[0].message.includes(`"${first}"`) && refused[0].message.includes(`"${again}"`), `${kind} ${first} then ${again}: refused, naming both`);
+        const shown = compose(data, told).sections.find(s => s.id === section);
+        if (shown) H.equal(shown.reading, "The first reading.", `${kind} ${first} then ${again}: the first reading is shown`);
+      }
+    }
+  }
+});
+
 H.report();
