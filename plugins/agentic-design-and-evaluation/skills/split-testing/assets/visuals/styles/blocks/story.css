@@ -21,6 +21,8 @@
 .av-read { display: grid; gap: 6px; margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: var(--av-surface); border: 1px solid var(--av-line); font-size: .86rem; line-height: 1.5; color: var(--av-ink-2); max-width: 100%; }
 .av-read-tag { display: inline-block; margin-right: 8px; font: 700 .62rem/1.6 var(--av-font-text); letter-spacing: .12em; text-transform: uppercase; color: var(--av-accent); vertical-align: 1px; }
 .av-read-shows { margin: 0; }
+/* The box spans its view; its sentences keep the reading measure. The "Here" text is inline, so its block holds the limit. */
+.av-read-shows, .av-read-how .av-read-prose, .av-read-says { max-width: min(calc(var(--av-measure) + 4ch), 92ch); }
 .av-read-how > summary { cursor: pointer; font-weight: 600; font-size: .8rem; color: var(--av-ink-2); width: max-content; max-width: 100%; }
 .av-read-how > summary:hover { color: var(--av-accent); }
 .av-read-how[open] > summary { margin-bottom: 4px; }

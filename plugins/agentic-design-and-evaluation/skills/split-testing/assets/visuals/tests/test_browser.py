@@ -405,11 +405,13 @@ class BrowserRenderTest(unittest.TestCase):
         page = self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", EXAMPLES / "fictional-narrative.json")
         script = """
 const chOf = el => { const p = document.createElement("span"); p.textContent = "0000000000"; p.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap"; el.appendChild(p); const w = p.getBoundingClientRect().width / 10; p.remove(); return w; };
-const cap = el => Math.round(parseFloat(getComputedStyle(el).maxWidth) / chOf(el) * 10) / 10;
+const cap = el => { const m = parseFloat(getComputedStyle(el).maxWidth); return Number.isFinite(m) ? Math.round(m / chOf(el) * 10) / 10 : 9999; };  // 9999: no limit at all
+const shown = el => Math.round(el.getBoundingClientRect().width / chOf(el) * 10) / 10;
+const reads = [...document.querySelectorAll(".av-read-shows, .av-read-how .av-read-prose, .av-read-says")].filter(el => el.getBoundingClientRect().width);
 const story = document.querySelector(".av-story > .av-story-part:first-child .av-story-prose");
 const summary = document.querySelector(".av-summary");
 const scope = [...document.querySelectorAll(".av-story-scope > .av-story-part")].map(p => { const r = p.getBoundingClientRect(); return [Math.round(r.top), Math.round(r.width)]; });
-return { page: Math.round(document.querySelector(".av-sections").getBoundingClientRect().width), story: cap(story), summary: cap(summary), scope };
+return { page: Math.round(document.querySelector(".av-sections").getBoundingClientRect().width), story: cap(story), storyShown: shown(story), summary: cap(summary), scope, readCaps: reads.map(cap), readShown: reads.map(shown) };
 """
         ordinary = self.drive(page, width=1024, script=script)["result"]
         self.assertAlmostEqual(ordinary["story"], 75, delta=0.6, msg="the story's measure changed at an ordinary width")
@@ -419,10 +421,16 @@ return { page: Math.round(document.querySelector(".av-sections").getBoundingClie
         self.assertGreaterEqual(wide["story"], 88, "the story's text stays in a narrow column on a wide screen")
         self.assertLessEqual(wide["story"], 92.6, "the story's lines grow past a readable length")
         self.assertGreaterEqual(wide["summary"], 76, "the summary stays in a narrow column on a wide screen")
-        # The sizes follow the screen continuously, not in steps: two nearby wide screens get different widths.
+        self.assertGreaterEqual(wide["storyShown"], 85, "the story's text is drawn narrow on a wide screen whatever its cap says")
+        # Each view's own explanation ("This view", "How to read it", "Here") keeps the same readable limit as the rest of
+        # the prose, however wide the view it explains.
+        self.assertTrue(wide["readCaps"], "no view explanation found to measure")
+        self.assertLessEqual(max(wide["readCaps"]), 92.6, "a view's explanation has no readable limit on a wide screen")
+        self.assertLessEqual(max(wide["readShown"]), 92.6, "a view's explanation is drawn past a readable length")
+        # The sizes respond to the screen rather than to one breakpoint: two nearby wide screens get different widths.
         nearer, farther = (self.drive(page, width=w, script=script)["result"] for w in (1650, 1750))
-        self.assertLess(nearer["page"], farther["page"], "the page width moves in steps, not with the screen")
-        self.assertLess(nearer["summary"], farther["summary"], "the measure moves in steps, not with the screen")
+        self.assertLess(nearer["page"], farther["page"], "the page width does not respond to the screen between 1650 and 1750 px")
+        self.assertLess(nearer["summary"], farther["summary"], "the measure does not respond to the screen between 1650 and 1750 px")
         for width, result in ((1024, ordinary), (1920, wide)):
             with self.subTest(width=width):
                 (top_a, width_a), (top_b, width_b) = result["scope"]
