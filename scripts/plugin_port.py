@@ -344,9 +344,8 @@ def agent_documents(
     root = root.resolve()
     other = "claude" if target == "codex" else "codex"
     if source_host in {target, other}:
-        first = source_host
-        second = "claude" if first == "codex" else "codex"
-        plan = [(first, path) for path in _agent_files(root, first)] or [(second, path) for path in _agent_files(root, second)]
+        # A single-host package's own definitions are its agents, even when there are none: the other host's files are stale.
+        plan = [(source_host, path) for path in _agent_files(root, source_host)]
     else:
         plan = [(target, path) for path in _agent_files(root, target)] + [(other, path) for path in _agent_files(root, other)]
     documents: list[AgentDocument] = []
@@ -1548,7 +1547,7 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
     )
 
     if target == "codex":
-        if agents and all(document.origin == "claude" for document in agents):
+        if pkg.host == "claude":  # Claude definitions are authoritative, so copied Codex ones are superseded
             for old_path in _agent_files(out_root, "codex"):
                 relative = old_path.relative_to(out_root)
                 archive = out_root / PORTABILITY_DIR / "original-agents" / relative
@@ -1564,7 +1563,7 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
             write_json(out_root / ".mcp.json", normalize_mcp_config(load_json(out_root / ".mcp.json"), target="codex"))
         write_json(out_root / CODEX_MANIFEST, build_codex_manifest(pkg, out_root))
     elif target == "claude":
-        from_native_codex = bool(agents) and all(document.origin == "codex" for document in agents)
+        from_native_codex = pkg.host == "codex"  # Codex definitions are authoritative, so copied Claude ones are superseded
         if from_native_codex:
             for old_path in _agent_files(out_root, "claude"):
                 relative = old_path.relative_to(out_root)
@@ -1587,6 +1586,10 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
     else:
         die(f"unsupported target host: {target}")
 
+    for document in agents:
+        destination = out_root / document.path
+        if destination.is_symlink() or not destination.resolve().is_relative_to(out_root):
+            die(f"{document.path}: writing this agent would follow a link outside the converted package; replace the link with the files it points to")
     for document in agents:
         destination = out_root / document.path
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1681,7 +1684,14 @@ def convert_marketplace(source: Path, target: str, output: Path, *, mode: str, o
                 die(reason)
             report.add_unsupported("marketplace-source", plugin_name_for_error, reason)
             continue
-        child_pkg = detect_plugin(plugin_source, explicit_host=source_host)
+        child_host = explicit_host
+        try:
+            child_pkg = detect_plugin(plugin_source, explicit_host=child_host)
+        except PluginPortError:
+            if child_host is not None:
+                raise
+            child_host = source_host  # a child without a manifest of its own takes the catalog's host
+            child_pkg = detect_plugin(plugin_source, explicit_host=child_host)
         plugin_name = target_manifest_name(child_pkg, target)
         if any(item.get("name") == plugin_name for item in target_entries):
             reason = f"duplicate target marketplace plugin name: {plugin_name}"
@@ -1696,7 +1706,7 @@ def convert_marketplace(source: Path, target: str, output: Path, *, mode: str, o
             out_plugin,
             mode=mode,
             overwrite=True,
-            explicit_host=source_host,
+            explicit_host=child_host,
             model_map=model_map,
         )
         report.mappings.append(

@@ -238,6 +238,46 @@ class PluginPortTests(unittest.TestCase):
         projected = tomllib.loads(document.content)
         self.assertEqual([original[key] for key in ("published", "at", "stamp")], [projected[key] for key in ("published", "at", "stamp")])
 
+    def test_conversion_never_writes_through_a_link_into_the_source(self) -> None:
+        source = self.root / "linked"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0","agents":["./custom/reviewer.md"]}')
+        # Quoted, extra-spaced YAML that a re-render would normalise, so any write through the link changes these bytes.
+        write(source / "definitions/reviewer.md", '---\nname:    "reviewer"\ndescription:   "Review."\n---\nReview.\n')
+        (source / "custom").symlink_to(source / "definitions")
+        before = (source / "definitions/reviewer.md").read_bytes()
+        try:
+            plugin_port.convert_plugin(source, "claude", self.root / "converted", mode="strict", overwrite=False)
+        except plugin_port.PluginPortError as exc:
+            self.assertIn("outside", str(exc))
+        self.assertEqual(before, (source / "definitions/reviewer.md").read_bytes())
+
+    def test_marketplace_conversion_keeps_a_dual_childs_native_restriction(self) -> None:
+        market = self.root / "market"
+        plugin = market / "plugins/kit"
+        write(market / ".claude-plugin/marketplace.json", json.dumps({"name": "team", "owner": {"name": "Team"}, "plugins": [{"name": "kit", "source": "./plugins/kit"}]}))
+        write(plugin / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(plugin / ".codex-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(plugin / "agents/reviewer.md", "---\nname: reviewer\ndescription: Review.\n---\nReview.\n")
+        write(plugin / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Review."\n[features]\nshell_tool=false\n')
+        out = self.root / "codex-market"
+        plugin_port.convert_marketplace(market, "codex", out, mode="strict", overwrite=False)
+        (projected,) = (out / "plugins/kit/.codex/agents").rglob("*.toml")
+        self.assertEqual({"shell_tool": False}, tomllib.loads(projected.read_text())["features"])
+
+    def test_an_authoritative_host_without_agents_installs_none(self) -> None:
+        from scripts import agent_install
+        source = self.root / "claude-only"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / ".codex/agents/old.toml", 'name="retired"\ndescription="Old."\ndeveloper_instructions="Old."\n')
+        home = self.root / "codex-home"
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(0, agent_install.main([str(source), "--owner", "kit@market", "--codex-home", str(home), "--dry-run"]))
+        self.assertEqual(0, json.loads(stdout.getvalue())["agent_file_changes"])
+        output = self.root / "converted"
+        plugin_port.convert_plugin(source, "codex", output, mode="strict", overwrite=False)
+        self.assertEqual([], list((output / ".codex/agents").rglob("*.toml")) if (output / ".codex/agents").exists() else [])
+
     def test_a_directory_named_like_the_plugin_keeps_its_segment(self) -> None:
         source = self.root / "source"
         write(source / "agents/probe/filename.md", "---\nname: review\ndescription: Nested.\n---\nNested.\n")
@@ -593,9 +633,10 @@ class PluginPortTests(unittest.TestCase):
         converted_command = (out / "commands" / "implement.md").read_text(encoding="utf-8")
         self.assertTrue(converted_command.startswith("---\n"))
         self.assertIn("description:", converted_command)
-        converted_agent = (out / "agents" / "reviewer.md").read_text(encoding="utf-8")
-        self.assertTrue(converted_agent.startswith("---\n"))
-        self.assertIn("description:", converted_agent)
+        # A Codex-only package's agents are its Codex definitions (here none), so its root agents/*.md is not an agent:
+        # it is kept inactive under the portability folder, as it already was whenever the package defined Codex agents.
+        self.assertFalse((out / "agents" / "reviewer.md").exists())
+        self.assertIn("You are a reviewer agent.", (out / ".plugin-portability/original-agents/agents/reviewer.md").read_text(encoding="utf-8"))
         skill_text = (out / "skills" / "authoring-goals" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("disable-model-invocation: true", skill_text)
         self.assertTrue((out / ".app.json").exists())

@@ -68,7 +68,8 @@ Three rules keep conversion independent of each host's growing list of settings:
 
 - **Same host:** a definition projected to its own host keeps every key unchanged, so the host decides what it honors, exactly as for a file installed by hand. Only the fields that host needs to register an agent are checked.
 - **Across hosts:** conversion translates only what both hosts' agents share, which is the name, description, instructions, model and effort. Any other key stops the conversion of that agent, because the other host cannot honor it, and dropping a restriction such as `tools` would produce a more privileged agent. Display and background-scheduling metadata (`color`, `background`, Codex `nickname_candidates`) is dropped with a warning instead.
-- **Per agent:** a package that ships an agent's native definition for the target uses it instead of converting that agent; its other agents are still converted. A native definition is how an author keeps an agent whose settings do not convert.
+- **Per agent:** a dual package (both manifests) that ships an agent's native definition for the target uses it instead of converting that agent; its other agents are still converted. A native definition is how an author keeps an agent whose settings do not convert.
+- **Single host:** a package with one manifest defines exactly that host's agents, even when it defines none. Agent files it carries for the other host are leftovers: they are never installed, and conversion keeps them inactive under `.plugin-portability/original-agents/`. Conversion never writes an agent through a link that leaves the converted package.
 
 Names follow Claude's runtime registration: `agents/review/security.md` named `internal-label` in plugin `kit` is `kit:review:internal-label`, and the Codex projection registers the same name. A Codex name `team:review` becomes `agents/team/review.md` named `review`, which Claude registers as `kit:team:review`.
 
