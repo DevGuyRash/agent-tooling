@@ -378,33 +378,38 @@ test("every status trial.py records is explained with its own remedy, and no fin
   // From references/trials.md (Scenario, Keys, Host executor, Re-scoring stored runs, Reading results), launching.md (One
   // run, The record, What the runtime holds a launcher to, Checks and exposure) and trial.py's statuses. A run whose
   // executor did not finish is run again with --retry-invalid; a finished run is scored again once its check or judge
-  // can decide it, never run again (trial-flow.md, Validity): a new output would resample exactly those runs.
-  const RETRY = "trial.py run PLAN --out RUN_DIR --retry-invalid";
+  // can decide it, never run again (trial-flow.md, Validity): a new output would resample exactly those runs. A retry
+  // goes into the same directory only with the plan unchanged: a repair that changes an arm or a scenario is refused
+  // there (trial.py's _merge_stored_plan, which test_compose.py exercises), so it runs into a new one.
+  const RETRY = "trial.py run PLAN --out RUN_DIR --retry-invalid", FRESH = "trial.py run PLAN --out NEW_DIR";
+  // [what the explanation says, what the remedy says, how it gives runs a result]: "retry" into the same directory with
+  // the plan unchanged; "repair" too, a repair that changes the plan run into a new directory; "recheck" in the same
+  // directory, the stored output kept; "report" with no command at all.
   const unfinished = {
-    "timeout": [["time limit"], ["timeout_s", RETRY]],
-    "exit-3": [["exited with code 3"], [RETRY]],
-    "setup-exit-1": [["setup turn", "code 1", "never started"], [RETRY]],
-    "setup-timeout": [["setup turn", "time limit", "never started"], [RETRY]],
-    "setup-watch-unreadable": [["watch", "could not be read after setup", "never started"], ["stderr.log", RETRY]],
-    "setup-failed": [["setup.sh", "300 seconds", "setup_error", "never started"], [RETRY]],
-    "session-changed": [["follow-up", "another session"], ["continue", RETRY]],
-    "config-changed": [["watched configuration", "later turn"], ["never its session records, locks or caches", RETRY]],
-    "model-changed": [["another model", "one model"], [RETRY]],
-    "no-record": [["no record"], ["record_error", RETRY]],
-    "record-invalid": [["record", "could not be used"], ["record_error", "launching.md", RETRY]],
-    "unfinished": [["did not finish", "finished: false"], [RETRY]],
-    "credential-kept": [["could not be verified removed"], ["credentials.jsonl", "unremoved", "exits 3", RETRY]],
+    "timeout": [["time limit"], ["timeout_s"], "repair"],
+    "exit-3": [["exited with code 3"], [], "retry"],
+    "setup-exit-1": [["setup turn", "code 1", "never started"], ["stderr.log"], "repair"],
+    "setup-timeout": [["setup turn", "time limit", "never started"], ["timeout_s"], "repair"],
+    "setup-watch-unreadable": [["watch", "could not be read after setup", "never started"], ["stderr.log"], "repair"],
+    "setup-failed": [["setup.sh", "300 seconds", "setup_error", "never started"], ["setup.sh"], "repair"],
+    "session-changed": [["follow-up", "another session"], ["continue"], "repair"],
+    "config-changed": [["watched configuration", "a later turn would load", "stopped before"], ["never its session records, locks or caches"], "repair"],
+    "model-changed": [["another model", "one model"], [], "retry"],
+    "no-record": [["no record"], ["record_error"], "repair"],
+    "record-invalid": [["record", "could not be used"], ["record_error", "launching.md"], "repair"],
+    "unfinished": [["did not finish", "finished: false"], [], "retry"],
+    "credential-kept": [["could not be verified removed"], ["credentials.jsonl", "unremoved", "exits 3"], "retry"],
   };
   const finished = {
-    "check-error": [["checks failed to run"], ["trial.py recheck RUN_DIR"]],
-    "check-missing": [["required check", "neither true nor false"], ["trial.py recheck RUN_DIR"]],
-    "judge-missing": [["names no judge"], ["trial.py recheck RUN_DIR --judge"]],
-    "judge-unassessed": [["cannot read"], ["judge_context", "trial.py recheck RUN_DIR --rejudge"]],
-    "judge-error": [["gave no verdict"], ["trial.py recheck RUN_DIR --rejudge"]],
-    "judge-unclear": [["cannot decide"], ["trial.py recheck RUN_DIR --rejudge", "a verdict it likes"]],
-    "judge-stale": [["another judge", "another question or evidence"], ["trial.py recheck RUN_DIR --rejudge"]],
-    "not-exposed": [["requires_exposure", "did not reach the model"], ["resample", "how many runs each arm lost"]],
-    "exposure-unknown": [["requires_exposure", "cannot show whether"], ["resample", "how many runs each arm lost"]],
+    "check-error": [["checks failed to run"], ["trial.py recheck RUN_DIR"], "recheck"],
+    "check-missing": [["required check", "neither true nor false"], ["trial.py recheck RUN_DIR"], "recheck"],
+    "judge-missing": [["names no judge"], ["trial.py recheck RUN_DIR --judge"], "recheck"],
+    "judge-unassessed": [["cannot read"], ["judge_context", "trial.py recheck RUN_DIR --rejudge"], "recheck"],
+    "judge-error": [["gave no verdict"], ["trial.py recheck RUN_DIR --rejudge"], "recheck"],
+    "judge-unclear": [["cannot decide"], ["trial.py recheck RUN_DIR --rejudge", "a verdict it likes"], "recheck"],
+    "judge-stale": [["another judge", "another question or evidence"], ["trial.py recheck RUN_DIR --rejudge"], "recheck"],
+    "not-exposed": [["requires_exposure", "did not reach the model"], ["resample", "how many runs each arm lost"], "report"],
+    "exposure-unknown": [["requires_exposure", "cannot show whether"], ["resample", "how many runs each arm lost"], "report"],
   };
   const codes = [...Object.keys(unfinished), ...Object.keys(finished)];
   const data = F.gridTrial({ a: { c: "P".padEnd(codes.length + 1, "-") } }, run => {
@@ -419,12 +424,21 @@ test("every status trial.py records is explained with its own remedy, and no fin
     const rest = html.slice(at), gloss = rest.slice(rest.indexOf('class="av-inv-gloss"'), rest.indexOf('class="av-inv-remedy"'));
     return { gloss: plain(gloss.slice(gloss.indexOf(">") + 1)), remedy: plain(rest.slice(rest.indexOf('class="av-inv-remedy"'), rest.indexOf('<div class="av-inv-arms">')).replace(/^[^>]*>/, "")) };
   };
-  for (const [code, [what, how]] of Object.entries({ ...unfinished, ...finished })) {
+  for (const [code, [what, how, kind]] of Object.entries({ ...unfinished, ...finished })) {
     const { gloss, remedy } = group(code);
+    const commands = remedy.match(/trial\.py \w+ [A-Z_]+[^.;]*/g) || [];  // a command, as against a mention of what one does
     H.ok(!gloss.includes("did not finish with a valid result (recorded as"), `${code}: its own explanation, not the generic one`);
     for (const w of what) H.ok(gloss.includes(w), `${code}: the explanation says "${w}" (got: ${gloss})`);
     for (const w of how) H.ok(remedy.includes(w), `${code}: the remedy says "${w}" (got: ${remedy})`);
-    if (code in finished) H.ok(!remedy.includes("--retry-invalid") && !/\bRerun them\b/.test(remedy), `${code}: a finished run is never told to run again (got: ${remedy})`);
+    if (kind === "retry" || kind === "repair") {
+      H.ok(remedy.includes(`with the plan unchanged, rerun them into this directory: ${RETRY}`) || remedy.includes(`With the plan unchanged, rerun them into this directory: ${RETRY}`), `${code}: an unchanged retry into the same directory (got: ${remedy})`);
+      if (kind === "repair") H.ok(remedy.includes("into a new directory") && remedy.includes(FRESH), `${code}: a repair runs into a new directory (got: ${remedy})`);
+      else H.ok(!remedy.includes("NEW_DIR"), `${code}: nothing to repair in the plan (got: ${remedy})`);
+      H.ok(commands.every(c => c.startsWith(RETRY) || c.startsWith(FRESH)), `${code}: every command is the same-directory retry or the new-directory run (got: ${commands.join(" | ")})`);
+    } else {
+      H.ok(!remedy.includes("--retry-invalid") && !/\bRerun them\b/i.test(remedy) && !remedy.includes("NEW_DIR"), `${code}: a finished run is never told to run again (got: ${remedy})`);
+      H.ok(kind === "report" ? !commands.length : commands.length && commands.every(c => c.startsWith("trial.py recheck RUN_DIR")), `${code}: ${kind === "report" ? "no command" : "scored again in the same directory"} (got: ${commands.join(" | ")})`);
+    }
   }
 });
 

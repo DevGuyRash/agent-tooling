@@ -145,7 +145,7 @@ One strip per measure and arm, with a dot per valid run (filled for a pass, a ri
 
 ### invalid
 
-Invalid runs grouped by `invalid_reason` (else `status`), each group with the reason in plain words and its remedy (a run whose executor did not finish is run again, `trial.py run PLAN --out RUN_DIR --retry-invalid`; a run whose executor finished is scored again once its check or judge can decide it, such as `trial.py recheck RUN_DIR --rejudge`, never run again; a run under `requires_exposure` that the arm's resources did not reach, or may not have, is reported, not resampled), counts per arm, the opening of the first run's message and a mark per run. The default description gives their share; with none, it says every run finished valid. Frame fields only.
+Invalid runs grouped by `invalid_reason` (else `status`), each group with the reason in plain words and its remedy (a run whose executor did not finish is run again: into the same directory with the plan unchanged, `trial.py run PLAN --out RUN_DIR --retry-invalid`, or, after a repair that changes an arm or a scenario, which that directory refuses, into a new one, `trial.py run PLAN --out NEW_DIR`; a run whose executor finished is scored again once its check or judge can decide it, such as `trial.py recheck RUN_DIR --rejudge`, never run again; a run under `requires_exposure` that the arm's resources did not reach, or may not have, is reported, not resampled), counts per arm, the opening of the first run's message and a mark per run. The default description gives their share; with none, it says every run finished valid. Frame fields only.
 
 ### ledger
 
