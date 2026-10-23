@@ -1058,10 +1058,15 @@ def prepare_output(source: Path, output: Path, *, overwrite: bool) -> None:
         die("output path must not be the source path or inside the source tree")
     validate_symlink_tree(source)
     # The copy leaves generated output out, so a link to it would dangle in a package the converter itself rejects.
+    # The portability folder is the converter's own state, so a link into it from elsewhere could steer what is
+    # discovered or written there.
+    state = source / PORTABILITY_DIR
     for link in [path for path in source.rglob("*") if path.is_symlink() and not is_generated_junk(path, source)]:
         resolved = link.resolve()
         if resolved != source and is_generated_junk(resolved, source):
             die(f"{link.relative_to(source)}: this link points at {resolved.relative_to(source)}, generated output the conversion leaves out; remove the link or point it at kept content")
+        if not link.is_relative_to(state) and (resolved == state.resolve() or resolved.is_relative_to(state.resolve())):
+            die(f"{link.relative_to(source)}: this link points into {PORTABILITY_DIR}, the converter's own state; remove the link")
     if output.exists():
         if not overwrite:
             die(f"{output}: output already exists; pass --overwrite to replace it")
@@ -1430,13 +1435,23 @@ def write_hooks(root: Path, data: dict[str, Any]) -> None:
         (root / "hooks.json").unlink()
 
 
+def move_within_output(source: Path, destination: Path) -> None:
+    """Move a file inside the output; a moved link is rebased so it still names what it named."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_symlink():
+        target = Path(os.path.normpath(source.parent / os.readlink(source)))
+        source.unlink()
+        destination.symlink_to(os.path.relpath(target, destination.parent))
+    else:
+        shutil.move(str(source), str(destination))
+
+
 def quarantine_root_claude_context(root: Path, report: Report) -> None:
     context = root / "CLAUDE.md"
     if not context.exists():
         return
     target = root / PORTABILITY_DIR / "preserved" / "CLAUDE.md"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(context), str(target))
+    move_within_output(context, target)
     report.add_mapping(
         "CLAUDE.md",
         target.relative_to(root).as_posix(),
@@ -1570,8 +1585,7 @@ def archive_superseded_agents(out_root: Path, host: str, report: Report, kind: s
         archive = archive_root / real_path.relative_to(out_root.resolve())
         if not archive.resolve().is_relative_to(archive_root):
             die(f"{old_path.relative_to(out_root)}: archiving this agent would write outside the converted package")
-        archive.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(old_path), str(archive))
+        move_within_output(old_path, archive)
         moved[old_path] = moved[real_path] = archive
         report.add_preserved(kind, archive.relative_to(out_root).as_posix(), note)
     if moved:

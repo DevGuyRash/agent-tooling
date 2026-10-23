@@ -404,6 +404,27 @@ class PluginPortTests(unittest.TestCase):
                 self.assertFalse((output / ".plugin-portability").is_symlink())
                 plugin_port.validate_symlink_tree(output)
 
+    def test_no_package_link_may_reach_into_the_converters_state(self) -> None:
+        source = self.root / "into-state"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / ".plugin-portability/old.toml", 'name="retired"\ndescription="Old."\ndeveloper_instructions="Old."\n')
+        (source / ".codex").mkdir()
+        (source / ".codex/agents").symlink_to("../.plugin-portability")
+        output = self.root / "into-state-out"
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "\\.codex/agents.*plugin-portability"):
+            plugin_port.convert_plugin(source, "codex", output, mode="strict", overwrite=False)
+        self.assertFalse(output.exists())
+
+    def test_a_moved_root_context_link_keeps_its_referent(self) -> None:
+        source = self.root / "context-link"
+        write(source / ".codex-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / "docs/context.md", "Context.\n")
+        (source / "CLAUDE.md").symlink_to("docs/context.md")
+        output = self.root / "context-out"
+        plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
+        self.assertEqual("Context.\n", (output / ".plugin-portability/preserved/CLAUDE.md").read_text())
+        plugin_port.validate_symlink_tree(output)
+
     def test_marketplace_child_without_a_manifest_takes_the_catalogs_host(self) -> None:
         market = self.root / "codex-market-src"
         child = market / "plugins/kit"
