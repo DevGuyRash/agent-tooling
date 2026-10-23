@@ -56,6 +56,7 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
 """
 import json
 import os
+import shutil
 import re
 import stat
 import subprocess
@@ -109,6 +110,17 @@ def main():
         where = {rel: "inside the run" if os.path.realpath(HOME / rel).startswith(job) else "outside the run"
                  for rel in (".fake-sign-in", ".fake-auth") if (HOME / rel).exists()}
         (harness / f"sign-in-where-{TURN}.json").write_text(json.dumps(where))
+        fresh = held[:-1] + ("1" if held.endswith("0") else "0") + "\n"  # as long as the old: only its bytes differ
+        auth = HOME / ".fake-auth"
+        if MODE == "signed-in-refresh" and TURN:  # a tool refreshing its sign-in, in place through the link it was given
+            sign_in.write_text(fresh)
+        if MODE == "signed-in-replace" and TURN:  # a new file in its place
+            (HOME / ".fake-sign-in.new").write_text(fresh)
+            os.replace(HOME / ".fake-sign-in.new", sign_in)
+        if MODE == "signed-in-dir-change" and TURN and auth.exists():  # a file within a copied directory
+            (auth / "token").write_text(fresh)
+        if MODE == "signed-in-dir-delete" and TURN and auth.exists():  # the copied directory itself, wherever it is
+            shutil.rmtree(os.path.realpath(auth))
         prompt = Path(os.environ["TRIAL_PROMPT_FILE"]).read_text() if TURN else ""
         slow = (MODE == "signed-in-slow" and "create out.txt" in prompt) or (MODE == "signed-in-slow-probe" and "short check" in prompt)
         if slow and TURN == 1 and not os.environ.get("TRIAL_SCHEMA_FILE"):

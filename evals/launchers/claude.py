@@ -65,9 +65,10 @@ ACCOUNT_OFF = {
 
 
 # A claude.ai login refreshes by rotating its refresh token: a refresh inside a run would give the new tokens to the run's
-# copy, which the runtime removes afterwards, and leave the owner's own login holding the revoked one, signed out. So a
-# turn on a copied login starts only while its access token outlasts the turn's time limit (TRIAL_TIMEOUT_S, from the
-# runtime) and a margin. Only the expiry and whether a refresh token exists are read; neither is printed. The login is
+# copy, which the runtime removes afterwards, and leave the owner's own login holding the used one, signed out. Claude
+# Code refreshes it once its access token is within five minutes of expiring (2.1.299), so a turn on a copied login
+# starts only while its access token outlasts the turn's time limit (TRIAL_TIMEOUT_S, from the runtime) and a margin
+# wider than that. Only the expiry and whether a refresh token exists are read; neither is printed. The login is
 # read where Claude Code reads it: CLAUDE_CONFIG_DIR, when the arm passes one, else ~/.claude.
 REFRESH_MARGIN_S = 600
 
@@ -124,9 +125,10 @@ def run_turn(turn: int) -> int:
         env["CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL"] = "1"
         env.update(ACCOUNT_OFF["env"])
     if extra.get("bare") is False and copied_login_needs_refresh():
-        print("launcher: the copied claude.ai login expires before this turn could finish, and refreshing it inside the "
-              "run would revoke the owner's own login; refresh the login on this machine first (run any claude command "
-              "there), then run the trial again", file=sys.stderr)
+        print("launcher: the copied claude.ai login expires before this turn could finish, and a refresh inside the run "
+              "would leave the owner's own login holding a used token, signed out; Claude Code renews it only minutes "
+              "before it expires, so sign in again on this machine (claude auth login) or give the turn less time, then "
+              "run the trial again", file=sys.stderr)
         return 77
     message = Path(os.environ["TRIAL_PROMPT_FILE"]).read_bytes()
     events = STATE / f"events-{turn}.jsonl"

@@ -170,8 +170,8 @@ class ClaudeInvocationTest(LauncherCase):
                     code = self.turn(module, turn, launched, TRIAL_TURNS=str(len(expiries)), TRIAL_TIMEOUT_S=limit, **env)
                 started = len([call for call in launched.calls if call["cmd"][0] == "claude"])  # the last turn also cleans caches
                 outcomes.append((code, started))
-                if code == 77:
-                    self.assertIn("refresh", stderr.getvalue())
+                if code == 77:  # what renews it: a new sign-in, since running the tool renews it only near expiry
+                    self.assertIn("sign in again on this machine (claude auth login) or give the turn less time", stderr.getvalue())
                 login.unlink()
             return outcomes
 

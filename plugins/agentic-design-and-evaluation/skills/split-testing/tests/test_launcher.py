@@ -1,5 +1,6 @@
 """Launcher arms and judges (see references/launching.md), exercised through the CLI with a pretend agent launcher."""
 import contextlib
+import io
 import json
 import os
 import shutil
@@ -677,6 +678,133 @@ class LauncherTest(unittest.TestCase):
         self._no_credential_left(secret, r.stdout + r.stderr)
         log = [json.loads(l) for l in (self.out / "credentials.jsonl").read_text().splitlines()]
         self.assertTrue(log and all(e["removed"] and e["by"] and "unremoved" not in e for e in log), log)
+
+    def test_a_sign_in_a_run_changed_is_named_with_where_it_was_copied_from_whatever_its_format(self):
+        # A tool that refreshes a sign-in by rotating it leaves the original it was copied from holding a used token,
+        # which signs its owner out. The runtime knows no tool's format, but it knows what it copied: a copied file the
+        # run changed, written through its link or replaced by a new file, and a copied directory the run changed within
+        # or removed, is named with its source as the run ends, in what the trial prints and in the removal record
+        # (paths, never content); a copy the run left as it was is not, and nothing the tool wrote is kept anywhere.
+        sources = {".fake-sign-in": self.tmp / "sign-in", ".fake-auth": self.tmp / "auth"}
+        for mode, changed in (("signed-in-refresh", [".fake-sign-in"]), ("signed-in-replace", [".fake-sign-in"]),
+                              ("signed-in-dir-change", [".fake-auth"]), ("signed-in-dir-delete", [".fake-auth"]),
+                              ("signed-in", [])):
+            with self.subTest(mode):
+                subprocess.run(["chmod", "-R", "u+rwx", str(self.out)], capture_output=True)
+                shutil.rmtree(self.out, ignore_errors=True)
+                secret = "".join(["sess", "-", os.urandom(16).hex()])  # assembled here: no literal to scan for
+                fresh = secret[:-1] + ("1" if secret.endswith("0") else "0")  # what the fake tool refreshes it to
+                write(self.tmp / "auth" / "token", secret)
+                self._signed_in(secret, extra_copy={".fake-auth": "auth"})
+                r = self.run_plan(mode, FAKE_LAUNCHER_MARK=secret)
+                said = r.stdout + r.stderr
+                self.assertEqual(r.returncode, 0, said)
+                self.assertIs(self.result()["passed"], True, said)  # the run itself is as good as any
+                run = Path(os.path.realpath(self.out / "runs" / "make-file__a__r1")).relative_to(os.path.realpath(self.out))
+                log = [json.loads(l) for l in (self.out / "credentials.jsonl").read_text().splitlines()]
+                scored = [e.get("changed") for e in log if e["home"] == f"{run}/harness/home"]
+                self.assertEqual([[f"{run}/harness/home/{rel}" for rel in changed] or None], scored)
+                for rel, src in sources.items():
+                    named = f"{run} changed the sign-in copied from {src} ({rel} in its home)"
+                    (self.assertIn if rel in changed else self.assertNotIn)(named, said)
+                self._no_credential_left(secret, said)
+                self._no_credential_left(fresh, said)
+
+    def _finalized(self, during):
+        """A run holding a copied sign-in file and a copied directory, whose turns do `during(home)`, ended as every run
+        holding credentials is (see _with_credentials): (what its turns raised, what it printed, the removal record's
+        last line, its copies' directory)."""
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        (job / "harness" / "home").mkdir(parents=True)
+        write(self.tmp / "sign-in", "".join(["sess", "-", os.urandom(16).hex()]))
+        write(self.tmp / "auth" / "token", "".join(["sess", "-", os.urandom(16).hex()]))
+        write(self.tmp / "auth" / "nested" / "more", "kept as it was\n")
+        arm = {"copy": {".fake-sign-in": str(self.tmp / "sign-in"), ".fake-auth": str(self.tmp / "auth")}}
+        private = []
+
+        def turns(share, held):
+            private.extend(share)
+            during(job / "harness" / "home")
+            return "ok", False
+
+        err, raised = io.StringIO(), None
+        with contextlib.redirect_stderr(err):
+            try:
+                trial._with_credentials(arm, job, out, turns)
+            except BaseException as exc:  # what its turns, or its ending, raised
+                raised = exc
+        log = [json.loads(l) for l in (out / "credentials.jsonl").read_text().splitlines()]
+        return raised, err.getvalue(), log[-1], private[0]
+
+    def test_a_copied_sign_in_is_compared_only_where_the_run_was_given_it(self):
+        # what an agent leaves in its home is compared without being trusted: a home replaced by a link to a copy of
+        # the very same sign-ins elsewhere is never read through (both are named, being no longer where they were given,
+        # and the decoy is untouched); a directory-only tree added within a copied directory is named without being
+        # entered (it cannot be: it is unreadable), and a FIFO in a sign-in's place is named, never waited on
+        decoy = self.tmp / "decoy"
+        decoyed = {}
+
+        def relinked(home):
+            shutil.copytree(home, decoy, symlinks=False)  # the same bytes, outside the run
+            decoyed.update({p.relative_to(decoy).as_posix(): p.read_bytes() for p in decoy.rglob("*") if p.is_file()})
+            os.rename(home, home.with_name("home-moved"))
+            os.symlink(decoy, home)
+
+        def deepened(home):
+            (home / ".fake-auth" / "added" / "deeper").mkdir(parents=True)
+            os.chmod(home / ".fake-auth" / "added", 0)  # entering it would fail the comparison, and name nothing
+
+        def fifo(home):
+            os.unlink(home / ".fake-sign-in")
+            os.mkfifo(home / ".fake-sign-in")
+
+        for label, during, changed in (("home relinked", relinked, [".fake-sign-in", ".fake-auth"]),
+                                       ("directories added", deepened, [".fake-auth"]),
+                                       ("FIFO in its place", fifo, [".fake-sign-in"])):
+            with self.subTest(label):
+                shutil.rmtree(self.tmp / "out-unit", ignore_errors=True)
+                shutil.rmtree(decoy, ignore_errors=True)
+                decoyed.clear()
+                raised, said, last, private = self._finalized(during)
+                self.assertIsNone(raised)
+                home = "runs/r0123456789abcdef/harness/home"
+                self.assertEqual([f"{home}/{rel}" for rel in changed], last.get("changed"))
+                sources = {".fake-sign-in": self.tmp / "sign-in", ".fake-auth": self.tmp / "auth"}
+                for rel in changed:
+                    self.assertIn(f"changed the sign-in copied from {sources[rel]} ({rel} in its home)", said)
+                self.assertFalse(Path(private).exists())  # cleared all the same
+                if during is relinked:
+                    self.assertEqual(decoyed, {p.relative_to(decoy).as_posix(): p.read_bytes()
+                                               for p in decoy.rglob("*") if p.is_file()})
+                    self.assertEqual(sorted(decoyed), [".fake-auth/nested/more", ".fake-auth/token", ".fake-sign-in"])
+
+    def test_an_unchanged_copy_larger_than_what_is_read_is_never_named(self):
+        # what cannot be read whole as it is given cannot be compared: it is never named, rather than named for a
+        # prefix that differs from the whole
+        with mock.patch.object(trial, "READ_LIMIT", 8):
+            raised, said, last, _ = self._finalized(lambda home: None)
+        self.assertIsNone(raised)
+        self.assertNotIn("changed", last)
+        self.assertNotIn("changed the sign-in", said)
+
+    def test_a_run_ended_by_an_error_or_an_interrupt_still_has_its_copies_cleared_and_its_changed_sign_in_named(self):
+        # naming a changed copy is part of ending the run, so it happens whatever ends the run, and never keeps the
+        # copies from being cleared: not an error after the tool refreshed its sign-in, nor an interrupt mid-comparison
+        def refreshed_then_failed(home):
+            token = (home / ".fake-sign-in").read_text()
+            (home / ".fake-sign-in").write_text(token[:-1] + ("1" if token.endswith("0") else "0"))
+            raise RuntimeError("a later step of the run failed")
+
+        raised, said, last, private = self._finalized(refreshed_then_failed)
+        self.assertIsInstance(raised, RuntimeError)
+        self.assertEqual(["runs/r0123456789abcdef/harness/home/.fake-sign-in"], last.get("changed"))
+        self.assertIn(f"changed the sign-in copied from {self.tmp / 'sign-in'}", said)
+        self.assertTrue(last["removed"] and "unremoved" not in last and not Path(private).exists(), last)
+        shutil.rmtree(self.tmp / "out-unit")
+        with mock.patch.object(trial, "_changed_copies", side_effect=KeyboardInterrupt):
+            raised, said, last, private = self._finalized(lambda home: None)
+        self.assertIsInstance(raised, KeyboardInterrupt)
+        self.assertTrue(last["removed"] and "unremoved" not in last and not Path(private).exists(), last)
 
     def test_a_copy_the_agent_made_in_its_home_goes_with_the_home_but_its_evidence_stays(self):
         secret = "".join(["sess", "-", os.urandom(16).hex()])
