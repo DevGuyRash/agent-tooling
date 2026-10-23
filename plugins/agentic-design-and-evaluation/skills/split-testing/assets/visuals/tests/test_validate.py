@@ -424,10 +424,10 @@ class EntryPathMatrixTest(unittest.TestCase):
             "comparison": [
                 ("a specification's own", R.validate_spec({**bare, "comparison": BAD_COMPARISON}), "comparison"),
                 ("supplied beside a specification", R.validate_spec(bare, None, BAD_COMPARISON), "comparison"),
-                ("a view's own data", R.validate_spec(view), "sections[0].blocks[0].data"),
+                ("a view's own data", R.validate_spec(view), "sections[0].blocks[0] (metric).data"),
                 ("checked alone", R.validate_comparison(BAD_COMPARISON), "comparison"),
                 ("a collection member's", R.validate_collection({"members": [{"id": "m", "comparison": BAD_COMPARISON}]}), "collection.members[0].comparison"),
-                ("a view a trial narrative adds", R.validate_narrative({"sections": [{"title": "More", "blocks": [{"type": "metric", "metric": "m", "data": BAD_COMPARISON}]}]}, good_trial), "narrative.sections[0].blocks[0].data"),
+                ("a view a trial narrative adds", R.validate_narrative({"sections": [{"title": "More", "blocks": [{"type": "metric", "metric": "m", "data": BAD_COMPARISON}]}]}, good_trial), "narrative.sections[0].blocks[0] (metric).data"),
                 ("report.py --data", self.cli(("--data", BAD_COMPARISON)), "comparison"),
                 ("report.py --spec --data", self.cli(("--spec", bare), ("--data", BAD_COMPARISON)), "comparison"),
             ],
@@ -456,6 +456,118 @@ class EntryPathMatrixTest(unittest.TestCase):
             for name, problems, at in paths[1:]:
                 with self.subTest(kind=kind, path=name):
                     self.assertEqual(within(problems, at), reference, f"{kind}: {name} against {first_name}")
+
+
+# Every identifier field of each kind of data, and the malformed values each must be refused (or, where the field may be
+# left out, accepted as left out). Each entry's path names the field; "*" marks its index in the base input.
+BAD_IDS = [None, False, 0, {}, [], "", "  "]
+
+
+def id_base_trial() -> dict:
+    return {"plan": {"scenarios": [{"name": "c1"}]}, "runs": [{"job": "j1", "arm": "a", "scenario": "c1", "repeat": 1, "passed": True, "valid": True}, {"job": "j2", "arm": "b", "scenario": "c1", "repeat": 1, "passed": False, "valid": True}], "pairwise": {"a|b": {"arms": ["a", "b"], "scenarios": {"c1": {"a_wins": 1, "b_wins": 0}}}}}
+
+
+def id_base_comparison() -> dict:
+    return {"alternatives": [{"id": "x"}, {"id": "y"}], "cases": [{"id": "c1"}], "metrics": [{"id": "m", "kind": "binary"}, {"id": "p", "kind": "preference"}],
+            "observations": [{"alternative": "x", "metric": "m", "case": "c1", "value": True}], "aggregates": [{"alternative": "y", "metric": "m", "case": "c1", "k": 1, "n": 2}],
+            "preferences": [{"a": "x", "b": "y", "winner": "x", "case": "c1", "metric": "p"}], "rankings": [{"order": ["x", "y"], "case": "c1", "metric": "p"}]}
+
+
+def id_base_collection() -> dict:
+    tiny = {"runs": [{"job": "j1", "arm": "a", "scenario": "c1", "repeat": 1, "passed": True, "valid": True}]}
+    return {"themes": [{"id": "t"}], "members": [{"id": "m1", "theme": "t", "trial": tiny}, {"id": "m2", "follows": "m1", "trial": tiny}], "pairs": [{"a": "m1", "b": "m2"}]}
+
+
+def id_one_arm_trial() -> dict:
+    return {"runs": [{"job": "j1", "arm": "a", "scenario": "c1", "repeat": 1, "passed": True, "valid": True}, {"job": "j2", "arm": "a", "scenario": "c2", "repeat": 1, "passed": False, "valid": True}]}
+
+
+ID_FIELDS = {
+    "trial": (id_base_trial, [("runs", 1, "arm"), ("runs", 1, "scenario"), ("runs", 1, "job"), ("plan", "scenarios", 0, "name"), ("pairwise", "a|b", "arms", 1)]),
+    "trial (one arm)": (id_one_arm_trial, [("runs", 1, "arm"), ("runs", 1, "scenario"), ("runs", 1, "job")]),
+    "comparison": (id_base_comparison, [("alternatives", 0, "id"), ("cases", 0, "id"), ("metrics", 0, "id"), ("observations", 0, "alternative"), ("observations", 0, "metric"), ("observations", 0, "case"),
+                                        ("aggregates", 0, "alternative"), ("aggregates", 0, "metric"), ("aggregates", 0, "case"), ("preferences", 0, "a"), ("preferences", 0, "b"), ("preferences", 0, "winner"),
+                                        ("preferences", 0, "case"), ("preferences", 0, "metric"), ("rankings", 0, "order", 0), ("rankings", 0, "case"), ("rankings", 0, "metric")]),
+    "collection": (id_base_collection, [("members", 0, "id"), ("themes", 0, "id"), ("members", 0, "theme"), ("members", 1, "follows"), ("pairs", 0, "a"), ("pairs", 0, "b")]),
+}
+# A field that may be left out may be null: a case left out is evidence naming no case (a blank one stands for it, with a
+# warning), a winner left out a judgment never reached, a judgment's metric left out the overall question, and a job,
+# theme or follow-up left out none. Every other malformed value is an error, at the field or at its record.
+OPTIONAL = {"case", "winner", "metric", "job", "theme", "follows"}
+# A member's theme that names no declared theme, a blank one among them, leaves the report among the other reports: a
+# warning, as for any theme the collection does not declare.
+ALLOWED = {("case", ""): ["warning"], ("case", "  "): ["warning"], ("theme", ""): ["warning"], ("theme", "  "): ["warning"]}
+
+
+def with_value(base: dict, path: tuple, value) -> dict:
+    data = json.loads(json.dumps(base))
+    node = data
+    for key in path[:-1]:
+        node = node[key]
+    node[path[-1]] = value
+    return data
+
+
+def place(prefix: str, path: tuple) -> str:
+    out = prefix
+    for key in path:
+        out = f"{out}[{key}]" if isinstance(key, int) else f"{out}.{key}" if R.PLAIN_KEY.fullmatch(key) else f"{out}[{json.dumps(key)}]"
+    return out
+
+
+def identifier_failures() -> tuple[list[str], int]:
+    """Every identifier field and malformed value on each path, checked by both checkers: what fails, and how many were checked."""
+    entries, expected = [], []
+    for kind, (base, fields) in ID_FIELDS.items():
+        for path in fields:
+            for bad in BAD_IDS:
+                data = with_value(base(), path, bad)
+                family = kind.split(" ")[0]
+                paths = {"trial": [("spec", {"title": "T", "sections": [{"title": "S", "reading": "r", "blocks": [{"type": "cases"}]}], "trial": data}, "trial"), ("narrative", {}, "trial"), ("collection", {"members": [{"id": "m", "trial": data}]}, "collection.members[0].trial")],
+                         "comparison": [("comparison", data, "comparison"), ("spec", {"title": "T", "sections": [], "comparison": data}, "comparison"), ("collection", {"members": [{"id": "m", "comparison": data}]}, "collection.members[0].comparison")],
+                         "collection": [("collection", data, "collection"), ("spec", {"title": "T", "sections": [], "collection": data}, "collection")]}[family]
+                for which, input_, prefix in paths:
+                    entries.append({"kind": which, "input": input_, **({"trial": data} if which == "narrative" else {})})
+                    expected.append((kind, path, bad, which, prefix))
+    with Scratch() as directory:
+        path = directory / "ids.json"
+        path.write_text(json.dumps(entries), encoding="utf-8")
+        result = run_node(TESTS / "validate.cjs", "--ids", path, "--out", directory / "page.json", timeout=300)
+        if result.returncode != 0:
+            return [f"validate.cjs --ids failed: {result.stderr[-2000:]}"], len(entries)
+        page = json.loads((directory / "page.json").read_text(encoding="utf-8"))
+    failures = []
+    for entry, theirs, (kind, field, bad, which, prefix) in zip(entries, page, expected):
+        label = f"{kind} {'.'.join(map(str, field))} = {json.dumps(bad)} via {which}"
+        try:
+            ours = R.validate_spec(entry["input"]) if which == "spec" else R.validate_narrative({}, entry["trial"]) if which == "narrative" else R.validate_collection(entry["input"]) if which == "collection" else R.validate_comparison(entry["input"])
+        except Exception as error:  # noqa: BLE001 - a crash is the finding
+            failures.append(f"{label}: report.py raised {type(error).__name__}: {error}")
+            continue
+        if isinstance(theirs, dict) and "exception" in theirs:
+            failures.append(f"{label}: the page's checker raised {theirs['exception'][:200]}")
+            continue
+        if ours != theirs:
+            failures.append(f"{label}: the checkers differ\n  report.py: {json.dumps(ours)[:500]}\n  page:      {json.dumps(theirs)[:500]}")
+            continue
+        at, record = place(prefix, field), place(prefix, field[:-1])
+        name = field[-1] if isinstance(field[-1], str) else "order"
+        # A required field left out is named at its record ("missing required field").
+        levels = sorted({p["level"] for p in ours if p["where"] == at or p["where"].startswith(at + ".") or p["where"].startswith(at + "[") or (p["where"] == record and f'"{name}"' in p["message"])})
+        allowed = [] if bad is None and name in OPTIONAL and not (name == "metric" and field[0] in ("observations", "aggregates")) else ALLOWED.get((name, bad)) if isinstance(bad, str) else None
+        want = allowed if allowed is not None else ["error"]
+        if (want == [] and levels) or (want and want[0] not in levels):
+            failures.append(f"{label}: expected {want or 'no problem'} at {at}, found {levels} in {json.dumps([p['where'] + ': ' + p['message'] for p in ours])[:400]}")
+    return failures, len(entries)
+
+
+class IdentifierSweepTest(unittest.TestCase):
+    """Every identifier field of a trial, a comparison and a collection, with every malformed value, on each path: both
+    checkers find the same problems, raise nothing, and refuse the value at its place (or accept it where it may be left out)."""
+
+    def test_every_identifier_field_and_malformed_value(self) -> None:
+        failures, checked = identifier_failures()
+        self.assertFalse(failures, f"{len(failures)} of {checked} entries fail; the first:\n" + "\n".join(failures[:12]))
 
 
 class TrialEntryTest(unittest.TestCase):

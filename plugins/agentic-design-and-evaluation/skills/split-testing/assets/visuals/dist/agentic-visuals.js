@@ -9710,7 +9710,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
     /** A collection of reports (collection.ts). */
     const MEMBER = { fields: { id: "member-id", theme: "theme", title: "text", label: "text", note: "text", date: "text", follows: "member", models: { list: "text" }, trial: "any", comparison: "any", spec: "any", narrative: "any" }, required: ["id"] };
     const COLLECTION = {
-        fields: { title: "text", kicker: "text", summary: "prose", footer: "text", story: "any", readings: { record: "prose" }, themes: { list: { fields: { id: "text", label: "text", summary: "prose" }, required: ["id"] } }, members: { list: MEMBER }, pairs: { list: PAIR } },
+        fields: { title: "text", kicker: "text", summary: "prose", footer: "text", story: "any", readings: { record: "prose" }, themes: { list: { fields: { id: "theme-id", label: "text", summary: "prose" }, required: ["id"] } }, members: { list: MEMBER }, pairs: { list: PAIR } },
         required: ["members"],
     };
     /** Section ids of the trial composition (compose.ts SECTION_IDS), and earlier
@@ -9851,7 +9851,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
                 rate: "a number from 0 to 1", boolean: "true or false", null: "null", any: "any value", block: "a block object",
                 arm: "an arm id", "arm-ref": "an arm id", "arm-label": "an arm id", case: "a case id", "case-ref": "a case id", check: "a check name", pair: "a pairwise key",
                 measure: "a measure id", "section-id": "a section id", alternative: "an alternative id", "alternative-ref": "an alternative id", metric: "a metric id", "comparison-case": "a case id",
-                member: "a report id", "member-id": "a report id", theme: "a theme id",
+                member: "a report id", "member-id": "a report id", theme: "a theme id", "theme-id": "a theme id",
             }[f] || f;
         if ("enum" in f)
             return `one of ${f.enum.join(", ")}`;
@@ -10108,6 +10108,8 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
                     this.type(x, "text", this.join(where, i)); });
             if (kind === "member-id" && !/^[A-Za-z][\w.-]*$/.test(v))
                 this.add("error", where, `"${clip(v)}" cannot be a report id, since links name reports by id`, "start with a letter and use only letters, digits, _ . or -");
+            if (kind === "theme-id" && !v.trim())
+                this.add("error", where, "a theme id cannot be blank, since reports join their theme by its id", "name the theme");
             if (kind === "section-id" && !/^[A-Za-z][\w:.-]*$/.test(v))
                 this.add("warning", where, `"${clip(v)}" cannot be used as a section id, so the section gets a generated one`, "start with a letter and use only letters, digits, _ : . or -");
             if (kind in IDS)
@@ -10203,8 +10205,8 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
                 this.add("error", at, `the ${type} block needs a collection`, 'pass --collection to report.py, or set the specification\'s "collection" field');
             if (schema.comparison && !this.known.comparison && (v.data === undefined || v.data === null))
                 this.add("error", at, `the ${type} block needs comparison data or its own "data"`, 'pass --data or --csv to report.py, or set the specification\'s "comparison" field');
-            this.shape(v, schema, at, { data: (value, where) => { if (!isComparison(value))
-                    this.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md'); } }, ["type"]);
+            // A view's own data is checked once, as comparison data, by checkComparison (viewData).
+            this.shape(v, schema, at, {}, ["type"]);
             this.blockRules(type, v, at);
         }
         /** Cross-field rules a field table cannot state. */
@@ -10701,24 +10703,55 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
     function reportCases(spec, options = {}) {
         if (!isObj(spec))
             return [];
-        const trial = spec.trial ? spec.trial : options.trial, comparison = spec.comparison ? spec.comparison : options.comparison;
+        const trial = wellFormedTrial(spec.trial ? spec.trial : options.trial), comparison = spec.comparison ? spec.comparison : options.comparison;
         return specNeeds(spec, knownFrom(trial, comparison), trial, comparison).cases || [];
     }
+    /** An identifier the views group or label by: text with something in it. */
+    const isId = (v) => typeof v === "string" && !!v.trim();
+    const ID_HINT = "write the trial with trial.py report RUN_DIR --out FILE, which names each as text";
     /** The one check of trial data, however it enters: a specification's own `trial`, a trial supplied beside a
      * specification, a narrative's trial (so every composed trial report), and a collection member's. It must be trial report
-     * data, and each run must name its scenario: trial.py never writes a run whose scenario is left out, null, empty or only
-     * spaces, so such a run is malformed input, refused rather than read as a case of its own. False when it is not trial
-     * data. Where two entries check one trial, each problem is listed once (order removes the repeat). */
+     * data, and every identifier the views group or label by must be text: each run's arm and scenario (and its job, when
+     * given), each plan scenario's name, and the two arms of each pairwise judgment. trial.py writes them all, so a value
+     * left out, null, empty, only spaces or not text is malformed input, refused at its place; every later check reads the
+     * trial through wellFormedTrial, so none descends into such a record. False when it is not trial data. Where two
+     * entries check one trial, each problem is listed once (order removes the repeat). */
     function checkTrial(c, trial, where) {
         if (!isObj(trial) || !Array.isArray(trial.runs)) {
             c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE");
             return false;
         }
         trial.runs.forEach((r, i) => {
-            if (isObj(r) && (typeof r.scenario !== "string" || (0, stats_14.caseKey)(r.scenario) === stats_14.NO_CASE))
-                c.add("error", `${where}.runs[${i}].scenario`, "a trial run must name its scenario", "write the trial with trial.py report RUN_DIR --out FILE, which names each run's scenario as text");
+            if (!isObj(r))
+                return;
+            if (!isId(r.arm))
+                c.add("error", `${where}.runs[${i}].arm`, "a trial run must name its arm", ID_HINT);
+            if (!isId(r.scenario))
+                c.add("error", `${where}.runs[${i}].scenario`, "a trial run must name its scenario", ID_HINT);
+            if (r.job !== undefined && r.job !== null && !isId(r.job))
+                c.add("error", `${where}.runs[${i}].job`, "a trial run's job, when given, must name its record", ID_HINT);
         });
+        if (isObj(trial.plan) && Array.isArray(trial.plan.scenarios))
+            trial.plan.scenarios.forEach((sc, i) => { if (isObj(sc) && !isId(sc.name))
+                c.add("error", `${where}.plan.scenarios[${i}].name`, "a plan scenario must have a name", ID_HINT); });
+        if (isObj(trial.pairwise))
+            for (const k of keysOf(trial.pairwise)) {
+                const p = trial.pairwise[k];
+                if (isObj(p) && Array.isArray(p.arms))
+                    p.arms.forEach((a, i) => { if (!isId(a))
+                        c.add("error", `${c.join(c.join(c.join(where, "pairwise"), k), "arms")}[${i}]`, "a pairwise judgment must name its arms", ID_HINT); });
+            }
         return true;
+    }
+    /** The trial every check after checkTrial reads: only the runs, plan scenarios and pairwise judgments whose identifiers
+     * are well formed, so no check descends into a record whose identifiers are malformed. */
+    function wellFormedTrial(trial) {
+        if (!isObj(trial) || !Array.isArray(trial.runs))
+            return trial;
+        const runs = trial.runs.filter(r => !isObj(r) || (isId(r.arm) && isId(r.scenario) && (r.job === undefined || r.job === null || isId(r.job))));
+        const plan = isObj(trial.plan) && Array.isArray(trial.plan.scenarios) ? { ...trial.plan, scenarios: trial.plan.scenarios.filter(sc => !isObj(sc) || isId(sc.name)) } : trial.plan;
+        const pairwise = isObj(trial.pairwise) ? Object.fromEntries(Object.entries(trial.pairwise).filter(([, p]) => !isObj(p) || !Array.isArray(p.arms) || p.arms.every(isId))) : trial.pairwise;
+        return { ...trial, runs, ...(plan !== undefined ? { plan } : {}), ...(pairwise !== undefined ? { pairwise } : {}) };
     }
     /** A check's problems, moved from the place it names its input (`from`, such as "comparison") to where the input
      * entered (`at`, such as "sections[0].blocks[1].data"). */
@@ -10745,8 +10778,9 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
             if (!isObj(b) || typeof b.type !== "string" || b.data === undefined || b.data === null)
                 return;
             const schema = Object.prototype.hasOwnProperty.call(BLOCKS, b.type) ? BLOCKS[b.type] : undefined;
+            // Placed as every problem of a view is, under the view's place and type.
             if (schema && Object.prototype.hasOwnProperty.call(schema.fields, "data"))
-                checkComparison(c, b.data, c.join(where, "data"));
+                checkComparison(c, b.data, c.join(`${where} (${b.type})`, "data"));
         };
         (Array.isArray(owner.sections) ? owner.sections : []).forEach((s, i) => { if (isObj(s) && Array.isArray(s.blocks))
             s.blocks.forEach((b, j) => each(b, `${c.join(c.join(at, "sections"), i)}.blocks[${j}]`)); });
@@ -10793,7 +10827,8 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
         const own = COMPOSED.get(spec);
         const inputs = own ? own.problems.map(carried).filter((p) => p !== null) : [];
         // As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
-        const trial = spec.trial ? spec.trial : options.trial;
+        // Every check after the trial's own reads only its well-formed records.
+        const trial = wellFormedTrial(spec.trial ? spec.trial : options.trial);
         const comparison = spec.comparison ? spec.comparison : options.comparison;
         const collection = spec.collection ? spec.collection : options.collection;
         const c = new Checker(knownFrom(trial, comparison, collection), registered(), "spec");
@@ -10839,12 +10874,14 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
     }
     /** Problems in a narrative for the trial composition, checked against the
      * trial's arms and cases when the trial data is given. */
-    function validateNarrative(narrative, trial) {
+    function validateNarrative(narrative, given) {
+        // Every check after the trial's own reads only its well-formed records.
+        const trial = wellFormedTrial(given);
         const c = new Checker(knownFrom(trial), registered(), "narrative");
         if (!isObj(narrative))
             return [{ level: "error", where: "narrative", message: `expected an object, found ${found(narrative)}`, hint: 'a narrative is an object such as {"title": "…", "decision": { … }}' }];
         // The trial the narrative is told against: a narrative needs trial data to be read against.
-        if (trial !== undefined && trial !== null && !checkTrial(c, trial, "trial"))
+        if (given !== undefined && given !== null && !checkTrial(c, given, "trial"))
             return order(c.problems);
         const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : null;
         const include = strings(narrative.include)?.map(sectionKey) || null, exclude = (strings(narrative.exclude) || []).map(sectionKey);

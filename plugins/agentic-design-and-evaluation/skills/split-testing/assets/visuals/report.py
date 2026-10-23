@@ -239,7 +239,7 @@ SPEC = {
 # A collection of reports (collection.ts).
 MEMBER = {"fields": {"id": "member-id", "theme": "theme", "title": "text", "label": "text", "note": "text", "date": "text", "follows": "member", "models": {"list": "text"}, "trial": "any", "comparison": "any", "spec": "any", "narrative": "any"}, "required": ["id"]}
 COLLECTION = {
-    "fields": {"title": "text", "kicker": "text", "summary": "prose", "footer": "text", "story": "any", "readings": {"record": "prose"}, "themes": {"list": {"fields": {"id": "text", "label": "text", "summary": "prose"}, "required": ["id"]}}, "members": {"list": MEMBER}, "pairs": {"list": PAIR}},
+    "fields": {"title": "text", "kicker": "text", "summary": "prose", "footer": "text", "story": "any", "readings": {"record": "prose"}, "themes": {"list": {"fields": {"id": "theme-id", "label": "text", "summary": "prose"}, "required": ["id"]}}, "members": {"list": MEMBER}, "pairs": {"list": PAIR}},
     "required": ["members"],
 }
 MEMBER_ID = re.compile(r"[A-Za-z][\w.-]*", re.ASCII)
@@ -325,7 +325,7 @@ DESCRIPTIONS = {
     "rate": "a number from 0 to 1", "boolean": "true or false", "null": "null", "any": "any value", "block": "a block object",
     "arm": "an arm id", "arm-ref": "an arm id", "arm-label": "an arm id", "case": "a case id", "case-ref": "a case id", "check": "a check name", "pair": "a pairwise key",
     "measure": "a measure id", "section-id": "a section id", "alternative": "an alternative id", "alternative-ref": "an alternative id", "metric": "a metric id", "comparison-case": "a case id",
-    "member": "a report id", "member-id": "a report id", "theme": "a theme id",
+    "member": "a report id", "member-id": "a report id", "theme": "a theme id", "theme-id": "a theme id",
 }
 IDS = {
     "arm": ("arms", "an arm in this trial", "arms in this trial", "error", ""),
@@ -626,6 +626,8 @@ class Checker:
                     self.type(x, "text", self.join(where, i))
         if kind == "member-id" and not MEMBER_ID.fullmatch(v):
             self.add("error", where, f'"{clip(v)}" cannot be a report id, since links name reports by id', "start with a letter and use only letters, digits, _ . or -")
+        if kind == "theme-id" and not v.strip():
+            self.add("error", where, "a theme id cannot be blank, since reports join their theme by its id", "name the theme")
         if kind == "section-id" and not SECTION_ID.fullmatch(v):
             self.add("warning", where, f'"{clip(v)}" cannot be used as a section id, so the section gets a generated one', "start with a letter and use only letters, digits, _ : . or -")
         if kind in IDS:
@@ -725,11 +727,8 @@ class Checker:
         if schema.get("comparison") and not self.known["comparison"] and v.get("data") is None:
             self.add("error", at, f'the {kind} block needs comparison data or its own "data"', "pass --data or --csv to report.py, or set the specification's \"comparison\" field")
 
-        def data(value, where: str) -> None:
-            if not is_comparison(value):
-                self.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md')
-
-        self.shape(v, schema, at, {"data": data}, skip=("type",))
+        # A view's own data is checked once, as comparison data, by check_comparison_data (view_data).
+        self.shape(v, schema, at, {}, skip=("type",))
         self.block_rules(kind, v, at)
         return None
 
@@ -881,17 +880,58 @@ def named_ids(value, field, out: dict) -> None:
             named_ids(value.get(k), f, out)
 
 
+def is_id(v) -> bool:
+    """An identifier the views group or label by: text with something in it."""
+    return isinstance(v, str) and bool(v.strip())
+
+
+ID_HINT = "write the trial with trial.py report RUN_DIR --out FILE, which names each as text"
+
+
 def check_trial_data(c, trial, where: str) -> bool:
     """The one check of trial data, however it enters (as src/validate.ts checkTrial): it must be trial report data, and
-    each run must name its scenario; a run whose scenario is left out, null, empty or only spaces is malformed input.
-    False when it is not trial data. Where two entries check one trial, ordered() lists each problem once."""
+    every identifier the views group or label by must be text (each run's arm, scenario and given job, each plan
+    scenario's name, each pairwise judgment's arms). False when it is not trial data. Where two entries check one trial,
+    ordered() lists each problem once; every later check reads well_formed_trial."""
     if not isinstance(trial, dict) or not isinstance(trial.get("runs"), list):
         c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE")
         return False
     for i, r in enumerate(trial["runs"]):
-        if isinstance(r, dict) and (not isinstance(r.get("scenario"), str) or not r["scenario"].strip()):
-            c.add("error", f"{where}.runs[{i}].scenario", "a trial run must name its scenario", "write the trial with trial.py report RUN_DIR --out FILE, which names each run's scenario as text")
+        if not isinstance(r, dict):
+            continue
+        if not is_id(r.get("arm")):
+            c.add("error", f"{where}.runs[{i}].arm", "a trial run must name its arm", ID_HINT)
+        if not is_id(r.get("scenario")):
+            c.add("error", f"{where}.runs[{i}].scenario", "a trial run must name its scenario", ID_HINT)
+        if r.get("job") is not None and not is_id(r.get("job")):
+            c.add("error", f"{where}.runs[{i}].job", "a trial run's job, when given, must name its record", ID_HINT)
+    plan = trial.get("plan")
+    if isinstance(plan, dict) and isinstance(plan.get("scenarios"), list):
+        for i, sc in enumerate(plan["scenarios"]):
+            if isinstance(sc, dict) and not is_id(sc.get("name")):
+                c.add("error", f"{where}.plan.scenarios[{i}].name", "a plan scenario must have a name", ID_HINT)
+    if isinstance(trial.get("pairwise"), dict):
+        for k in keys_of(trial["pairwise"]):
+            p = trial["pairwise"][k]
+            if isinstance(p, dict) and isinstance(p.get("arms"), list):
+                for i, a in enumerate(p["arms"]):
+                    if not is_id(a):
+                        c.add("error", f"{c.join(c.join(c.join(where, 'pairwise'), k), 'arms')}[{i}]", "a pairwise judgment must name its arms", ID_HINT)
     return True
+
+
+def well_formed_trial(trial):
+    """The trial every check after check_trial_data reads: only the runs, plan scenarios and pairwise judgments whose
+    identifiers are well formed, so no check descends into a record whose identifiers are malformed (as src/validate.ts wellFormedTrial)."""
+    if not isinstance(trial, dict) or not isinstance(trial.get("runs"), list):
+        return trial
+    out = {**trial, "runs": [r for r in trial["runs"] if not isinstance(r, dict) or (is_id(r.get("arm")) and is_id(r.get("scenario")) and (r.get("job") is None or is_id(r.get("job"))))]}
+    plan = trial.get("plan")
+    if isinstance(plan, dict) and isinstance(plan.get("scenarios"), list):
+        out["plan"] = {**plan, "scenarios": [sc for sc in plan["scenarios"] if not isinstance(sc, dict) or is_id(sc.get("name"))]}
+    if isinstance(trial.get("pairwise"), dict):
+        out["pairwise"] = {k: p for k, p in trial["pairwise"].items() if not isinstance(p, dict) or not isinstance(p.get("arms"), list) or all(is_id(a) for a in p["arms"])}
+    return out
 
 
 def placed(problems: list, frm: str, at: str) -> list:
@@ -925,8 +965,9 @@ def view_data(c, owner: dict, at: str) -> None:
         if not isinstance(b, dict) or not isinstance(b.get("type"), str) or b.get("data") is None:
             return
         schema = BLOCKS.get(b["type"])
+        # Placed as every problem of a view is, under the view's place and type.
         if schema and "data" in schema.get("fields", {}):
-            check_comparison_data(c, b["data"], c.join(where, "data"))
+            check_comparison_data(c, b["data"], c.join(f"{where} ({b['type']})", "data"))
     for i, sec in enumerate(owner.get("sections") if isinstance(owner.get("sections"), list) else []):
         if isinstance(sec, dict) and isinstance(sec.get("blocks"), list):
             for j, b in enumerate(sec["blocks"]):
@@ -1399,7 +1440,8 @@ def validate_spec(spec, trial=None, comparison=None, collection=None) -> list[di
     # As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
     own, gathered = spec.get("comparison"), spec.get("collection")
     beside = {"trial": trial, "comparison": comparison, "collection": collection}
-    trial, comparison = spec.get("trial") or trial, own if own not in (None, False, 0, "") else comparison
+    # Every check after the trial's own reads only its well-formed records.
+    trial, comparison = well_formed_trial(spec.get("trial") or trial), own if own not in (None, False, 0, "") else comparison
     c = Checker(known_from(trial, comparison, gathered if gathered not in (None, False, 0, "") else collection), "spec")
 
     def check_trial(value, where: str) -> None:
@@ -1825,11 +1867,13 @@ def comparison_narrative(narrative, known: dict, data: dict) -> list[dict]:
 
 def validate_narrative(narrative, trial=None) -> list[dict]:
     """Problems in a narrative, as src/validate.ts validateNarrative finds them."""
+    # Every check after the trial's own reads only its well-formed records.
+    given, trial = trial, well_formed_trial(trial)
     c = Checker(known_from(trial), "narrative")
     if not isinstance(narrative, dict):
         return [{"level": "error", "where": "narrative", "message": f"expected an object, found {found(narrative)}", "hint": 'a narrative is an object such as {"title": "…", "decision": { … }}'}]
     # The trial the narrative is told against: a narrative needs trial data to be read against.
-    if trial is not None and not check_trial_data(c, trial, "trial"):
+    if given is not None and not check_trial_data(c, given, "trial"):
         return ordered(c.problems)
 
     def strings(v):

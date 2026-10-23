@@ -15,6 +15,23 @@ const { test } = H;
 
 const V = H.loadVisuals();
 
+// node validate.cjs --ids IN --out OUT: each entry checked by the validator its kind names, with its data given inline;
+// an exception is recorded as {exception}, so a crash on malformed input is a finding, not a failed run.
+const ids = process.argv.indexOf("--ids");
+if (ids >= 0) {
+  const entries = JSON.parse(fs.readFileSync(process.argv[ids + 1], "utf8"));
+  const out = entries.map(e => {
+    try {
+      if (e.kind === "spec") return H.plain(V.validateSpec(e.input));
+      if (e.kind === "narrative") return H.plain(V.validateNarrative(e.input, e.trial));
+      if (e.kind === "collection") return H.plain(V.validateCollection(e.input));
+      return H.plain(V.validateComparison(e.input));
+    } catch (error) { return { exception: String(error && error.stack || error).slice(0, 400) }; }
+  });
+  fs.writeFileSync(process.argv[process.argv.indexOf("--out") + 1], JSON.stringify(out));
+  process.exit(0);
+}
+
 const at = process.argv.indexOf("--corpus");
 if (at >= 0) {
   // { trials: {name: trial}, entries: [{kind, input, trial: name | null}] }
@@ -299,13 +316,13 @@ const ENTRY_MATRIX = (() => {
     "comparison": [
       ["a specification's own", () => V.validateSpec(bare({ comparison: badComparison() })), "comparison"],
       ["supplied beside a specification", () => V.validateSpec(bare(), { comparison: badComparison() }), "comparison"],
-      ["a view's own data", () => V.validateSpec(view(badComparison())), "sections[0].blocks[0].data"],
+      ["a view's own data", () => V.validateSpec(view(badComparison())), "sections[0].blocks[0] (metric).data"],
       ["checked alone", () => V.validateComparison(badComparison()), "comparison"],
       ["the composed report", () => V.validateSpec(V.comparisonReport(badComparison(), {})), "comparison"],
       ["a collection member's", () => V.validateCollection({ members: [{ id: "m", comparison: badComparison() }] }), "collection.members[0].comparison"],
       ["a collection specification member's", () => V.validateCollection({ members: [{ id: "m", spec: bare({ comparison: badComparison() }) }] }), "collection.members[0].spec.comparison"],
-      ["a view a trial narrative adds", () => V.validateNarrative({ sections: [{ title: "More", blocks: [{ type: "metric", metric: "m", data: badComparison() }] }] }, goodTrial()), "narrative.sections[0].blocks[0].data"],
-      ["a view a comparison narrative adds", () => V.validateComparison(goodComparison(), { sections: [{ title: "More", blocks: [{ type: "metric", metric: "m", data: badComparison() }] }] }), "narrative.sections[0].blocks[0].data"],
+      ["a view a trial narrative adds", () => V.validateNarrative({ sections: [{ title: "More", blocks: [{ type: "metric", metric: "m", data: badComparison() }] }] }, goodTrial()), "narrative.sections[0].blocks[0] (metric).data"],
+      ["a view a comparison narrative adds", () => V.validateComparison(goodComparison(), { sections: [{ title: "More", blocks: [{ type: "metric", metric: "m", data: badComparison() }] }] }), "narrative.sections[0].blocks[0] (metric).data"],
     ],
     "collection": [
       ["a specification's own", () => V.validateSpec(bare({ collection: badCollection() })), "collection"],
@@ -337,6 +354,18 @@ test("sweep (a selected matrix): each kind of data a report reads is checked ali
   // A scenario that is not text is refused as a missing one is.
   H.equal(within(V.validateSpec({ title: "T", sections: [], trial: { runs: [{ arm: "a", scenario: 0 }, { arm: "a", scenario: false }, { arm: "a", scenario: {} }, { arm: "a", scenario: [] }, { arm: "a", scenario: "c1" }] } }), "trial"),
     [0, 1, 2, 3].map(i => `error runs[${i}].scenario: a trial run must name its scenario`), "numbers, booleans, objects and lists");
+});
+
+test("round 20: a trial run's arm must be text, and a view's data that is not a comparison is named once", () => {
+  // The reviewer's specification: a story describing arm a and case c1, and a second run whose arm is not text.
+  const story = { background: "b", intent: "i", questions: ["q"], rule: "r", covers: "c", notCovered: "n", alternatives: { a: "Setup A." }, cases: { c1: "The case." } };
+  for (const arm of [0, null, false, {}, [], "", "  "]) {
+    const spec = { title: "Probe", story, sections: [{ title: "Cases", reading: "One passed, one failed.", blocks: [{ type: "cases" }] }],
+      trial: { runs: [{ arm: "a", scenario: "c1", passed: true }, { arm, scenario: "c1", passed: false }] } };
+    H.equal(H.plain(V.validateSpec(spec)).map(p => `${p.level} ${p.where}: ${p.message}`), ["error trial.runs[1].arm: a trial run must name its arm"], `arm ${JSON.stringify(arm)}`);
+  }
+  const once = H.plain(V.validateSpec({ title: "T", sections: [{ title: "S", reading: "r", blocks: [{ type: "metric", data: { rows: [] } }] }] })).filter(p => /is not comparison data/.test(p.message));
+  H.equal(once.map(p => p.where), ["sections[0].blocks[0] (metric).data"], "one problem, in the view's place");
 });
 
 H.report();
