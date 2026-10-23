@@ -410,6 +410,10 @@ def plan_host(host: str, state: HostState, selected: Mapping[str, Identity], rec
             previous is not None
             and observed_digest is not None
             and observed_digest != previous.digest
+            # A copy at another version than the receipt's was replaced by an install or update (the host's own, say), not
+            # edited locally. The receipt says nothing about that copy, so an edit made to it after such an update is not
+            # detected; only a changed copy at the receipt's own version is.
+            and current == previous.version
             and not exact_candidate
             and not args.force
         ):

@@ -346,6 +346,29 @@ class InstallAllTests(unittest.TestCase):
             forced = plan_host("codex", state, {plugin_id: Identity("2.2.0", "b" * 64)}, receipt, args)
             self.assertEqual((plugin_id,), forced.update)
 
+    def test_an_update_made_outside_install_all_is_not_mistaken_for_drift(self) -> None:
+        # On 2026-10-23 the installer refused a routine update with "drifted after its receipt": its receipt still held
+        # 4.0.0 from an old run, while the host, updated outside it, held a published 4.6.3. A different installed version
+        # means an install or update replaced the copy; only a changed copy at the receipt's own version is a local edit
+        # (test_drifted_install_fails_before_mutation_unless_forced keeps refusing that).
+        plugin_id = "visualization@agent-tooling"
+        version = json.loads((REPO_ROOT / "plugins/visualization/.codex-plugin/plugin.json").read_text(encoding="utf-8"))["version"]
+        with tempfile.TemporaryDirectory(prefix="install-all-outside-update-") as tmp:
+            root = Path(tmp)
+            receipt = root / "state" / "agent-tooling" / "install-all.json"
+            receipt.parent.mkdir(parents=True)
+            receipt.write_text(json.dumps({"schema_version": 1, "marketplace": "agent-tooling", "hosts": {"codex": {
+                "source": str(REPO_ROOT.resolve()), "scope": "user", "projectPath": None,
+                "plugins": {plugin_id: {"version": "0.0.1", "digest": "0" * 64}}}}}), encoding="utf-8")
+            installed = {"codex": [{"pluginId": plugin_id, "version": "0.0.2", "enabled": True}]}
+            proc, calls = self._run_install_all_process(REPO_ROOT, root, "--source", str(REPO_ROOT), "--codex-only",
+                                                        "--include", "visualization", fake_installed=installed)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertTrue([c for c in mutation_calls(calls) if c["args"][:2] in (["plugin", "add"], ["plugin", "install"], ["plugin", "update"]) and plugin_id in c["args"]],
+                            "the newer installed copy was not updated to the selected version")
+            recorded = json.loads(receipt.read_text(encoding="utf-8"))["hosts"]["codex"]["plugins"][plugin_id]
+            self.assertEqual(version, recorded["version"])
+
     def test_downgrade_and_incomparable_versions_fail_before_mutation_unless_forced(self) -> None:
         plugin_id = "example@agent-tooling"
         state = HostState(
