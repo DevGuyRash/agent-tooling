@@ -18,6 +18,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
@@ -208,6 +209,230 @@ class PluginPackage:
     claude_manifest: dict[str, Any] | None
     components: dict[str, list[str]]
     files: list[str]
+
+
+@dataclass(frozen=True)
+class AgentDocument:
+    name: str
+    source_name: str
+    source_path: Path
+    path: Path
+    content: str
+    warnings: tuple[str, ...] = ()
+
+
+def _agent_files(root: Path, host: str) -> list[Path]:
+    directory = root / (".codex/agents" if host == "codex" else "agents")
+    suffix = "*.toml" if host == "codex" else "*.md"
+    files = set(directory.rglob(suffix)) if directory.is_dir() else set()
+    manifest_path = root / CLAUDE_MANIFEST
+    if not manifest_path.is_file() and not (root / CODEX_MANIFEST).is_file():
+        manifest_path = root / "plugin.json"
+    if host == "claude" and manifest_path.is_file():
+        declared = load_json(manifest_path).get("agents", [])
+        if isinstance(declared, str):
+            declared = [declared]
+        if not isinstance(declared, list) or any(not isinstance(item, str) for item in declared):
+            die(f"{manifest_path}: agents must be a path or list of paths")
+        for item in declared:
+            path = root / item
+            if not item.startswith("./") or not path.resolve().is_relative_to(root.resolve()):
+                die(f"{manifest_path}: agent path escapes the plugin root or lacks ./ prefix: {item}")
+            if not path.is_file() or path.suffix != ".md":
+                die(f"{manifest_path}: agent path must name an existing Markdown file: {item}")
+            files.add(path)
+    for path in files:
+        if not path.resolve().is_relative_to(root.resolve()) or path.is_symlink():
+            die(f"{path}: agent definitions must be regular files inside the plugin root")
+    return sorted(files)
+
+
+def _agent_string(value: Any, field_name: str, path: Path) -> str:
+    if not isinstance(value, str) or not value.strip():
+        die(f"{path}: agent {field_name} must be a non-empty string")
+    return value
+
+
+def _agent_frontmatter(path: Path) -> tuple[dict[str, Any], str]:
+    try:
+        text = path.read_bytes().decode("utf-8")
+    except UnicodeError as exc:
+        die(f"{path}: agent file must be UTF-8: {exc}")
+    match = re.match(r"\A---\r?\n(.*?)\r?\n---(?:\r?\n|$)", text, re.DOTALL)
+    if match is None:
+        if text.startswith(("---\n", "---\r\n")):
+            die(f"{path}: agent frontmatter has no closing delimiter")
+        return {}, text
+    return load_yaml_text(match.group(1), path=path), text[match.end():]
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, str):
+        return json.dumps(value, ensure_ascii=False)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
+    if isinstance(value, dict):
+        return "{ " + ", ".join(f"{json.dumps(key)} = {_toml_value(item)}" for key, item in value.items()) + " }"
+    die(f"unsupported agent TOML value: {type(value).__name__}")
+
+
+def _validate_codex_agent(fields: dict[str, Any], path: Path) -> None:
+    allowed = {"name", "description", "developer_instructions", "model", "model_reasoning_effort", "model_reasoning_summary", "model_verbosity", "personality", "service_tier", "nickname_candidates", "features", "skills"}
+    unknown = set(fields) - allowed
+    if unknown:
+        die(f"{path}: cannot preserve unsupported Codex agent fields: {', '.join(sorted(unknown))}")
+    for key in ("model", "model_reasoning_effort", "service_tier"):
+        if key in fields:
+            _agent_string(fields[key], key, path)
+    for key, choices in {
+        "model_reasoning_summary": {"auto", "concise", "detailed", "none"},
+        "model_verbosity": {"low", "medium", "high"},
+        "personality": {"none", "friendly", "pragmatic"},
+    }.items():
+        if key in fields and (not isinstance(fields[key], str) or fields[key] not in choices):
+            die(f"{path}: invalid agent {key}; expected {', '.join(sorted(choices))}")
+    if "nickname_candidates" in fields:
+        candidates = fields["nickname_candidates"]
+        if not isinstance(candidates, list) or not candidates or any(not isinstance(item, str) or not item.strip() for item in candidates):
+            die(f"{path}: agent nickname_candidates must contain non-empty strings")
+    if "features" in fields:
+        features = fields["features"]
+        allowed_features = {"shell_tool", "apps", "plugins", "memories", "request_permissions_tool"}
+        if not isinstance(features, dict) or any(key not in allowed_features or value is not False for key, value in features.items()):
+            die(f"{path}: cannot preserve Codex agent features except supported capability disables")
+    if "skills" in fields:
+        skills = fields["skills"]
+        if not isinstance(skills, dict) or set(skills) - {"config", "bundled", "include_instructions"}:
+            die(f"{path}: cannot preserve unsupported Codex agent skills settings")
+        if "include_instructions" in skills and skills["include_instructions"] is not False:
+            die(f"{path}: cannot preserve skills.include_instructions except false")
+        if "bundled" in skills and skills["bundled"] != {"enabled": False}:
+            die(f"{path}: cannot preserve skills.bundled except enabled=false")
+        if "config" in skills:
+            entries = skills["config"]
+            if not isinstance(entries, list) or any(not isinstance(item, dict) or set(item) != {"path", "enabled"} or item["enabled"] is not False or not isinstance(item["path"], str) or not item["path"].strip() for item in entries):
+                die(f"{path}: cannot preserve skills.config except path-based disables")
+
+
+def agent_documents(
+    root: Path,
+    target: str,
+    model_map: dict[str, str] | None = None,
+    *,
+    namespace: str | None = None,
+    source_host: str | None = None,
+) -> list[AgentDocument]:
+    """Render native definitions without registering them or modifying the source."""
+    if target not in {"codex", "claude"} or source_host not in {None, "dual", "codex", "claude"}:
+        die("agent host must be codex or claude")
+    if namespace is not None and (target != "codex" or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", namespace)):
+        die("agent namespace requires Codex and a lowercase plugin identifier")
+    root = root.resolve()
+    origin = target if source_host in {None, "dual"} else source_host
+    paths = _agent_files(root, origin)
+    if not paths:
+        origin = "claude" if origin == "codex" else "codex"
+        paths = _agent_files(root, origin)
+    documents: list[AgentDocument] = []
+    names: set[str] = set()
+    outputs: set[Path] = set()
+    for path in paths:
+        source_path = path.relative_to(root)
+        warnings: list[str] = []
+        if origin == "claude":
+            metadata, body = _agent_frontmatter(path)
+            name = _agent_string(metadata.get("name", path.stem), "name", path).strip()
+            description = _agent_string(metadata.get("description", first_text_paragraph(body) or f"{name} agent."), "description", path)
+            _agent_string(body, "instructions", path)
+            prompt_key = "developer_instructions"
+            fields = dict(metadata)
+            fields.update(name=name, description=description)
+            if target == "codex":
+                agent_root = root / "agents"
+                identity_path = path.relative_to(agent_root) if path.is_relative_to(agent_root) else Path(path.name)
+                invocation_name = ":".join(identity_path.with_suffix("").parts)
+                if name != invocation_name:
+                    warnings.append(f"{source_path}: Claude plugin invocation {invocation_name!r} supplies the Codex name instead of frontmatter label {name!r}")
+                name = invocation_name
+                fields["name"] = name
+        else:
+            try:
+                fields = tomllib.loads(path.read_text(encoding="utf-8"))
+            except (tomllib.TOMLDecodeError, UnicodeError) as exc:
+                die(f"{path}: invalid agent TOML: {exc}")
+            name = _agent_string(fields.get("name"), "name", path).strip()
+            description = _agent_string(fields.get("description"), "description", path)
+            body = _agent_string(fields.get("developer_instructions"), "developer_instructions", path)
+            _validate_codex_agent(fields, path)
+            if namespace is not None and any(not Path(entry["path"]).is_absolute() for entry in fields.get("skills", {}).get("config", [])):
+                die(f"{source_path}: cannot preserve relative skills.config paths when projecting an agent; use absolute skill paths")
+            prompt_key = "developer_instructions"
+        source_name = name
+        if origin != target:
+            portable = {"name", "description", "model", "effort"} if origin == "claude" else {"name", "description", "developer_instructions", "model", "model_reasoning_effort"}
+            advisory = {"background", "is_background", "color"} if origin == "claude" else set()
+            unsupported = set(fields) - portable - advisory
+            if unsupported:
+                die(f"{source_path}: cannot preserve agent fields in {target}: {', '.join(sorted(unsupported))}; keep this agent on {origin}")
+            for key in sorted(set(fields) & advisory):
+                warnings.append(f"{source_path}: {key} is advisory metadata and is not enforced in {target}")
+            converted: dict[str, Any] = {"name": name, "description": description}
+            model = fields.get("model")
+            if model is not None:
+                _agent_string(model, "model", path)
+                if model != "inherit":
+                    mapped = (model_map or {}).get(model)
+                    if not isinstance(mapped, str) or not mapped.strip():
+                        die(f"{source_path}: model {model!r} requires an explicit --agent-model SOURCE=TARGET mapping for {target}")
+                    if mapped != "inherit":
+                        converted["model"] = mapped
+                    warnings.append(f"{source_path}: model {model!r} mapped explicitly to {mapped!r}; target availability is not verified")
+            effort_key = "effort" if origin == "claude" else "model_reasoning_effort"
+            if effort_key in fields:
+                effort = fields[effort_key]
+                if effort not in {"low", "medium", "high", "xhigh", "max"}:
+                    die(f"{source_path}: cannot preserve agent effort {effort!r} in {target}")
+                converted["model_reasoning_effort" if target == "codex" else "effort"] = effort
+                warnings.append(f"{source_path}: effort {effort!r} retains its label; support depends on the target model")
+            fields = converted
+        if target == "codex":
+            if namespace and not name.startswith(namespace + ":"):
+                name = f"{namespace}:{name}"
+            fields.update(name=name, description=description)
+            fields[prompt_key] = body
+            content = "".join(f"{json.dumps(key)} = {_toml_value(value)}\n" for key, value in fields.items())
+            base = root / (".codex/agents" if origin == "codex" else "agents")
+            relative = path.relative_to(base) if path.is_relative_to(base) else Path(path.name)
+            destination = Path(".codex/agents") / relative.with_suffix(".toml")
+        else:
+            if origin == "codex" and any(part in {"", ".", ".."} or any(character in part for character in ("/", "\\", "\x00")) for part in source_name.split(":")):
+                die(f"{source_path}: cannot preserve agent name {source_name!r} as a Claude filename")
+            if origin == "codex" and ":" in name:
+                identity_path = path.relative_to(root / ".codex/agents")
+                if name == ":".join(identity_path.with_suffix("").parts):
+                    name = path.stem
+            if ":" in name or name.startswith("-") or len(name) > 256:
+                die(f"{source_path}: cannot preserve agent name {name!r} in Claude; use a name without colons, at most 256 characters")
+            fields.pop("developer_instructions", None)
+            fields.update(name=name, description=description)
+            content = f"---\n{dump_yaml_data(fields)}\n---\n{body}"
+            base = root / ("agents" if origin == "claude" else ".codex/agents")
+            relative = path.relative_to(base) if path.is_relative_to(base) else Path(path.name)
+            if origin == "codex":
+                identity = source_name.split(":")
+                destination = Path("agents", *identity[:-1], identity[-1] + ".md")
+            else:
+                destination = Path("agents") / relative.with_suffix(".md")
+        if name in names or destination in outputs:
+            die(f"{root}: duplicate agent name or output path: {name}")
+        names.add(name)
+        outputs.add(destination)
+        documents.append(AgentDocument(name, source_name, source_path, destination, content, tuple(warnings)))
+    return documents
 
 
 def die(message: str, *, exit_code: int = EXIT_USER_ERROR) -> None:
@@ -793,6 +1018,12 @@ def detect_plugin(
     validate_symlink_tree(root, exit_code=symlink_error_code)
     codex_manifest = load_json(root / CODEX_MANIFEST) if (root / CODEX_MANIFEST).exists() else None
     claude_manifest = load_json(root / CLAUDE_MANIFEST) if (root / CLAUDE_MANIFEST).exists() else None
+    if not codex_manifest and not claude_manifest and (root / "plugin.json").is_file():
+        portable = load_json(root / "plugin.json")
+        if portable.get("$schema") != "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json":
+            die(f"{root / 'plugin.json'}: unrecognized portable plugin schema")
+        _agent_string(portable.get("name"), "plugin name", root / "plugin.json")
+        claude_manifest = portable
     components = component_inventory(root)
 
     if explicit_host:
@@ -1320,8 +1551,9 @@ def mark_preserved_host_specific(root: Path, target: str, report: Report) -> Non
             report.add_preserved("codex-manifest", ".codex-plugin/plugin.json", "Codex manifest preserved for round-trip metadata")
 
 
-def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwrite: bool, explicit_host: str | None = None) -> Report:
+def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwrite: bool, explicit_host: str | None = None, model_map: dict[str, str] | None = None) -> Report:
     pkg = detect_plugin(source, explicit_host=explicit_host)
+    agents = agent_documents(pkg.root, target, model_map, source_host=pkg.host)
     prepare_output(pkg.root, output, overwrite=overwrite)
     out_root = output.resolve()
     report = Report(
@@ -1343,6 +1575,14 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
             write_json(out_root / ".mcp.json", normalize_mcp_config(load_json(out_root / ".mcp.json"), target="codex"))
         write_json(out_root / CODEX_MANIFEST, build_codex_manifest(pkg, out_root))
     elif target == "claude":
+        from_native_codex = bool(agents) and all(document.source_path.is_relative_to(".codex/agents") for document in agents)
+        if from_native_codex:
+            for old_path in _agent_files(out_root, "claude"):
+                relative = old_path.relative_to(out_root)
+                archive = out_root / PORTABILITY_DIR / "original-agents" / relative
+                archive.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(old_path), str(archive))
+                report.add_preserved("original-claude-agent", archive.relative_to(out_root).as_posix(), "Superseded agent source is inactive; the current Codex definition supplies the Claude agent")
         quarantine_root_claude_context(out_root, report)
         normalize_claude_skills(out_root, report, mode=mode)
         normalize_claude_markdown_components(out_root, report, mode=mode)
@@ -1351,9 +1591,22 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
             write_hooks(out_root, convert_hooks_to_claude(hooks, report))
         if (out_root / ".mcp.json").exists():
             write_json(out_root / ".mcp.json", normalize_mcp_config(load_json(out_root / ".mcp.json"), target="claude"))
-        write_json(out_root / CLAUDE_MANIFEST, build_claude_manifest(pkg, out_root))
+        manifest = build_claude_manifest(pkg, out_root)
+        if from_native_codex:
+            manifest.pop("agents", None)
+        write_json(out_root / CLAUDE_MANIFEST, manifest)
     else:
         die(f"unsupported target host: {target}")
+
+    for document in agents:
+        destination = out_root / document.path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(document.content, encoding="utf-8")
+        report.add_mapping(document.source_path.as_posix(), document.path.as_posix(), "Native custom-agent definition rendered")
+        for warning in document.warnings:
+            report.warn(warning)
+    if agents and target == "codex":
+        report.warn("Codex plugin manifests do not register agents; these definitions require registration in CODEX_HOME/agents or a trusted project's .codex/agents")
 
     mark_preserved_host_specific(out_root, target, report)
     finalize_report(report, out_root)
@@ -1408,7 +1661,7 @@ def local_plugin_source(entry: dict[str, Any], source_host: str, marketplace_roo
     return candidate if candidate.exists() else None
 
 
-def convert_marketplace(source: Path, target: str, output: Path, *, mode: str, overwrite: bool, explicit_host: str | None = None) -> Report:
+def convert_marketplace(source: Path, target: str, output: Path, *, mode: str, overwrite: bool, explicit_host: str | None = None, model_map: dict[str, str] | None = None) -> Report:
     source_host, marketplace_root, manifest_path = marketplace_manifest_path(source, explicit_host)
     data = load_json(manifest_path)
     if output.exists():
@@ -1455,6 +1708,7 @@ def convert_marketplace(source: Path, target: str, output: Path, *, mode: str, o
             mode=mode,
             overwrite=True,
             explicit_host=source_host,
+            model_map=model_map,
         )
         report.mappings.append(
             {
@@ -2009,6 +2263,25 @@ def cmd_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_install_agents(args: argparse.Namespace) -> int:
+    from agent_install import main as install_agents_main
+
+    return int(install_agents_main(args.arguments))
+
+
+def agent_model_map(values: list[str]) -> dict[str, str]:
+    mappings: dict[str, str] = {}
+    for value in values:
+        source, separator, target = value.partition("=")
+        if not separator or not source.strip() or not target.strip():
+            die("--agent-model must use SOURCE=TARGET; use TARGET=inherit to retain the parent model")
+        source, target = source.strip(), target.strip()
+        if source in mappings and mappings[source] != target:
+            die(f"conflicting --agent-model mappings for {source!r}")
+        mappings[source] = target
+    return mappings
+
+
 def cmd_convert(args: argparse.Namespace) -> int:
     report = convert_plugin(
         Path(args.path),
@@ -2017,6 +2290,7 @@ def cmd_convert(args: argparse.Namespace) -> int:
         mode=args.mode,
         overwrite=args.overwrite,
         explicit_host=args.from_host,
+        model_map=agent_model_map(args.agent_model),
     )
     print_report(report, args.summary)
     return 0
@@ -2030,6 +2304,7 @@ def cmd_convert_marketplace(args: argparse.Namespace) -> int:
         mode=args.mode,
         overwrite=args.overwrite,
         explicit_host=args.from_host,
+        model_map=agent_model_map(args.agent_model),
     )
     print_report(report, args.summary)
     return 0
@@ -2054,8 +2329,14 @@ def cmd_roundtrip(args: argparse.Namespace) -> int:
     first = Path(args.tmp).resolve() / f"{pkg.name}-{args.to}"
     back_host = "claude" if args.to == "codex" else "codex"
     second = Path(args.tmp).resolve() / f"{pkg.name}-{back_host}"
-    first_report = convert_plugin(source, args.to, first, mode=args.mode, overwrite=True, explicit_host=args.from_host)
-    second_report = convert_plugin(first, back_host, second, mode=args.mode, overwrite=True, explicit_host=args.to)
+    models = agent_model_map(args.agent_model)
+    reverse_models: dict[str, str] = {}
+    for original, mapped in models.items():
+        if mapped in reverse_models and reverse_models[mapped] != original:
+            die("roundtrip requires one-to-one --agent-model mappings")
+        reverse_models[mapped] = original
+    first_report = convert_plugin(source, args.to, first, mode=args.mode, overwrite=True, explicit_host=args.from_host, model_map=models)
+    second_report = convert_plugin(first, back_host, second, mode=args.mode, overwrite=True, explicit_host=args.to, model_map=reverse_models)
     second_validation = validate_plugin(second, back_host, external=False)
     payload = {
         "first": first_report.as_dict(),
@@ -2094,6 +2375,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    agents_p = sub.add_parser("install-agents", help="Register or remove supplemental native Codex agents", add_help=False)
+    agents_p.add_argument("arguments", nargs=argparse.REMAINDER)
+    agents_p.set_defaults(func=cmd_install_agents)
+
     inspect_p = sub.add_parser("inspect", help="Inspect a plugin or marketplace")
     inspect_p.add_argument("path")
     inspect_p.add_argument("--format", choices=("json", "md"), default="md")
@@ -2108,6 +2393,7 @@ def build_parser() -> argparse.ArgumentParser:
     convert_p.add_argument("--from", dest="from_host", choices=("codex", "claude"))
     convert_p.add_argument("--overwrite", action="store_true")
     convert_p.add_argument("--summary", choices=("full", "json", "md"), default="full")
+    convert_p.add_argument("--agent-model", action="append", default=[], metavar="SOURCE=TARGET", help="Explicit cross-host agent model mapping; repeat as needed")
     convert_p.set_defaults(func=cmd_convert)
 
     market_p = sub.add_parser("convert-marketplace", help="Convert a plugin marketplace")
@@ -2119,6 +2405,7 @@ def build_parser() -> argparse.ArgumentParser:
     market_p.add_argument("--overwrite", action="store_true")
     market_p.add_argument("--plugins-dir", default="plugins", help="Reserved for CLI compatibility; target uses plugins/")
     market_p.add_argument("--summary", choices=("full", "json", "md"), default="full")
+    market_p.add_argument("--agent-model", action="append", default=[], metavar="SOURCE=TARGET")
     market_p.set_defaults(func=cmd_convert_marketplace)
 
     validate_p = sub.add_parser("validate", help="Validate a converted plugin")
@@ -2136,11 +2423,15 @@ def build_parser() -> argparse.ArgumentParser:
     roundtrip_p.add_argument("--mode", choices=("strict", "best-effort"), default="strict")
     roundtrip_p.add_argument("--from", dest="from_host", choices=("codex", "claude"))
     roundtrip_p.add_argument("--summary", choices=("full", "json", "md"), default="full")
+    roundtrip_p.add_argument("--agent-model", action="append", default=[], metavar="SOURCE=TARGET")
     roundtrip_p.set_defaults(func=cmd_roundtrip)
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "install-agents":
+        return cmd_install_agents(argparse.Namespace(arguments=argv[1:]))
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -2152,3 +2443,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

@@ -65,7 +65,7 @@ class InstallerScopeProcessTests(unittest.TestCase):
     def run_case(self, *, codex_current=False, claude_current=False, fault='', scope='user', force=False, dry=False, version=2, other_project=False, only_other_scope=False, claude_only=False):
         with tempfile.TemporaryDirectory(prefix='install-scope-') as tmp:
             root=Path(tmp);repo=root/'repo';(repo/'scripts').mkdir(parents=True)
-            for name in ('install-all','install_all.py'):shutil.copy2(REPO/'scripts'/name,repo/'scripts'/name)
+            for name in ('install-all','install_all.py','agent_install.py','plugin_port.py'):shutil.copy2(REPO/'scripts'/name,repo/'scripts'/name)
             package=repo/'plugins/target'
             for host in ('codex','claude'):
                 folder=package/f'.{host}-plugin';folder.mkdir(parents=True)
@@ -182,3 +182,4 @@ class InstallationIdentityUnitTests(unittest.TestCase):
         self.assertIsNotNone(receipt_identity(receipt,'claude',PLUGIN,scope='project',project_path=Path('/fixture/a')))
 
 if __name__=='__main__':unittest.main()
+
