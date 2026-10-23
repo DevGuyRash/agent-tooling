@@ -41,8 +41,10 @@ WRITING_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 #   isolatePeerMachines true        messages to its sessions beyond this machine wait for an approval no one gives (SR)
 #   autoUploadSessions false        mirroring the run to claude.ai (BIN schema: "Mirror local sessions to claude.ai")
 #   permissions.deny                tools that write to the account, removed whole by a bare-name deny rule (PR):
-#                                   RemoteTrigger, its cloud scheduled tasks (TR); DesignSync, its claude.ai/design
-#                                   projects (BIN: "only available with claude.ai authentication"); ShareOnboardingGuide,
+#                                   RemoteTrigger, its cloud scheduled tasks (TR); DesignSync and ClaudeDesign, its
+#                                   claude.ai/design projects, two separate tools with separate gates (BIN: "only
+#                                   available with claude.ai authentication"; ClaudeDesign reads projects under the
+#                                   account's existing Design consent); ShareOnboardingGuide,
 #                                   a share link on Team and Enterprise plans (TR)
 # No control covers the account's identity (its email in Claude Code's own context, its organization in the transcript)
 # or the settings its organization delivers (server-managed settings, which outrank every local source).
@@ -50,7 +52,7 @@ ACCOUNT_OFF = {
     "settings": {"syncClaudeAiSkills": False, "syncClaudeAiPlugins": False, "disableClaudeAiConnectors": True,
                  "enableArtifact": False, "autoMemoryEnabled": False, "disableRemoteControl": True,
                  "crossSessionInbound": "refuse", "isolatePeerMachines": True, "autoUploadSessions": False,
-                 "permissions": {"deny": ["RemoteTrigger", "DesignSync", "ShareOnboardingGuide"]}},
+                 "permissions": {"deny": ["RemoteTrigger", "DesignSync", "ClaudeDesign", "ShareOnboardingGuide"]}},
     "env": {"ENABLE_CLAUDEAI_MCP_SERVERS": "false"},
 }
 

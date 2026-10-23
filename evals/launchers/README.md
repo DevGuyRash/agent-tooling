@@ -16,7 +16,7 @@ The Split Testing runtime starts no executor of its own: a plan's launcher arm n
   | `crossSessionInbound: "refuse"` | messages from the account's other sessions | settings reference |
   | `isolatePeerMachines: true` | messages to the account's sessions beyond this machine, which then need an approval the run has no one to give | settings reference |
   | `autoUploadSessions: false` | mirroring the run to claude.ai | the binary's settings schema |
-  | `permissions.deny`: `RemoteTrigger`, `DesignSync`, `ShareOnboardingGuide` | the tools that write to the account (its cloud scheduled tasks, its claude.ai/design projects, a shared onboarding guide), each removed whole by a bare-name deny rule | permissions, tools reference, the binary |
+  | `permissions.deny`: `RemoteTrigger`, `DesignSync`, `ClaudeDesign`, `ShareOnboardingGuide` | the tools that act on the account (its cloud scheduled tasks; its claude.ai/design projects, reached by two separate tools; a shared onboarding guide), each removed whole by a bare-name deny rule | permissions, tools reference, the binary |
 
   "Settings reference", "environment variables", "tools reference" and "permissions" are the pages under code.claude.com/docs/en/ of those names. No control covers the account's identity (its email in Claude Code's own context, its organization in the transcript) or the settings its organization delivers (server-managed settings, which outrank every local source), limits to state with the results.
 
