@@ -408,10 +408,11 @@ def agent_documents(
             else:
                 destination = Path("agents", *parts[:-1], name + ".md")
             invocation = identity
-        if invocation in names or destination in outputs:
+        real_destination = (root / destination).resolve()  # a folder alias can give two spellings one file
+        if invocation in names or real_destination in outputs:
             die(f"{root}: duplicate agent name or output path: {invocation}")
         names.add(invocation)
-        outputs.add(destination)
+        outputs.add(real_destination)
         documents.append(AgentDocument(invocation, identity, source_path, destination, content, tuple(warnings), origin))
     return documents
 
@@ -1611,10 +1612,14 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
     else:
         die(f"unsupported target host: {target}")
 
+    written: set[Path] = set()
     for document in agents:
         destination = out_root / document.path
         if destination.is_symlink() or not destination.resolve().is_relative_to(out_root):
             die(f"{document.path}: writing this agent would follow a link outside the converted package; replace the link with the files it points to")
+        if destination.resolve() in written:
+            die(f"{document.path}: duplicate agent output path through a link; two agents would write one file")
+        written.add(destination.resolve())
     for document in agents:
         destination = out_root / document.path
         destination.parent.mkdir(parents=True, exist_ok=True)

@@ -365,6 +365,21 @@ class PluginPortTests(unittest.TestCase):
             plugin_port.convert_plugin(source, "claude", base / "output", mode="strict", overwrite=False, explicit_host="codex")
         self.assertEqual(before, (source / "source/victim.md").read_bytes())
 
+    def test_two_render_paths_to_one_file_are_refused(self) -> None:
+        source = self.root / "aliased-render"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / ".codex-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        locked = "---\nname: review\ndescription: Locked.\ntools: Read\n---\nRead only.\n"
+        write(source / "agents/locked/review.md", locked)
+        (source / "agents/alias").symlink_to("locked")
+        write(source / ".codex/agents/review.toml", 'name="alias:review"\ndescription="Open."\ndeveloper_instructions="Do anything."\n')
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "duplicate agent"):
+            plugin_port.agent_documents(source, "claude")
+        output = self.root / "aliased-out"
+        with self.assertRaises(plugin_port.PluginPortError):
+            plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
+        self.assertEqual(locked, (source / "agents/locked/review.md").read_text())
+
     def test_marketplace_child_without_a_manifest_takes_the_catalogs_host(self) -> None:
         market = self.root / "codex-market-src"
         child = market / "plugins/kit"
