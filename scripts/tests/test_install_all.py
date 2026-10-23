@@ -91,12 +91,15 @@ def write_fake_cli(path: Path, command_name: str) -> None:
                 scope = args[args.index("--scope") + 1] if "--scope" in args else "user"
                 project_path = os.getcwd() if scope != "user" else None
                 current = next((item for item in state["installed"] if item["pluginId"] == selector and item.get("scope", "user") == scope and item.get("projectPath") == project_path), None)
+                enabled = os.environ.get("AGENT_TOOLING_FAKE_INSTALL_ENABLED", "1") == "1"
                 if current is None:
-                    record = {{"pluginId": selector, "version": versions[selector], "enabled": True, "scope": scope}}
+                    record = {{"pluginId": selector, "version": versions[selector], "enabled": enabled, "scope": scope}}
                     if project_path: record["projectPath"] = project_path
                     state["installed"].append(record)
                 else:
                     current["version"] = versions[selector]
+                    if {command_name!r} == "codex":
+                        current["enabled"] = enabled  # Codex enables a plugin it installs or updates
                 save()
             else:
                 raise SystemExit("unexpected arguments: " + " ".join(sys.argv[1:]))
@@ -392,10 +395,11 @@ class InstallAllTests(unittest.TestCase):
         fake_installed: dict[str, list[dict[str, object]]] | None = None,
         client_runs_git: bool = False,
         fail_plugin: str | None = None,
+        install_enabled: bool = True,
     ) -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]]]:
         install_all = repo_root / "scripts" / "install-all"
         bin_dir = temp_root / "bin"
-        bin_dir.mkdir()
+        bin_dir.mkdir(exist_ok=True)  # a second run in the same root keeps the fake hosts' state
         log_path = temp_root / "cli.jsonl"
         log_path.touch()
         git_log_path = temp_root / "git.jsonl"
@@ -404,7 +408,7 @@ class InstallAllTests(unittest.TestCase):
         write_fake_cli(bin_dir / "claude", "claude")
         write_rejecting_git(bin_dir / "git")
         public_bin_dir = temp_root / "public-bin"
-        public_bin_dir.mkdir()
+        public_bin_dir.mkdir(exist_ok=True)
         public_git = public_bin_dir / "git"
         write_fake_git(public_git)
         versions: dict[str, str] = {}
@@ -423,6 +427,7 @@ class InstallAllTests(unittest.TestCase):
             "AGENT_TOOLING_FAKE_INSTALLED": json.dumps(fake_installed or {}),
             "AGENT_TOOLING_FAKE_CLIENT_RUNS_GIT": "1" if client_runs_git else "0",
             "AGENT_TOOLING_FAKE_FAIL_PLUGIN": fail_plugin or "",
+            "AGENT_TOOLING_FAKE_INSTALL_ENABLED": "1" if install_enabled else "0",
             "AGENT_TOOLING_FAKE_VERSIONS": json.dumps(versions),
             "AGENT_TOOLING_FAKE_GIT_SOURCE": str(repo_root),
             "AGENT_TOOLING_FAKE_GIT_LOG": str(git_log_path),
@@ -524,6 +529,73 @@ class InstallAllTests(unittest.TestCase):
             payload = tomllib.loads(projected[0].read_text())
             self.assertEqual(payload['name'], 'visualization:reviewer')
             self.assertEqual(payload['developer_instructions'], '\nNever edit files.\n')
+
+    def test_a_disabled_codex_plugin_holds_no_projected_agents_and_user_agents_stay(self):
+        # Codex reports each installed plugin with "enabled"; one the user disabled must hold no active agents, whether
+        # it was disabled before its first projection or after its agents were installed, and an agent the user wrote
+        # in the same directory is never touched. The plugin itself stays disabled.
+        import tomllib
+        user_agent = 'name = "mine"\ndescription = "Mine."\ndeveloper_instructions = "Do my thing."\n'
+        plugin_id = 'visualization@agent-tooling'
+        labels = ('disabled before its first projection', 'disabled after its agents were installed', 'disabled and out of date',
+                  'left disabled by the host as it installs')
+        for label in labels:
+            with self.subTest(label), tempfile.TemporaryDirectory(prefix="install-all-disabled-") as tmp:
+                root = Path(tmp)
+                repo = root / "repo"
+                shutil.copytree(REPO_ROOT, repo, ignore=shutil.ignore_patterns('.local', '__pycache__'))
+                agents = repo / 'plugins/visualization/agents'
+                agents.mkdir()
+                (agents / 'reviewer.md').write_text('---\nname: reviewer\ndescription: Review one file.\n---\n\nNever edit files.\n')
+                profile = root / 'codex-profile/agents'
+                profile.mkdir(parents=True)
+                (profile / 'mine.toml').write_text(user_agent)
+                version = json.loads((repo / 'plugins/visualization/.codex-plugin/plugin.json').read_text())['version']
+                run = ('--source', str(repo), '--codex-only', '--include', 'visualization')
+                state = root / 'bin' / '.codex.state.json'
+                if label.startswith('disabled before'):
+                    installed = {'codex': [{'pluginId': plugin_id, 'version': version, 'enabled': False}]}
+                    proc, _ = self._run_install_all_process(repo, root, *run, fake_installed=installed)
+                elif label.startswith('disabled and out of date'):
+                    # Updating would enable it (Codex enables what it installs), so it is left as installed.
+                    installed = {'codex': [{'pluginId': plugin_id, 'version': '0.0.1', 'enabled': False}]}
+                    proc, calls = self._run_install_all_process(repo, root, *run, fake_installed=installed)
+                    self.assertEqual([], [c['args'] for c in mutation_calls(calls) if any(plugin_id in str(a) for a in c['args'])])
+                    self.assertEqual(['0.0.1'], [i['version'] for i in json.loads(state.read_text())['installed'] if i['pluginId'] == plugin_id])
+                    self.assertIn('disabled', proc.stderr)
+                elif label.startswith('left disabled'):
+                    proc, _ = self._run_install_all_process(repo, root, *run, install_enabled=False)
+                else:
+                    proc, _ = self._run_install_all_process(repo, root, *run)
+                    self.assertEqual(proc.returncode, 0, proc.stderr)
+                    self.assertEqual(1, len(list(profile.glob('plugin-port-*.toml'))))  # projected while enabled
+                    receipt = root / 'state/agent-tooling/install-all.json'
+                    recorded = json.loads(receipt.read_text())['hosts']['codex']['plugins'][plugin_id]
+                    held = json.loads(state.read_text())
+                    for item in held['installed']:
+                        if item['pluginId'] == plugin_id:
+                            item['enabled'] = False  # the user disables it in Codex
+                    state.write_text(json.dumps(held))
+                    proc, _ = self._run_install_all_process(repo, root, *run)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                self.assertEqual([], sorted(p.name for p in profile.glob('plugin-port-*.toml')))
+                self.assertEqual(user_agent, (profile / 'mine.toml').read_text())
+                self.assertEqual('mine', tomllib.loads((profile / 'mine.toml').read_text())['name'])
+                self.assertEqual([False], [i['enabled'] for i in json.loads(state.read_text())['installed'] if i['pluginId'] == plugin_id])
+                if not label.startswith('disabled after'):
+                    continue
+                # Its receipt entry, the baseline that tells a later run its installed files were changed, is kept.
+                self.assertEqual(recorded, json.loads(receipt.read_text())['hosts']['codex']['plugins'][plugin_id])
+                held = json.loads(state.read_text())
+                for item in held['installed']:
+                    if item['pluginId'] == plugin_id:
+                        item['enabled'] = True  # enabled again: its agent returns
+                state.write_text(json.dumps(held))
+                proc, _ = self._run_install_all_process(repo, root, *run)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                projected = list(profile.glob('plugin-port-*.toml'))
+                self.assertEqual(['visualization:reviewer'], [tomllib.loads(p.read_text())['name'] for p in projected])
+                self.assertEqual(user_agent, (profile / 'mine.toml').read_text())
 
     def test_agent_restriction_blocks_native_plugin_mutation(self):
         with tempfile.TemporaryDirectory(prefix="install-all-agent-restriction-") as tmp:

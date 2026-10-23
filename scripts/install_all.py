@@ -53,6 +53,7 @@ class InstalledArtifact:
     root: Path | None = None
     scope: str | None = None
     project_path: Path | None = None
+    enabled: bool = True  # false only when the host reports the user disabled it
 
 
 @dataclasses.dataclass(frozen=True)
@@ -334,7 +335,7 @@ def discover(host: str, command: str, environment: Mapping[str, str], *,
             root = candidate if candidate.is_dir() else None
         if plugin_id in installed:
             raise InstallError(f"ambiguous duplicate installed identity in the requested scope: {plugin_id}")
-        installed[plugin_id] = InstalledArtifact(version, root, scope, project_path)
+        installed[plugin_id] = InstalledArtifact(version, root, scope, project_path, item.get("enabled") is not False)
     match = matches[0] if matches else None
     return HostState(command, marketplace_source(match) if match else None, bool(match), installed, len(installed_items))
 
@@ -847,13 +848,18 @@ def resolved_source(
         yield root
 
 
-def selected_agent_plan(root: Path, selected: Mapping[str, Identity], args: argparse.Namespace, environment: Mapping[str, str]) -> agent_install.AgentPlan:
+def selected_agent_plan(root: Path, selected: Mapping[str, Identity], args: argparse.Namespace, environment: Mapping[str, str],
+                        state: HostState | None = None) -> agent_install.AgentPlan:
     models = plugin_port.agent_model_map(args.agent_model)
     catalog = json.loads((root / '.agents/plugins/marketplace.json').read_text())
     owners = {}
     for entry in catalog['plugins']:
         owner = entry['name'] + '@' + MARKETPLACE
         if owner not in selected:
+            continue
+        installed = state.installed.get(owner) if state else None
+        if installed is not None and not installed.enabled:
+            owners[owner] = {}  # disabled in Codex: no agents of its own are active, and any it had are removed
             continue
         plugin_root = source_path(root, entry['source'])
         documents = plugin_port.agent_documents(plugin_root, 'codex', models, namespace=entry['name'], source_host=plugin_port.detect_plugin(plugin_root).host)
@@ -881,6 +887,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             with lock:
                 receipt = read_receipt(receipt_file)
                 plans: list[HostPlan] = []
+                codex_state = None
+                kept: dict[str, Identity] = {}  # the receipt identities of plugins left as installed
                 for host, plugins in selected.items():
                     if not plugins:
                         continue
@@ -889,8 +897,15 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if command is None:
                         raise InstallError(f"missing required command: {command_name}")
                     state = discover(host, str(Path(command).resolve()), environment, claude_scope=args.claude_scope, claude_project_path=args.claude_project_path)
+                    if host == "codex":
+                        codex_state = state
+                        disabled = sorted(p for p in plugins if p in state.installed and not state.installed[p].enabled)
+                        for plugin_id in disabled:  # Codex enables what it installs, so updating it would undo the user's choice
+                            log(f"codex: {plugin_id} is disabled; it is left as installed, with no custom agents, until it is enabled")
+                        plugins = {p: identity for p, identity in plugins.items() if p not in disabled}
+                        kept = {p: identity for p in disabled if (identity := receipt_identity(receipt, host, p)) is not None}
                     plans.append(plan_host(host, state, plugins, receipt, args))
-                agents = selected_agent_plan(root, selected["codex"], args, environment) if selected.get("codex") else None
+                agents = selected_agent_plan(root, selected["codex"], args, environment, codex_state) if selected.get("codex") else None
                 if agents and agents.changes:
                     log(f"Codex custom agents: {len(agents.changes) - (agent_install.RECEIPT in agents.changes)} owned file change(s)")
                 with contextlib.ExitStack() as protections:
@@ -904,6 +919,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 next_hosts: dict[str, object] = dict(receipt.get("hosts", {}))
                 for plan in plans:
                     observed = discover(plan.host, plan.state.command, environment, claude_scope=args.claude_scope, claude_project_path=args.claude_project_path)
+                    if plan.host == "codex":
+                        codex_state = observed
                     if not observed.marketplace_present or normalize_source(observed.marketplace_source) != normalize_source(args.resolved_source):
                         raise InstallError(f"{plan.host} marketplace verification failed")
                     for plugin_id, identity in plan.selected.items():
@@ -918,10 +935,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "source": args.resolved_source,
                         "scope": args.claude_scope if plan.host == "claude" else "user",
                         "projectPath": str(args.claude_project_path) if plan.host == "claude" and args.claude_project_path is not None else None,
-                        "plugins": {plugin_id: dataclasses.asdict(identity) for plugin_id, identity in sorted(plan.selected.items())},
+                        "plugins": {plugin_id: dataclasses.asdict(identity) for plugin_id, identity in
+                                    sorted({**(kept if plan.host == "codex" else {}), **plan.selected}.items())},
                     }
                 if agents is not None:
                     try:
+                        # What Codex reports now decides which plugins hold agents: an install may have left one disabled.
+                        agents = selected_agent_plan(root, selected["codex"], args, environment, codex_state)
                         agent_install.apply(agents)
                     except (agent_install.AgentInstallError, OSError) as exc:
                         raise InstallError(f'native plugins were verified, but custom-agent synchronization failed: {exc}; resolve the reported agent conflict and rerun the same command; native plugin changes were not rolled back') from exc

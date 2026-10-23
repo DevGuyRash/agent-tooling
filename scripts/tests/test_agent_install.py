@@ -69,6 +69,23 @@ class AgentInstallTests(unittest.TestCase):
         with self.assertRaisesRegex(agent_install.AgentInstallError, 'name.*already'):
             agent_install.plan(self.home, 'other@market', {'auditor.toml': 'name = "auditor"\n'})
 
+    def test_a_linked_agents_directory_is_left_alone_only_when_there_is_nothing_to_do(self):
+        # A dotfile manager may move the agents directory, receipt and all, and link it back. With nothing to project
+        # for an owner and nothing recorded for it, the planner leaves the link alone; an owner whose recorded agents
+        # must go (its plugin was disabled) is refused like any write through the link, never silently skipped.
+        owner, other = 'example@market', 'other@market'
+        agent_install.apply(agent_install.plan(self.home, owner, {'reviewer.toml': 'name = "example:reviewer"\n'}))
+        moved = Path(self.temp.name) / 'dotfiles-agents'
+        (self.home / 'agents').rename(moved)
+        (self.home / 'agents').symlink_to(moved)
+        self.assertEqual({}, agent_install.plan_many(self.home, {other: {}}).changes)
+        with self.assertRaisesRegex(agent_install.AgentInstallError, 'symlink'):
+            agent_install.plan_many(self.home, {owner: {}})
+        self.assertEqual(1, len(list(moved.glob('plugin-port-*.toml'))))
+        (moved / agent_install.RECEIPT).write_text('not json')
+        with self.assertRaisesRegex(agent_install.AgentInstallError, 'symlink'):
+            agent_install.plan_many(self.home, {other: {}})
+
     def test_malformed_user_agent_does_not_block_projection(self):
         # Codex ignores a malformed role file with a warning, so it cannot collide and must not stop installation.
         root = self.home / 'agents'
