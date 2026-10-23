@@ -1,5 +1,6 @@
 """Launcher arms and judges (see references/launching.md), exercised through the CLI with a pretend agent launcher."""
 import contextlib
+import errno
 import io
 import json
 import os
@@ -1072,15 +1073,41 @@ class LauncherTest(unittest.TestCase):
             os.setxattr(p, "system.posix_acl_access", acl)
         os.setxattr(planted.parent, "system.posix_acl_default", acl)
         mask = struct.pack("<IIIIII", 0x03000001, int.from_bytes(token[:4], "little"), 0, 0, 0, 0)  # revision 3
-        capability = subprocess.run(["unshare", "-Ur", sys.executable, "-c",
-                                     "import os, sys; os.setxattr(sys.argv[1], 'security.capability', bytes.fromhex(sys.argv[2]))",
-                                     str(capable), mask.hex()], capture_output=True).returncode == 0
+        capability = shutil.which("unshare") is not None and subprocess.run(
+            ["unshare", "-Ur", sys.executable, "-c",
+             "import os, sys; os.setxattr(sys.argv[1], 'security.capability', bytes.fromhex(sys.argv[2]))",
+             str(capable), mask.hex()], capture_output=True).returncode == 0
         self.assertTrue(trial._end_copies(out, entry, marker))
         self.assertEqual(planted.read_text(), "planted\n")
         for p in (planted, planted.parent, home):
             self.assertEqual([a for a in os.listxattr(p) if a != "security.selinux" and not a.startswith("trusted.")], [], p)
-        if capability:
+        with self.subTest("a file capability set from a user namespace"):
+            if not capability:
+                self.skipTest("no unprivileged user namespace here to set a file capability from")
             self.assertFalse(capable.exists())
+
+    def test_a_planted_file_whose_attribute_cannot_be_removed_goes(self):
+        # an attribute the runtime cannot remove (a file capability set from a user namespace) makes the file go, on
+        # every machine, whether or not it lets a test set one
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        stuck, kept = home / ".store" / "stuck.jsonl", home / ".store" / "kept.jsonl"
+        write(stuck, "planted\n")
+        write(kept, "planted\n")
+        real_list, real_remove = os.listxattr, os.removexattr
+
+        def listing(path, *a, **k):
+            return [*real_list(path, *a, **k), *(["security.capability"] if Path(path) == stuck else [])]
+
+        def removing(path, name, *a, **k):
+            if name == "security.capability":
+                raise PermissionError(errno.EPERM, "Operation not permitted")
+            return real_remove(path, name, *a, **k)
+        entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]}, keep_planted=True)
+        with mock.patch.object(trial.os, "listxattr", listing), mock.patch.object(trial.os, "removexattr", removing):
+            self.assertTrue(trial._end_copies(out, entry, marker))
+        self.assertFalse(stuck.exists())
+        self.assertEqual(kept.read_text(), "planted\n")
 
     def test_a_planted_home_partly_unreadable_or_too_large_to_note_still_starts_and_is_cleared(self):
         # a directory setup left that nobody may read, or an entry that cannot be told apart as a file or a directory,

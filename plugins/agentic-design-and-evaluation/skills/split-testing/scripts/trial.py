@@ -2017,7 +2017,7 @@ def _planted(out: Path, home: Path, keep: list[Path]) -> dict[str, str]:
 def _without_owner_attributes(path: Path) -> bool:
     """Remove from `path`, never following a link, every extended attribute a process of its owner's could have set
     (user attributes, access control lists, and file capabilities set from a user namespace among them), and say
-    whether only an SELinux label, which must be a context the policy knows, and trusted attributes, which need
+    whether only an SELinux label, which a process may not simply remove, and trusted attributes, which need
     privilege outside any user namespace, are left; a filesystem that keeps none has none. One that cannot be
     removed (a file capability set from a user namespace, say) leaves the answer no."""
     def fixed(name):
