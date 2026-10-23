@@ -4,7 +4,7 @@
  * input that would break a view or make it misread; a warning is input the
  * report does not use as written. report.py --check applies the same rules
  * without a browser; tests/test_validate.py keeps the two in agreement. */
-import { esc, entriesOf, blank, isId, keysIn, said, stripText } from "./core";
+import { esc, entriesOf, blank, isId, keysIn, said, stripText, NUMERIC_TEXT, numberOf } from "./core";
 import type { ReportSpec } from "./model";
 import { blockTypes } from "./report";
 import { casePairs, trialArms, wellFormedPairs } from "./trial-model";
@@ -241,7 +241,6 @@ const COMPARISON_NARRATIVE: Shape = {
     footer: "text", story: "any", readings: { record: "prose" },
   },
 };
-const NUMERIC_TEXT = /^\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/;
 
 // ------------------------------------------------------------------ helpers
 
@@ -330,7 +329,7 @@ function fits(v: unknown, f: Field): boolean {
 }
 function typeHint(v: unknown, f: Field): string {
   const numeric = typeof f === "string" && ["number", "count", "rate"].includes(f);
-  if (numeric && typeof v === "string" && /^\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/.test(v)) return "write the number without quotes";
+  if (numeric && typeof v === "string" && NUMERIC_TEXT.test(v)) return "write the number without quotes";
   if (f === "boolean" && (v === "true" || v === "false")) return "write true or false without quotes";
   if (typeof f === "object" && "list" in f && !Array.isArray(v)) return "write a list in square brackets, even for one item";
   if (f === "count" && isNumber(v)) return "counts are whole numbers of 0 or more";
@@ -1243,7 +1242,7 @@ export function validateNarrative(narrative: unknown, given?: unknown): Problem[
 /** The level an ordinal value names: its name, or, when the metric lists its levels, a 0-based index. */
 function levelOf(levels: string[], value: unknown, explicit: boolean): number {
   if ((typeof value === "string" || isNumber(value)) && levels.includes(String(value))) return levels.indexOf(String(value));
-  if (!explicit && typeof value === "string" && NUMERIC_TEXT.test(value) && levels.includes(String(Number(value)))) return levels.indexOf(String(Number(value)));
+  if (!explicit && typeof value === "string" && NUMERIC_TEXT.test(value) && levels.includes(String(numberOf(value)))) return levels.indexOf(String(numberOf(value)));
   return explicit && isNumber(value) && Number.isInteger(value) && value >= 0 && value < levels.length ? value : -1;
 }
 

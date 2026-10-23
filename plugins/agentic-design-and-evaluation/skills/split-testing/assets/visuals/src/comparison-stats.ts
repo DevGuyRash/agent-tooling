@@ -23,7 +23,7 @@
  * never enter a rate as failures. Summaries come from observations when an
  * alternative has any on that metric, and from supplied aggregates otherwise. */
 import type { Aggregate, Comparison, ComparisonFilter, Metric, MetricDifference, MetricKind, MetricSummary, Observation, Preference, Ranking } from "./comparison-model";
-import { isNum, quantile, wilson, entriesOf, keysIn, valuesIn } from "./core";
+import { isNum, quantile, wilson, entriesOf, keysIn, valuesIn, NUMERIC_TEXT, numberOf } from "./core";
 import { caseKey, caseSplit, casesWords, NO_CASE, newcombe, pooledCases, validCount, Z95 } from "./stats";
 export { caseKey, caseSplit, casesWords, eachWeighted, NO_CASE, NO_CASE_WORDS } from "./stats";
 
@@ -32,7 +32,6 @@ const isObj = (v: unknown): v is Obj => !!v && typeof v === "object" && !Array.i
 const KINDS: MetricKind[] = ["binary", "numeric", "ordinal", "count", "rank", "preference"];
 const BOOT = 2000;
 /** Numeric text, as both checkers read it: an optional minus, digits with an optional point, an optional exponent. */
-const NUMERIC_TEXT = /^\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/;
 
 /** The group path of an alternative or case, normalized to an array. */
 export function groupPath(group: string[] | string | undefined): string[] {
@@ -238,12 +237,12 @@ export function ordinalLevels(data: Comparison, metric: Metric): string[] {
   for (const o of items<Observation>(data?.observations)) {
     if (o.metric !== metric.id || o.valid === false || o.value === null || o.value === undefined) continue;
     if (isNum(o.value)) found.add(o.value);
-    else if (typeof o.value === "string" && NUMERIC_TEXT.test(o.value)) found.add(Number(o.value));
+    else if (typeof o.value === "string" && NUMERIC_TEXT.test(o.value)) found.add(numberOf(o.value));
     else if (o.value !== "") return [];
   }
   for (const a of items<Aggregate>(data?.aggregates)) {
     if (a.metric !== metric.id || !isObj(a.counts)) continue;
-    for (const k of keysIn(a.counts)) { if (NUMERIC_TEXT.test(k)) found.add(Number(k)); else return []; }
+    for (const k of keysIn(a.counts)) { if (NUMERIC_TEXT.test(k)) found.add(numberOf(k)); else return []; }
   }
   return [...found].sort((a, b) => a - b).map(String);
 }
@@ -252,7 +251,7 @@ function levelIndex(levels: string[], value: unknown, explicit: boolean): number
     const i = levels.indexOf(String(value));
     if (i >= 0) return i;
   }
-  if (!explicit && typeof value === "string" && NUMERIC_TEXT.test(value)) { const i = levels.indexOf(String(Number(value))); if (i >= 0) return i; }
+  if (!explicit && typeof value === "string" && NUMERIC_TEXT.test(value)) { const i = levels.indexOf(String(numberOf(value))); if (i >= 0) return i; }
   if (explicit && isNum(value) && Number.isInteger(value) && value >= 0 && value < levels.length) return value;
   return null;
 }
@@ -426,7 +425,8 @@ function summaryOf(data: Comparison, metric: Metric, alt: string, r: Read, filte
     const counts = levels.map(() => 0);
     if (fromObs) for (const i of r.valid.get(alt) || []) counts[i]++;
     else for (const a of aggs) if (isObj(a.counts)) for (const [name, c] of entriesOf(a.counts)) {
-      const i = levels.indexOf(name);
+      // A level written as numeric text, its padding aside, is the level the inferred list names it by.
+      const inferred = !(Array.isArray(metric.levels) && metric.levels.length), i = levels.indexOf(name) >= 0 ? levels.indexOf(name) : inferred && NUMERIC_TEXT.test(name) ? levels.indexOf(String(numberOf(name))) : -1;
       if (i >= 0 && isNum(c) && Number.isInteger(c) && c >= 0) counts[i] += c;
     }
     const n = counts.reduce((a, b) => a + b, 0);

@@ -117,6 +117,7 @@ def written_corpus() -> list[dict]:
         # Runs naming no scenario (left out, null, empty, only spaces) are refused; the context trial, its narrative too.
         s([{"type": "text", "text": "x"}], None, trial={"runs": [{"arm": "a", "scenario": "c1"}, {"arm": "a"}, {"arm": "a", "scenario": None}, {"arm": "a", "scenario": ""}, {"arm": "a", "scenario": "   "}, "not a run"]}),
         n({}, "blank"),
+        s([{"type": "ladder", "rows": [{"label": "x", "k": "\u00a03", "n": 4}], "threshold": "\ufeff0.5"}]),
         # The same trial borrowed beside a specification, and a filter on an empty or blank case.
         s([{"type": "ladder"}], "blank"),
         # Two names for one section's reading, the second empty: refused, naming both keys.
@@ -167,6 +168,12 @@ def comparison_corpus() -> list[dict]:
         for name, field in R.BLOCKS[kind]["fields"].items():
             for v in unique(probes(field)):
                 corpus.append({"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "blocks": [{"type": kind, name: v}]}]}, "comparison": "base"})
+    # Numbers written as text, padded with a no-break space, an em space, a byte-order mark or a next-line: numeric to both checkers.
+    corpus += [
+        {"kind": "comparison", "input": {"alternatives": [{"id": "x"}], "metrics": [{"id": "m", "kind": "ordinal"}], "observations": [{"alternative": "x", "metric": "m", "value": v} for v in ("\u00a03", "4\u2003", "\ufeff5", "\u00856\u00a0")]}},
+        {"kind": "comparison", "input": {"alternatives": [{"id": "x"}], "metrics": [{"id": "m", "kind": "ordinal"}], "aggregates": [{"alternative": "x", "metric": "m", "counts": {"\u00a03": 2, "4\ufeff": 1}}]}},
+        {"kind": "comparison", "input": {"alternatives": [{"id": "x"}], "metrics": [{"id": "m", "kind": "numeric"}], "observations": [{"alternative": "x", "metric": "m", "value": "\u20033"}]}},
+    ]
     o = lambda metric, value, **extra: {"alternative": "pb", "metric": metric, "value": value, **extra}  # noqa: E731
     written = [
         {**BASE, "alternatives": [*BASE["alternatives"], {"id": "pb"}], "metrics": [*BASE["metrics"], {"id": "ate", "kind": "numeric", "primary": True}, {"id": "x", "kind": "ordinal", "primary": True, "levels": ["a", "a"]}]},

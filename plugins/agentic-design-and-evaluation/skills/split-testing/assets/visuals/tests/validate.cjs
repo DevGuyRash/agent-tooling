@@ -548,4 +548,20 @@ test("sweep (a selected matrix): every required text field is blank to the check
   }
 });
 
+test("a number padded with any whitespace is numeric text alike to the checks and the views", () => {
+  // An ordinal metric with no levels whose values are numbers written as text, padded with a no-break space, an em space,
+  // a byte-order mark and a next-line: the checks find an order (no problem), and the views read levels 3, 4, 5 and 6.
+  const padded = ["\u00a03", "4\u2003", "\ufeff5", "\u00856\u00a0"];
+  const data = { alternatives: [{ id: "x" }], metrics: [{ id: "m", kind: "ordinal" }], observations: padded.map(value => ({ alternative: "x", metric: "m", value })) };
+  H.equal(H.plain(V.validateComparison(data)).filter(p => p.where.startsWith("comparison.metrics") || p.where.startsWith("comparison.observations")).map(p => p.message), [], "the checks find the values ordered");
+  const [s] = H.plain(V.summarize(data, "m"));
+  H.equal([s.levels, s.counts, s.invalid], [["3", "4", "5", "6"], [1, 1, 1, 1], 0], "the views read each as its level");
+  // A count of a level written as a padded key, and a number written in quotes, are read the same way.
+  const totals = { alternatives: [{ id: "x" }], metrics: [{ id: "m", kind: "ordinal" }], aggregates: [{ alternative: "x", metric: "m", counts: { "\u00a03": 2, "4\ufeff": 1 } }] };
+  H.equal(H.plain(V.validateComparison(totals)).filter(p => p.where.startsWith("comparison.metrics")).map(p => p.message), [], "padded level keys give an order");
+  H.equal(H.plain(V.summarize(totals, "m"))[0].levels, ["3", "4"], "and the views read them as levels");
+  const quoted = { alternatives: [{ id: "x" }], metrics: [{ id: "m", kind: "numeric" }], observations: [{ alternative: "x", metric: "m", value: "\u20033" }] };
+  H.ok(H.plain(V.validateComparison(quoted)).some(p => p.hint === "write the number without quotes"), "a quoted padded number is told to drop its quotes");
+});
+
 H.report();

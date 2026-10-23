@@ -350,7 +350,12 @@ FROM_COMPARISON = ("alternatives", "metrics", "ccases")
 FROM_COLLECTION = ("members", "themes")
 SECTION_ID = re.compile(r"[A-Za-z][\w:.-]*", re.ASCII)
 PLAIN_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
-NUMERIC_TEXT = re.compile(r"\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*", re.ASCII)
+# Whitespace, one explicit set for both checkers (src/core.ts WHITESPACE): ASCII space and tab, line breaks, and all
+# Unicode whitespace (no-break and em spaces, the byte-order mark, next-line and the information separators among them).
+WHITESPACE = "\t\n\u000b\f\r \u001c\u001d\u001e\u001f\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+# A number written as text, padded with any WHITESPACE (src/core.ts NUMERIC_TEXT): ASCII digits, the shared padding set.
+_PAD = "[" + "".join(f"\\u{ord(ch):04x}" for ch in WHITESPACE) + "]*"
+NUMERIC_TEXT = re.compile(_PAD + r"-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?" + _PAD, re.ASCII)
 
 
 def is_number(v) -> bool:
@@ -893,9 +898,7 @@ def named_ids(value, field, out: dict) -> None:
             named_ids(value.get(k), f, out)
 
 
-# Whitespace, one explicit set for both checkers (src/core.ts WHITESPACE): ASCII space and tab, line breaks, and all
-# Unicode whitespace (no-break and em spaces, the byte-order mark, next-line and the information separators among them).
-WHITESPACE = "\t\n\u000b\f\r \u001c\u001d\u001e\u001f\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+
 
 
 def blank(v: str) -> bool:
@@ -2241,7 +2244,7 @@ def load_comparison(path: Path, strict: bool) -> dict:
 def csv_number(text: str):
     if not NUMERIC_TEXT.fullmatch(text):
         return None
-    value = float(text)
+    value = float(strip_ws(text))
     return int(value) if value.is_integer() and abs(value) < 2 ** 53 else value
 
 

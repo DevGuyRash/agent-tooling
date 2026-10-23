@@ -72,7 +72,7 @@ var __importStar = (this && this.__importStar) || (function () {
 define("core", ["require", "exports"], function (require, exports) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.outcomeLabel = exports.isOutcome = exports.count = exports.num = exports.isNum = exports.keysIn = exports.isId = exports.WS_RUN = exports.said = exports.blank = exports.WHITESPACE = void 0;
+    exports.outcomeLabel = exports.isOutcome = exports.count = exports.num = exports.isNum = exports.keysIn = exports.isId = exports.numberOf = exports.NUMERIC_TEXT = exports.WS_RUN = exports.said = exports.blank = exports.WHITESPACE = void 0;
     exports.escapeText = escapeText;
     exports.esc = esc;
     exports.documentId = documentId;
@@ -166,6 +166,11 @@ define("core", ["require", "exports"], function (require, exports) {
     const WS_CLASS = [...exports.WHITESPACE].map(ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
     /** A run of WHITESPACE, for collapsing it to one space. */
     exports.WS_RUN = new RegExp(`[${WS_CLASS}]+`, "g");
+    /** A number written as text, padded with any WHITESPACE: both checkers and every view read numeric text by this. */
+    exports.NUMERIC_TEXT = new RegExp(`^[${WS_CLASS}]*-?(\\d+\\.?\\d*|\\.\\d+)([eE][-+]?\\d+)?[${WS_CLASS}]*$`);
+    /** The number numeric text writes, its WHITESPACE padding removed first (Number alone knows a different set). */
+    const numberOf = (text) => Number(stripText(text));
+    exports.numberOf = numberOf;
     /** A blank line between paragraphs: a line break, any WHITESPACE, a line break. */
     const PARAGRAPH_BREAK = new RegExp(`\\n[${WS_CLASS}]*\\n`);
     /** An identifier: text with something in it that starts with no "$" (kept for notes) and has no whitespace at either
@@ -5364,7 +5369,6 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
     const KINDS = ["binary", "numeric", "ordinal", "count", "rank", "preference"];
     const BOOT = 2000;
     /** Numeric text, as both checkers read it: an optional minus, digits with an optional point, an optional exponent. */
-    const NUMERIC_TEXT = /^\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/;
     /** The group path of an alternative or case, normalized to an array. */
     function groupPath(group) {
         return Array.isArray(group) ? group.map(String) : typeof group === "string" && group ? [group] : [];
@@ -5619,8 +5623,8 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
                 continue;
             if ((0, core_14.isNum)(o.value))
                 found.add(o.value);
-            else if (typeof o.value === "string" && NUMERIC_TEXT.test(o.value))
-                found.add(Number(o.value));
+            else if (typeof o.value === "string" && core_14.NUMERIC_TEXT.test(o.value))
+                found.add((0, core_14.numberOf)(o.value));
             else if (o.value !== "")
                 return [];
         }
@@ -5628,8 +5632,8 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
             if (a.metric !== metric.id || !isObj(a.counts))
                 continue;
             for (const k of (0, core_14.keysIn)(a.counts)) {
-                if (NUMERIC_TEXT.test(k))
-                    found.add(Number(k));
+                if (core_14.NUMERIC_TEXT.test(k))
+                    found.add((0, core_14.numberOf)(k));
                 else
                     return [];
             }
@@ -5642,8 +5646,8 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
             if (i >= 0)
                 return i;
         }
-        if (!explicit && typeof value === "string" && NUMERIC_TEXT.test(value)) {
-            const i = levels.indexOf(String(Number(value)));
+        if (!explicit && typeof value === "string" && core_14.NUMERIC_TEXT.test(value)) {
+            const i = levels.indexOf(String((0, core_14.numberOf)(value)));
             if (i >= 0)
                 return i;
         }
@@ -5872,7 +5876,8 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
                 for (const a of aggs)
                     if (isObj(a.counts))
                         for (const [name, c] of (0, core_14.entriesOf)(a.counts)) {
-                            const i = levels.indexOf(name);
+                            // A level written as numeric text, its padding aside, is the level the inferred list names it by.
+                            const inferred = !(Array.isArray(metric.levels) && metric.levels.length), i = levels.indexOf(name) >= 0 ? levels.indexOf(name) : inferred && core_14.NUMERIC_TEXT.test(name) ? levels.indexOf(String((0, core_14.numberOf)(name))) : -1;
                             if (i >= 0 && (0, core_14.isNum)(c) && Number.isInteger(c) && c >= 0)
                                 counts[i] += c;
                         }
@@ -9882,7 +9887,6 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "sect
             footer: "text", story: "any", readings: { record: "prose" },
         },
     };
-    const NUMERIC_TEXT = /^\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/;
     const isObj = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
     const isNumber = (v) => typeof v === "number" && Number.isFinite(v);
     const isText = (v) => typeof v === "string" || isNumber(v);
@@ -9994,7 +9998,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "sect
     }
     function typeHint(v, f) {
         const numeric = typeof f === "string" && ["number", "count", "rate"].includes(f);
-        if (numeric && typeof v === "string" && /^\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/.test(v))
+        if (numeric && typeof v === "string" && core_23.NUMERIC_TEXT.test(v))
             return "write the number without quotes";
         if (f === "boolean" && (v === "true" || v === "false"))
             return "write true or false without quotes";
@@ -11157,8 +11161,8 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "sect
     function levelOf(levels, value, explicit) {
         if ((typeof value === "string" || isNumber(value)) && levels.includes(String(value)))
             return levels.indexOf(String(value));
-        if (!explicit && typeof value === "string" && NUMERIC_TEXT.test(value) && levels.includes(String(Number(value))))
-            return levels.indexOf(String(Number(value)));
+        if (!explicit && typeof value === "string" && core_23.NUMERIC_TEXT.test(value) && levels.includes(String((0, core_23.numberOf)(value))))
+            return levels.indexOf(String((0, core_23.numberOf)(value)));
         return explicit && isNumber(value) && Number.isInteger(value) && value >= 0 && value < levels.length ? value : -1;
     }
     /** Problems in a comparison of any alternatives, and in a narrative for its
@@ -11205,8 +11209,8 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "sect
                 c.add("error", `${at}.levels`, "a level is listed more than once, so the order is ambiguous", "list each level once, lowest first");
             if ((m.kind === "binary" || m.kind === "count") && isNumber(m.threshold) && (m.threshold < 0 || m.threshold > 1))
                 c.add("error", `${at}.threshold`, `the threshold ${m.threshold} is outside 0 to 1`, "write a rate as a share: 0.15 for 15%");
-            if (m.kind === "ordinal" && !levels(m).length && (list("observations").some(o => isObj(o) && o.metric === id && o.valid !== false && typeof o.value === "string" && o.value !== "" && !NUMERIC_TEXT.test(o.value))
-                || list("aggregates").some(a => isObj(a) && a.metric === id && isObj(a.counts) && keysOf(a.counts).some(k => !NUMERIC_TEXT.test(k)))))
+            if (m.kind === "ordinal" && !levels(m).length && (list("observations").some(o => isObj(o) && o.metric === id && o.valid !== false && typeof o.value === "string" && o.value !== "" && !core_23.NUMERIC_TEXT.test(o.value))
+                || list("aggregates").some(a => isObj(a) && a.metric === id && isObj(a.counts) && keysOf(a.counts).some(k => !core_23.NUMERIC_TEXT.test(k)))))
                 c.add("error", at, `ordinal metric "${clip(id)}" names no levels, so its text values have no order`, '"levels" lists them lowest first, such as ["poor", "fair", "good"]');
             const judged = m.kind === "preference" || m.kind === "rank";
             const hasData = list("observations").some(o => isObj(o) && o.metric === id) || list("aggregates").some(a => isObj(a) && a.metric === id)
@@ -11232,7 +11236,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "sect
             if (kind === "binary" && !(typeof v === "boolean" || v === 0 || v === 1))
                 wrong("true or false", `write true or false (or 1 and 0); ${unread}`);
             if (kind === "numeric" && !isNumber(v))
-                wrong("a number", typeof v === "string" && NUMERIC_TEXT.test(v) ? "write the number without quotes" : `write a number; ${unread}`);
+                wrong("a number", typeof v === "string" && core_23.NUMERIC_TEXT.test(v) ? "write the number without quotes" : `write a number; ${unread}`);
             if (kind === "rank" && !(isNumber(v) && v >= 1))
                 wrong("a position of 1 or more", "1 is first place");
             if (kind === "count") {

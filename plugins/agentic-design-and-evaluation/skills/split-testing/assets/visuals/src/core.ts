@@ -53,6 +53,10 @@ export const said = (v: unknown): boolean => (typeof v === "string" && !blank(v)
 const WS_CLASS = [...WHITESPACE].map(ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
 /** A run of WHITESPACE, for collapsing it to one space. */
 export const WS_RUN = new RegExp(`[${WS_CLASS}]+`, "g");
+/** A number written as text, padded with any WHITESPACE: both checkers and every view read numeric text by this. */
+export const NUMERIC_TEXT = new RegExp(`^[${WS_CLASS}]*-?(\\d+\\.?\\d*|\\.\\d+)([eE][-+]?\\d+)?[${WS_CLASS}]*$`);
+/** The number numeric text writes, its WHITESPACE padding removed first (Number alone knows a different set). */
+export const numberOf = (text: string): number => Number(stripText(text));
 /** A blank line between paragraphs: a line break, any WHITESPACE, a line break. */
 const PARAGRAPH_BREAK = new RegExp(`\\n[${WS_CLASS}]*\\n`);
 /** An identifier: text with something in it that starts with no "$" (kept for notes) and has no whitespace at either
