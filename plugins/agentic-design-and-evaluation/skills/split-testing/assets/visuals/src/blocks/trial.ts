@@ -3,7 +3,7 @@
  * pairwise preferences, cost, invalid runs, the run ledger and the plan. Each
  * reads the trial in the render context and accepts explicit data where a
  * caller has its own. */
-import { attrs, axisTicks, count, esc, fmtDelta, fmtInt, fmtNum, fmtPct, fmtSeconds, fmtUsd, inline, isNum, logTicks, median, num, Outcome, secondsUnit, outcomeBadge, outcomeLabel, outcomeMark, prose, quantile, wilson, entriesOf, keysIn, valuesIn } from "../core";
+import { attrs, axisTicks, count, esc, fmtDelta, fmtInt, fmtNum, fmtPct, fmtSeconds, fmtUsd, inline, isNum, logTicks, median, num, Outcome, secondsUnit, outcomeBadge, outcomeLabel, outcomeMark, prose, quantile, wilson, entriesOf, keysIn, valuesIn, stripText } from "../core";
 import type { RenderContext } from "../model";
 import { failureCause } from "../failure";
 import { casesWords, countPooling } from "../stats";
@@ -127,7 +127,7 @@ export function verdict(input: VerdictInput, ctx?: RenderContext): string {
     return `<li class="av-rule-check av-rule-check--${state}"><span class="av-rule-label">${esc(c.label)}</span><span class="av-rule-obs">${esc(c.observed)}</span>${c.threshold ? `<span class="av-rule-thr">${esc(c.threshold)}</span>` : "<span></span>"}<span class="av-rule-state"><span class="av-rule-dot" aria-hidden="true"></span>${word}</span></li>`;
   };
   // Ungrouped terms decide the verdict and come first; each group follows under its own subheading.
-  const groupOf = (c: typeof checkItems[number]) => typeof c.group === "string" ? c.group.trim() : "";
+  const groupOf = (c: typeof checkItems[number]) => typeof c.group === "string" ? stripText(c.group) : "";
   const groupNames = [...new Set(checkItems.map(groupOf).filter(Boolean))];
   const ungrouped = checkItems.filter(c => !groupOf(c));
   const checks = checkItems.length

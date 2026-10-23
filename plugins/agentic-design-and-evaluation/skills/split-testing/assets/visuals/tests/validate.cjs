@@ -30,7 +30,7 @@ if (ids >= 0) {
       if (e.kind === "spec") return H.plain(V.validateSpec(e.input));
       if (e.kind === "narrative") return H.plain(V.validateNarrative(e.input, e.trial));
       if (e.kind === "collection") return H.plain(V.validateCollection(e.input));
-      return H.plain(V.validateComparison(e.input));
+      return H.plain("narrative" in e ? V.validateComparison(e.input, e.narrative) : V.validateComparison(e.input));
     } catch (error) { return { exception: String(error && error.stack || error).slice(0, 400) }; }
   });
   fs.writeFileSync(process.argv[process.argv.indexOf("--out") + 1], JSON.stringify(out));
@@ -501,6 +501,49 @@ test("sweep (a selected matrix): every other name for a section, given beside it
         const shown = compose(data, told).sections.find(s => s.id === section);
         if (shown) H.equal(shown.reading, "The first reading.", `${kind} ${first} then ${again}: the first reading is shown`);
       }
+    }
+  }
+});
+
+// ------------------------------------------------------------------ blank text, one rule
+
+/** Every required text field, given each whitespace character alone, all of them together, or visible text: the check
+ * refuses it exactly when the page shows nothing of it. (test_validate.py holds report.py's checker to the same answers.) */
+const WS = "\t\n\u000b\f\r \u001c\u001d\u001e\u001f\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
+const BLANK_VALUES = [...[...WS].map(ch => [`U+${ch.charCodeAt(0).toString(16).padStart(4, "0")}`, ch]), ["every whitespace character", WS], ["visible text", "Visible."]];
+const BLANK_FIELDS = (() => {
+  const read = name => JSON.parse(fs.readFileSync(path.join(H.VISUALS, "examples", ...name.split("/")), "utf8"));
+  const trial = read("fictional-trial.json"), narrative = read("fictional-narrative.json");
+  const sandwich = read("comparisons/sandwich.json"), sandwichTold = read("comparisons/sandwich-narrative.json");
+  const arm = Object.keys(narrative.story.alternatives)[0];
+  const section = (html, id) => { const at = html.indexOf(`id="${id}"`); return at < 0 ? "" : html.slice(at, html.indexOf("</section>", at)); };
+  const shownReading = (html, id) => { const s = section(html, id), at = s.indexOf('class="av-section-reading"'); if (at < 0) return false; const rest = s.slice(at), end = rest.indexOf('class="av-block'); return /<p>/.test(end < 0 ? rest : rest.slice(0, end)); };
+  const story = (k, v) => ({ ...narrative, story: { ...narrative.story, [k]: v } });
+  const storyPart = label => html => html.includes(`<h3 class="av-story-h">${label}</h3>`);
+  const trialField = (name, told, refused, shown) => [name, value => V.validateNarrative(told(value), trial), refused, value => shown(V.renderReport(V.trialReport(trial, told(value))))];
+  return [
+    trialField("a trial narrative's reading", v => ({ ...narrative, readings: { ...narrative.readings, setup: v } }), p => p.where === "narrative.readings" && /"setup"/.test(p.message), html => shownReading(html, "setup")),
+    ["a comparison narrative's reading", v => V.validateComparison(sandwich, { ...sandwichTold, readings: { ...sandwichTold.readings, results: v } }), p => p.where === "narrative.readings" && /"results"/.test(p.message),
+      v => shownReading(V.renderReport(V.comparisonReport(sandwich, { ...sandwichTold, readings: { ...sandwichTold.readings, results: v } })), "results")],
+    trialField("the story's background", v => story("background", v), p => p.where === "narrative.story.background" || (p.where === "narrative.story" && /"background"/.test(p.message)), storyPart("Background")),
+    trialField("the story's intent", v => story("intent", v), p => p.where === "narrative.story.intent" || (p.where === "narrative.story" && /"intent"/.test(p.message)), storyPart("What the decider wanted")),
+    trialField("the story's question", v => story("questions", [v]), p => p.where.startsWith("narrative.story.questions"), storyPart("What was tested")),
+    trialField("the story's rule", v => story("rule", v), p => p.where === "narrative.story.rule" || (p.where === "narrative.story" && /"rule"/.test(p.message)), storyPart("How the decision was made")),
+    trialField("what the story covers", v => story("covers", v), p => p.where === "narrative.story.covers" || (p.where === "narrative.story" && /"covers"/.test(p.message)), storyPart("This report covers")),
+    trialField("what the story does not cover", v => story("notCovered", v), p => p.where === "narrative.story.notCovered" || (p.where === "narrative.story" && /"notCovered"/.test(p.message)), storyPart("It does not cover")),
+    trialField("an arm's description", v => story("alternatives", { ...narrative.story.alternatives, [arm]: v }), p => p.where === "narrative.story.alternatives" && p.message.includes(`"${arm}"`), html => { const at = html.indexOf('<h3 class="av-story-h">What was compared</h3>'); return at >= 0 && html.slice(at, html.indexOf("</dl>", at)).includes(`data-arm="${arm}"`); }),
+    ["a text view's text", v => V.validateSpec({ title: "T", sections: [{ title: "S", reading: "r", blocks: [{ type: "text", text: v }] }] }), p => p.where.startsWith("sections[0].blocks[0]") && p.level === "error",
+      v => /<p>/.test(H.element(V.renderReport({ title: "T", sections: [{ title: "S", reading: "r", blocks: [{ type: "text", text: v }] }] }), 'class="av-block av-block--text"'))],
+  ];
+})();
+
+test("sweep (a selected matrix): every required text field is blank to the checks exactly when the page shows nothing of it", () => {
+  for (const [field, check, refuses, shows] of BLANK_FIELDS) {
+    for (const [name, value] of BLANK_VALUES) {
+      const refused = H.plain(check(value)).some(p => p.level === "error" && refuses(p));
+      const shown = shows(value);
+      const blank = name !== "visible text";
+      H.equal([refused, shown], [blank, !blank], `${field}, ${name}: refused ${refused}, shown ${shown}`);
     }
   }
 });

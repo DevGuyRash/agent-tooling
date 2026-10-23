@@ -6,7 +6,7 @@
  * assumes what an alternative is: a sandwich, an ad, a prompt, a research
  * direction. Values the author did not supply are shown as missing, never
  * filled in, and totals appear only when the author supplied the weights. */
-import { attrs, count as whole, esc, fmtInt, fmtPct, inline, isNum, num, prose, wilson, entriesOf, keysIn } from "../core";
+import { attrs, count as whole, esc, fmtInt, fmtPct, inline, isNum, num, prose, wilson, entriesOf, keysIn, stripText } from "../core";
 import { diffRuns, diffStats, DiffLine, lineDiff, splitLines, wordDiff } from "../diff";
 import { fingerprint } from "../identity";
 import type { Alternative, Comparison, Metric, MetricSummary, Observation } from "../comparison-model";
@@ -24,7 +24,7 @@ interface DataInput extends FrameInput {
 
 const plural = (n: number, one: string, many = `${one}s`) => `${fmtInt(n)} ${n === 1 ? one : many}`;
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-const str = (v: unknown): string | undefined => typeof v === "string" && v.trim() !== "" ? v : undefined;
+const str = (v: unknown): string | undefined => typeof v === "string" && stripText(v) !== "" ? v : undefined;
 const sr = (t: string) => `<span class="av-sr">${esc(t)}</span>`;
 const missing = (t: string, why: string) => `<span class="av-missing" title="${esc(why)}">${esc(t)}</span>`;
 const letterOf = (i: number): string => i < 26 ? String.fromCharCode(65 + i) : letterOf(Math.floor(i / 26) - 1) + letterOf(i % 26);
@@ -578,7 +578,7 @@ export function decisionMatrix(input: DecisionMatrixInput, ctx: RenderContext): 
       const word = typeof r === "string" ? r : str(scale.labels?.[String(r)]);
       const frac = lo !== undefined && hi !== undefined && hi > lo ? (n - lo) / (hi - lo) : null;
       rating = `<span class="av-jv-rating"><b class="av-num">${esc(shown(n))}</b>${hi !== undefined ? `<span class="av-jv-of">/ ${esc(shown(hi))}</span>` : ""}${word ? `<span class="av-jv-word">${esc(word)}</span>` : ""}${best.get(c.id)?.has(a) ? `<span class="av-chip av-chip--pass">best</span>` : ""}</span>${frac !== null ? `<span class="av-jv-bar" aria-hidden="true" style="--v:${pos(frac)}"></span>` : ""}`;
-    } else if (typeof r === "string" && r.trim() !== "") rating = `<span class="av-jv-rating av-jv-rating--text"><span class="av-jv-word">${esc(r)}</span></span>`;
+    } else if (typeof r === "string" && stripText(r) !== "") rating = `<span class="av-jv-rating av-jv-rating--text"><span class="av-jv-word">${esc(r)}</span></span>`;
     else if (!txt && !ev.length) rating = missing("no rating", "This cell records neither a rating nor a note.");
     const evidence = ev.length ? `<details class="av-jv-evidence"><summary>${esc(ev.length === 1 ? "Evidence" : `Evidence (${ev.length})`)}</summary><ul>${ev.map(e => `<li>${inline(e)}</li>`).join("")}</ul></details>` : (n !== null || txt || rating.includes("--text")) ? `<span class="av-jv-noev">no evidence given</span>` : "";
     return `${arm}${rating}${txt ? `<p class="av-jv-text">${inline(txt)}</p>` : ""}${evidence}`;
@@ -717,7 +717,7 @@ ${metricIds.length > 1 ? `<label class="av-field"><span>Metric</span><select dat
   }).join("");
 
   const top = [...reasons].sort((x, y) => y[1] - x[1] || x[0].localeCompare(y[0]));
-  const why = top.length ? ` Invalid, by reason: ${top.slice(0, 3).map(([r, n]) => `${String(r).trim().replace(/[.;:,]+$/, "")} (${fmtInt(n)})`).join("; ")}${top.length > 3 ? `; and ${plural(top.length - 3, "other reason")}` : ""}.` : "";
+  const why = top.length ? ` Invalid, by reason: ${top.slice(0, 3).map(([r, n]) => `${stripText(String(r)).replace(/[.;:,]+$/, "")} (${fmtInt(n)})`).join("; ")}${top.length > 3 ? `; and ${plural(top.length - 3, "other reason")}` : ""}.` : "";
   const sentence = `${esc(plural(observed, "observation"))}${observed ? ` (${esc(fmtInt(valid))} valid, ${esc(fmtInt(invalid))} invalid)` : ""}${aggs.length ? `${observed ? " and " : ""}${esc(plural(aggs.length, "aggregate"))}` : ""}.${invalid ? `${esc(why)} An invalid observation has no usable value; it is counted here and never read as a failure.` : ""}`;
   const description = input.description ?? "Every observation and every supplied aggregate, filterable and sortable. Select a column heading to sort; excerpts open in place.";
   return frame("observations", { ...input, description }, `<p class="av-jv-lede av-obs-lede">${sentence}</p>${tools}<div class="av-scroll-x av-obs-wrap"><table class="av-obs" data-av-table="observations" data-av-noun="observations">${head}<tbody>${body}</tbody></table></div>`);

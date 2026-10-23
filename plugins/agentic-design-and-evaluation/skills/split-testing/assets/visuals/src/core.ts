@@ -38,8 +38,23 @@ export function slug(value: string, prefix = "av"): string {
 /** Whitespace, one explicit set for both checkers and every view: ASCII space and tab, line breaks, and all Unicode
  * whitespace (no-break and em spaces, the byte-order mark, next-line and the information separators among them). */
 export const WHITESPACE = "\t\n\u000b\f\r \u001c\u001d\u001e\u001f\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
-/** Text made of whitespace alone, or nothing. */
-export const isBlank = (v: string): boolean => [...v].every(ch => WHITESPACE.includes(ch));
+/** Whether text says nothing: whitespace alone (WHITESPACE), or nothing. The one blank test of both checkers and every
+ * view: a reading, a story part, a description, a title or an id is blank exactly when this says so. */
+export const blank = (v: string): boolean => [...v].every(ch => WHITESPACE.includes(ch));
+/** Text with WHITESPACE removed from both ends: how every view trims what it shows. */
+export function stripText(v: string): string {
+  let i = 0, j = v.length;
+  while (i < j && WHITESPACE.includes(v[i])) i++;
+  while (j > i && WHITESPACE.includes(v[j - 1])) j--;
+  return v.slice(i, j);
+}
+/** Whether a value says something: text, or a list holding text, that is not blank. */
+export const said = (v: unknown): boolean => (typeof v === "string" && !blank(v)) || (Array.isArray(v) && v.some(x => typeof x === "string" && !blank(x)));
+const WS_CLASS = [...WHITESPACE].map(ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+/** A run of WHITESPACE, for collapsing it to one space. */
+export const WS_RUN = new RegExp(`[${WS_CLASS}]+`, "g");
+/** A blank line between paragraphs: a line break, any WHITESPACE, a line break. */
+const PARAGRAPH_BREAK = new RegExp(`\\n[${WS_CLASS}]*\\n`);
 /** An identifier: text with something in it that starts with no "$" (kept for notes) and has no whitespace at either
  * end. Every check of every kind of data holds each id to this, so every view compares ids exactly as written. */
 export const isId = (v: unknown): v is string => typeof v === "string" && v !== "" && !v.startsWith("$") && !WHITESPACE.includes(v[0]) && !WHITESPACE.includes(v[v.length - 1]);
@@ -218,7 +233,7 @@ export function outcomeBadge(outcome: Outcome, label?: string): string {
  * other characters are escaped, so supplied text can never become markup. */
 export function prose(text: string | string[] | null | undefined, className = "av-prose"): string {
   if (text === null || text === undefined) return "";
-  const parts = (Array.isArray(text) ? text : String(text).split(/\n\s*\n/)).map(s => String(s).trim()).filter(Boolean);
+  const parts = (Array.isArray(text) ? text : String(text).split(PARAGRAPH_BREAK)).map(s => stripText(String(s))).filter(Boolean);
   if (!parts.length) return "";
   return `<div class="${className}">${parts.map(p => `<p>${inline(p)}</p>`).join("")}</div>`;
 }

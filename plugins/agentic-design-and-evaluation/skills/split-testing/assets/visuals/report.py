@@ -636,12 +636,12 @@ class Checker:
                     self.type(x, "text", self.join(where, i))
         if kind == "member-id" and not MEMBER_ID.fullmatch(v):
             self.add("error", where, f'"{clip(v)}" cannot be a report id, since links name reports by id', "start with a letter and use only letters, digits, _ . or -")
-        if kind == "theme-id" and is_blank(v):
+        if kind == "theme-id" and blank(v):
             self.add("error", where, "a theme id cannot be blank, since reports join their theme by its id", "name the theme")
         if kind == "section-id" and not SECTION_ID.fullmatch(v):
             self.add("warning", where, f'"{clip(v)}" cannot be used as a section id, so the section gets a generated one', "start with a letter and use only letters, digits, _ : . or -")
         # An id that is not blank but breaks the identifier rule is refused here; a blank one is told by its kind's own check.
-        if kind in ID_KINDS and not is_blank(v) and not is_id(v):
+        if kind in ID_KINDS and not blank(v) and not is_id(v):
             return self.add("error", where, f'"{clip(v)}" cannot be an id: an id starts with no "$" (kept for notes) and has no whitespace at either end', "write the id without them")
         if kind in IDS:
             self.id(v, kind, where)
@@ -662,7 +662,7 @@ class Checker:
         if not spec:
             return
         # A blank case names no case: every view reads that evidence as evidence naming no case.
-        if kind == "comparison-case" and is_blank(value):
+        if kind == "comparison-case" and blank(value):
             if self.known["comparison"]:
                 self.add("warning", where, "an empty or blank case names no case: it stands for the evidence naming no case", 'name a case, or leave "case" out where the evidence names none')
             return
@@ -686,7 +686,7 @@ class Checker:
             x = v.get(name)
             if x is None:
                 self.add("error", where, f'missing required field "{name}"', f"required here: {', '.join(required)}")
-            elif isinstance(x, str) and not x.strip() and f["fields"].get(name) in ("text", "string", "prose", "alternative-id", "case-id", "metric-id"):
+            elif isinstance(x, str) and blank(x) and f["fields"].get(name) in ("text", "string", "prose", "alternative-id", "case-id", "metric-id"):
                 self.add("error", self.join(where, name), f'"{name}" is empty', f.get("empty", {}).get(name) or "write the text the report should show, or remove the entry")
         for name, field in f["fields"].items():
             x = v.get(name)
@@ -823,7 +823,7 @@ COLLECTION_SECTIONS = ["glance", "reports", "shifts", "cost-gain", "timeline", "
 
 
 def said(v) -> bool:
-    return (isinstance(v, str) and v.strip() != "") or (isinstance(v, list) and any(isinstance(x, str) and x.strip() != "" for x in v))
+    return (isinstance(v, str) and not blank(v)) or (isinstance(v, list) and any(isinstance(x, str) and not blank(x) for x in v))
 
 
 def texts_of(v) -> list[str]:
@@ -898,9 +898,15 @@ def named_ids(value, field, out: dict) -> None:
 WHITESPACE = "\t\n\u000b\f\r \u001c\u001d\u001e\u001f\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
 
 
-def is_blank(v: str) -> bool:
-    """Text made of whitespace alone, or nothing (src/core.ts isBlank)."""
+def blank(v: str) -> bool:
+    """Whether text says nothing: whitespace alone (WHITESPACE), or nothing. The one blank test of this checker, as
+    src/core.ts blank is of the page's checker and every view."""
     return all(ch in WHITESPACE for ch in v)
+
+
+def strip_ws(v: str) -> str:
+    """Text with WHITESPACE removed from both ends (src/core.ts stripText)."""
+    return v.strip(WHITESPACE)
 
 
 def is_id(v) -> bool:
@@ -1062,7 +1068,7 @@ def comparison_cases(data: dict) -> list:
     out: list = []
     # Evidence naming no case (a case missing, null, empty or only spaces) names none, as every view reads it.
     def named(v) -> bool:
-        return isinstance(v, str) and not is_blank(v) and v not in out
+        return isinstance(v, str) and not blank(v) and v not in out
     for x in data.get("cases") if isinstance(data.get("cases"), list) else []:
         if isinstance(x, dict) and named(x.get("id")):
             out.append(x["id"])
@@ -1185,11 +1191,11 @@ def story_checks(c, owner: dict, at: str, needs: dict) -> None:
     for k in ("background", "intent", "questions", "covers", "notCovered", *(() if needs["rule"] else ("rule",))):
         v = story.get(k)
         # A missing or blank required part is already reported by the shape check.
-        if v is None or (k != "rule" and isinstance(v, str) and not v.strip()):
+        if v is None or (k != "rule" and isinstance(v, str) and blank(v)):
             continue
         if k == "questions":
             for i, q in enumerate(v if isinstance(v, list) else []):
-                if not isinstance(q, str) or not q.strip():
+                if not isinstance(q, str) or blank(q):
                     c.add("error", c.join(c.join(where, k), i), "is blank", "write the question in plain words, or remove it")
         elif not said(v):
             c.add("error", c.join(where, k), "says nothing", "write it in plain words for a reader new to this work")
@@ -1422,7 +1428,7 @@ def member_trial(m: dict):
 
 
 def trimmed(v) -> str:
-    return v.strip() if isinstance(v, str) else number_text(v) if is_number(v) else ""
+    return strip_ws(v) if isinstance(v, str) else number_text(v) if is_number(v) else ""
 
 
 DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
@@ -2159,7 +2165,7 @@ def skeleton(trial: dict, trial_label: str) -> dict:
         ),
     }
     rule = plan.get("decision_rule")
-    if isinstance(rule, str) and rule.strip():
+    if isinstance(rule, str) and not blank(rule):
         out["$rule"] = rule
     out["title"] = ""
     out["question"] = ""
@@ -2240,7 +2246,7 @@ def csv_number(text: str):
 
 
 def csv_flag(text: str):
-    word = text.strip().lower()
+    word = strip_ws(text).lower()
     return True if word in TRUE_WORDS or word == "1" else False if word in FALSE_WORDS or word == "0" else None
 
 
@@ -2407,7 +2413,7 @@ def from_trial(trial: dict) -> dict:
         **({"title": name} if name else {}),
         "alternatives": alternatives, "cases": cases, "metrics": metrics, "observations": observations, **({"preferences": preferences} if preferences else {}),
         **({"baseline": trial["baseline"]} if isinstance(trial.get("baseline"), str) and trial["baseline"] in arms_axis else {}),
-        **({"decision_rule": rule} if isinstance(rule, str) and rule.strip() else {}),
+        **({"decision_rule": rule} if isinstance(rule, str) and not blank(rule) else {}),
         **({"sources": [{"label": "trial.py report", "note": f"run directory {re.sub(r'^/(?:home|Users)/[^/]+(?=/|$)', '~', directory)}"}]} if isinstance(directory, str) and directory else {}),
     }
 
@@ -2432,10 +2438,10 @@ def comparison_from_csv(path: Path, base: dict | None = None) -> dict:
     except FileNotFoundError:
         raise assemble.PackagingError(f"--csv file not found: {path}") from None
     rows = list(csv.reader(io.StringIO(text, newline="")))
-    rows = [r for r in rows if any(cell.strip() for cell in r)]
+    rows = [r for r in rows if any(not blank(cell) for cell in r)]
     if not rows:
         raise InputError(f"{path} is empty", f"the first row names the columns: {', '.join(CSV_REQUIRED)}, then any of {', '.join(CSV_COLUMNS[3:])}")
-    header = [h.strip().lower() for h in rows[0]]
+    header = [strip_ws(h).lower() for h in rows[0]]
     for i, name in enumerate(header):
         if name not in CSV_COLUMNS:
             s = suggest(name, CSV_COLUMNS)
@@ -2456,7 +2462,7 @@ def comparison_from_csv(path: Path, base: dict | None = None) -> dict:
     for line, raw in enumerate(rows[1:], start=2):
         if len(raw) != len(header):
             raise InputError(f"{path}: row {line} has {plural(len(raw), 'cell')} for {plural(len(header), 'column')}", "give every row one cell per column; quote cells that contain commas")
-        row = {name: cell.strip() for name, cell in zip(header, raw)}
+        row = {name: strip_ws(cell) for name, cell in zip(header, raw)}
         for name in ("alternative", "metric"):
             if not row[name]:
                 raise InputError(f"{path}: row {line} has no {name}", f"every row names its {name}")
@@ -2471,7 +2477,7 @@ def comparison_from_csv(path: Path, base: dict | None = None) -> dict:
             if not isinstance(n, int) or n < 0:
                 raise InputError(f'{path}: row {line}: n "{clip(row["n"])}" is not a whole number of trials', "n is the trials behind a count, such as 400")
         alt = row["alternative"]
-        group = [part.strip() for part in row.get("group", "").split(">") if part.strip()]
+        group = [strip_ws(part) for part in row.get("group", "").split(">") if not blank(part)]
         if alt not in alternatives:
             alternatives[alt] = {"id": alt}
             out["alternatives"].append(alternatives[alt])
@@ -2582,7 +2588,7 @@ def comparison_skeleton(data: dict, check: str) -> dict:
         ),
     }
     rule = data.get("decision_rule")
-    if isinstance(rule, str) and rule.strip():
+    if isinstance(rule, str) and not blank(rule):
         out["$rule"] = rule
     out["$metrics"] = {m["id"]: m.get("kind") for m in metrics}
     out["title"] = ""
@@ -2673,7 +2679,7 @@ def main() -> int:
                 data.append(f"av-comparison={args.data}")
             if not args.spec:
                 problems = validate_comparison(comparison, {})
-            title = title or next((comparison[k] for k in ("title", "question") if isinstance(comparison.get(k), str) and comparison[k].strip()), None)
+            title = title or next((comparison[k] for k in ("title", "question") if isinstance(comparison.get(k), str) and not blank(comparison[k])), None)
         if args.narrative:
             narrative = load(args.narrative, "--narrative", strict=args.check)
             # With --general the narrative names the comparison the page derives from the trial
@@ -2688,7 +2694,7 @@ def main() -> int:
             diagrams |= uses_diagrams(collection)
             if not args.spec:
                 problems = validate_collection(collection)
-            title = title or (collection.get("title") if isinstance(collection.get("title"), str) and collection["title"].strip() else None)
+            title = title or (collection.get("title") if isinstance(collection.get("title"), str) and not blank(collection["title"]) else None)
         if args.spec:
             spec = load(args.spec, "--spec", strict=args.check)
             if not isinstance(spec, dict) or not isinstance(spec.get("sections"), list) or not isinstance(spec.get("title"), str):

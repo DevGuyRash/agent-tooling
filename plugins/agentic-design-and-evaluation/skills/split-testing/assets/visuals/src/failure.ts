@@ -7,7 +7,7 @@
  * checks that did not hold, or the judge, and an invalid run names the reason
  * trial.py recorded instead of a result. Nothing here is guessed: a failed run
  * whose data name no cause says so. */
-import { entriesOf } from "./core";
+import { entriesOf, stripText, WS_RUN } from "./core";
 import { invalidReason } from "./trial-model";
 import type { TrialRun, TrialScenario } from "./trial-model";
 
@@ -53,7 +53,7 @@ export function judgeFailed(run: TrialRun, scenario?: TrialScenario): boolean {
 
 /** Collapse whitespace so a value reads as one line. */
 export function oneLine(value: unknown): string {
-  return (typeof value === "string" ? value : value === null || value === undefined ? "" : String(value)).replace(/\s+/g, " ").trim();
+  return stripText((typeof value === "string" ? value : value === null || value === undefined ? "" : String(value)).replace(WS_RUN, " "));
 }
 
 /** At most `max` characters: whole sentences where they fit, else a clause, else

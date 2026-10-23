@@ -729,6 +729,43 @@ class IdentifierSweepTest(unittest.TestCase):
         self.assertFalse(failures, f"{len(failures)} of {checked} entries fail; the first:\n" + "\n".join(failures[:12]))
 
 
+# Every required text field, given each whitespace character alone, all of them together, or visible text: report.py's
+# checker finds exactly what the page's checker finds (validate.cjs holds the page's checker and the drawn page to agree).
+class BlankTextSweepTest(unittest.TestCase):
+    def test_every_required_text_field_and_whitespace(self) -> None:
+        trial = json.loads((EXAMPLES / "fictional-trial.json").read_text(encoding="utf-8"))
+        narrative = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
+        sandwich = json.loads((EXAMPLES / "comparisons" / "sandwich.json").read_text(encoding="utf-8"))
+        told = json.loads((EXAMPLES / "comparisons" / "sandwich-narrative.json").read_text(encoding="utf-8"))
+        arm = next(iter(narrative["story"]["alternatives"]))
+        values = [*R.WHITESPACE, R.WHITESPACE, "Visible."]
+        story = lambda k, v: {**narrative, "story": {**narrative["story"], k: v}}  # noqa: E731
+        fields = [
+            ("a trial narrative's reading", lambda v: {"kind": "narrative", "input": {**narrative, "readings": {**narrative["readings"], "setup": v}}, "trial": trial}),
+            ("a comparison narrative's reading", lambda v: {"kind": "comparison", "input": sandwich, "narrative": {**told, "readings": {**told["readings"], "results": v}}}),
+            *[(f"the story's {k}", (lambda k: lambda v: {"kind": "narrative", "input": story(k, v), "trial": trial})(k)) for k in ("background", "intent", "rule", "covers", "notCovered")],
+            ("the story's question", lambda v: {"kind": "narrative", "input": story("questions", [v]), "trial": trial}),
+            ("an arm's description", lambda v: {"kind": "narrative", "input": story("alternatives", {**narrative["story"]["alternatives"], arm: v}), "trial": trial}),
+            ("a text view's text", lambda v: {"kind": "spec", "input": {"title": "T", "sections": [{"title": "S", "reading": "r", "blocks": [{"type": "text", "text": v}]}]}}),
+            ("a specification's title", lambda v: {"kind": "spec", "input": {"title": v, "sections": []}}),
+            ("a collection's reading", lambda v: {"kind": "collection", "input": {**id_base_collection(), "readings": {"glance": v}}}),
+        ]
+        entries = [(name, repr(v), make(v)) for name, make in fields for v in values]
+        with Scratch() as directory:
+            file = directory / "blank.json"
+            file.write_text(json.dumps([e for _, _, e in entries]), encoding="utf-8")
+            result = run_node(TESTS / "validate.cjs", "--ids", file, "--out", directory / "page.json", timeout=300)
+            self.assertEqual(result.returncode, 0, result.stderr[-3000:])
+            page = json.loads((directory / "page.json").read_text(encoding="utf-8"))
+        differ = []
+        for (name, value, e), theirs in zip(entries, page):
+            ours = (R.validate_narrative(e["input"], e["trial"]) if e["kind"] == "narrative" else R.validate_comparison(e["input"], e["narrative"]) if e["kind"] == "comparison"
+                    else R.validate_spec(e["input"]) if e["kind"] == "spec" else R.validate_collection(e["input"]))
+            if ours != theirs:
+                differ.append(f"{name} = {value}:\n  report.py: {json.dumps(ours)[:400]}\n  page:      {json.dumps(theirs)[:400]}")
+        self.assertFalse(differ, f"{len(differ)} of {len(entries)} differ; the first:\n" + "\n".join(differ[:6]))
+
+
 class TrialEntryTest(unittest.TestCase):
     def test_report_check_refuses_a_borrowed_trial_run_naming_no_scenario(self) -> None:
         trial = {"runs": [{"job": "j1", "arm": "a", "scenario": "c1", "repeat": 1, "passed": True, "valid": True}, {"job": "j2", "arm": "a", "scenario": "", "repeat": 2, "passed": False, "valid": True}]}

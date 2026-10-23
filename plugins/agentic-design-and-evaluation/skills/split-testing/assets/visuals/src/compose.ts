@@ -13,7 +13,7 @@
  * when a narrative's include names it, since the case dossiers already place
  * every run. */
 import { resolveSections, trialSection } from "./sections";
-import { fmtInt, fmtPct, entriesOf, keysIn } from "./core";
+import { fmtInt, fmtPct, entriesOf, keysIn, stripText } from "./core";
 import { casesWords } from "./stats";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
 import { armTally, CasePair, caseChecks, casePairs, checkTable, costMeasures, displayPath, judgeFor, pairedOrder, repeatRange, ruleMentions, tally, TrialReport, trialAxes } from "./trial-model";
@@ -83,7 +83,7 @@ const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v =
 const strings = (v: unknown): string[] => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 
 /** Prose given as text or a list of paragraphs, as one text. */
-const proseText = (v: unknown): string => typeof v === "string" ? v.trim() : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).join(" ") : "";
+const proseText = (v: unknown): string => typeof v === "string" ? stripText(v) : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!stripText(x)).join(" ") : "";
 
 export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): ReportSpec {
   if (!data || !Array.isArray(data.runs)) throw new TypeError("trialReport needs the JSON that `trial.py report RUN_DIR` writes.");
@@ -146,7 +146,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   const vLabel = new Set(pairs.map(p => p.label)).size === 1 ? pairs[0].label : "more turns";
   const version = /^\+\s*/.test(vLabel) ? `with ${vLabel.replace(/^\+\s*/, "")} added` : vLabel === "more turns" ? "with more turns" : `as a variant (${vLabel})`;
   // The plan's rule, word for word; where it only points at a file the reader cannot open, the rule as the narrative states it.
-  const recorded = typeof data.plan?.decision_rule === "string" && data.plan.decision_rule.trim() ? data.plan.decision_rule : undefined;
+  const recorded = typeof data.plan?.decision_rule === "string" && stripText(data.plan.decision_rule) ? data.plan.decision_rule : undefined;
   const stated = isObject(narrative.story) ? proseText((narrative.story as Record<string, unknown>).rule) : "";
   const rule = recorded && filePointer(recorded) && stated ? stated : recorded;
 
@@ -303,7 +303,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   const ran = isObject(data.ran) ? fmtDates(data.ran.first, data.ran.last) : null;
   const written = fmtDates(data.generated_at);
   return composed({
-    title: [narrative.title, narrative.question, name].find((t): t is string => typeof t === "string" && !!t.trim()) || "Trial results",
+    title: [narrative.title, narrative.question, name].find((t): t is string => typeof t === "string" && !!stripText(t)) || "Trial results",
     kicker: typeof narrative.kicker === "string" && narrative.kicker ? narrative.kicker : `Split test${name ? ` · ${name}` : ""}`,
     summary: narrative.summary ?? shape,
     meta: [

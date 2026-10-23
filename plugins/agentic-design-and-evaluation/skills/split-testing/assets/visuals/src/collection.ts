@@ -5,7 +5,7 @@
  * members as ordinary specifications. Like the rest of the library it computes
  * only counts, pass rates with Wilson intervals and differences between rates
  * with Newcombe intervals; every decision shown is the one its narrative wrote. */
-import { fmtNum, fmtPct, isNum, median } from "./core";
+import { fmtNum, fmtPct, isNum, median, stripText } from "./core";
 import { newcombe } from "./stats";
 import { ArmRegistry } from "./model";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
@@ -153,7 +153,7 @@ export interface CollectionModel {
 
 export const MEMBER_ID = /^[A-Za-z][\w.-]*$/;
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
-const text = (v: unknown): string => typeof v === "string" ? v.trim() : isNum(v) ? String(v) : "";
+const text = (v: unknown): string => typeof v === "string" ? stripText(v) : isNum(v) ? String(v) : "";
 /** An id as written: the checks hold every id to the identifier rule (isId), so ids are compared exactly, never trimmed. */
 const idOf = (v: unknown): string => typeof v === "string" ? v : "";
 const isTrial = (v: unknown): v is TrialReport => isObject(v) && Array.isArray(v.runs);
@@ -730,7 +730,7 @@ export function compareReport(data: Collection, a: string, b: string): ReportSpe
   // The page tells its own story: what each report is about, in its own words, and why the two are read together.
   const opening = (s: MemberSummary | undefined, id: string, letter: string): string => {
     if (!s) return `**${letter}:** \`${id}\` is not a report in this collection.`;
-    const story = model.spec(s.id)?.story, bg = story ? (Array.isArray(story.background) ? story.background : [story.background]).find(x => typeof x === "string" && x.trim()) : "";
+    const story = model.spec(s.id)?.story, bg = story ? (Array.isArray(story.background) ? story.background : [story.background]).find(x => typeof x === "string" && stripText(x)) : "";
     return `**${letter}: ${s.title}${/[.?!]$/.test(s.title) ? "" : "."}** ${bg || s.question || "Its report states no background."}`;
   };
   const decided = (s: MemberSummary | undefined, letter: string) => s ? `${letter} (${s.short}): ${s.stamp}${s.headline ? `. ${s.headline}` : ""}` : `${letter}: no such report`;

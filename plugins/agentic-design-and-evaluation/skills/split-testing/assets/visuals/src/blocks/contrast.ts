@@ -3,7 +3,7 @@
  * Rows come from explicit counts, from a baseline arm, or from two named sets of
  * runs; identical arms add a "chance alone" reference. Invalid runs are left
  * out of both sides and counted beside them, never as failures. */
-import { esc, fmtInt, fmtPct, isNum, outcomeMark } from "../core";
+import { esc, fmtInt, fmtPct, isNum, outcomeMark, stripText, WS_RUN } from "../core";
 import type { RenderContext } from "../model";
 import { casesWords, countPooling, newcombe, placement, Placement } from "../stats";
 import { armCases, tally, TrialReport, TrialRun, trialAxes } from "../trial-model";
@@ -376,7 +376,7 @@ function problemList(problems: string[]): string {
 }
 
 function stripTags(html: string): string {
-  return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim().replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+  return stripText(html.replace(/<[^>]*>/g, " ").replace(WS_RUN, " ")).replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
 }
 
 function describe(side: { arms: string[] | null; cases: string[] | null }, ctx: RenderContext, caseName: (id: string) => string): string {

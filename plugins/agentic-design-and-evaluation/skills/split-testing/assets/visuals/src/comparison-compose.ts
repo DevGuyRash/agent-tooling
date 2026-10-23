@@ -9,7 +9,7 @@
  * concepts each get the same reader-first page at their own size. A narrative
  * can include, exclude, reorder (after) and append, as with the trial report. */
 import { comparisonSection, resolveSections } from "./sections";
-import { fmtInt, entriesOf, keysIn } from "./core";
+import { fmtInt, entriesOf, keysIn, stripText } from "./core";
 import type { Alternative, Case, Comparison, Metric, Observation, Preference } from "./comparison-model";
 import { alternativeIds, caseKey, casesWords, groupPath, invalidJudgments, judgmentMetric, NO_CASE, NO_CASE_WORDS, observationStatus, winMatrix } from "./comparison-stats";
 import type { ReportSpec, SectionSpec, BlockSpec, ArmSpec } from "./model";
@@ -112,8 +112,8 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
   const judgments = preferences.length + rankings.length;
   const unreached = invalidJudgments(data) + metrics.filter(m => m.kind === "preference").reduce((a, m) => a + invalidJudgments(data, m.id), 0);
   // The comparison's rule, word for word; where it only points at a file the reader cannot open, the rule as the narrative states it.
-  const recordedRule = typeof dataIn.decision_rule === "string" && dataIn.decision_rule.trim() ? dataIn.decision_rule : undefined;
-  const statedRule = isObject(narrative.story) ? (v => typeof v === "string" ? v.trim() : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!x.trim()).join(" ") : "")((narrative.story as Record<string, unknown>).rule) : "";
+  const recordedRule = typeof dataIn.decision_rule === "string" && stripText(dataIn.decision_rule) ? dataIn.decision_rule : undefined;
+  const statedRule = isObject(narrative.story) ? (v => typeof v === "string" ? stripText(v) : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!stripText(x)).join(" ") : "")((narrative.story as Record<string, unknown>).rule) : "";
   const rule = recordedRule && filePointer(recordedRule) && statedRule ? statedRule : recordedRule;
   const alert = recorded && !valid
     ? { text: `All ${plural(recorded, "observation")} are invalid, so no value can be given. Invalid observations are not failures.`, href: "#observations", link: "What was recorded" }
@@ -256,8 +256,8 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
   const groupText = topGroups.size ? ` in ${plural(topGroups.size, "group")}` : "";
   const metricText = metrics.length ? ` on ${metrics.length <= 3 ? listed(metrics.map(m => m.label || m.id)) : plural(metrics.length, "metric")}` : "";
   const shape = order.length ? `${altText}${groupText}${metricText}${caseIds.length + (namesNoCase ? 1 : 0) > 1 ? ` across ${casesWords(caseIds.length, namesNoCase)}` : ""}${recorded ? `: ${plural(recorded, "observation")}${invalid ? ` (${fmtInt(invalid)} invalid)` : ""}` : ""}${judgments ? `${recorded ? " and" : ":"} ${plural(judgments, "judgment")}` : ""}.` : undefined;
-  const question = [narrative.question, dataIn.question].find((q): q is string => typeof q === "string" && !!q.trim());
-  const title = [narrative.title, narrative.question, dataIn.title, dataIn.question].find((t): t is string => typeof t === "string" && !!t.trim()) || "Comparison";
+  const question = [narrative.question, dataIn.question].find((q): q is string => typeof q === "string" && !!stripText(q));
+  const title = [narrative.title, narrative.question, dataIn.title, dataIn.question].find((t): t is string => typeof t === "string" && !!stripText(t)) || "Comparison";
   return composed({
     title,
     kicker: typeof narrative.kicker === "string" && narrative.kicker ? narrative.kicker : "Comparison",
@@ -360,7 +360,7 @@ export function fromTrial(trial: TrialReport): Comparison {
     ...(name ? { title: name } : {}),
     alternatives, cases, metrics, observations, ...(preferences.length ? { preferences } : {}),
     ...(typeof trial.baseline === "string" && axes.arms.includes(trial.baseline) ? { baseline: trial.baseline } : {}),
-    ...(typeof plan.decision_rule === "string" && plan.decision_rule.trim() ? { decision_rule: plan.decision_rule } : {}),
+    ...(typeof plan.decision_rule === "string" && stripText(plan.decision_rule) ? { decision_rule: plan.decision_rule } : {}),
     ...(typeof trial.run_directory === "string" && trial.run_directory ? { sources: [{ label: "trial.py report", note: `run directory ${displayPath(trial.run_directory)}` }] } : {}),
   };
 }

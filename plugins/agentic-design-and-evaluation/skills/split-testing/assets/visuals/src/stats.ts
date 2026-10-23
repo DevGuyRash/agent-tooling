@@ -1,6 +1,6 @@
 /** Interval arithmetic beyond a single proportion: the difference between two
  * independent pass rates, and where its interval lies relative to a value. */
-import { fmtInt, isBlank, isNum, wilson } from "./core";
+import { fmtInt, blank, isNum, wilson } from "./core";
 
 /** The two-sided 95% normal quantile to the precision Newcombe's published
  * tables use; 1.96 moves some fourth decimals (6/7 − 2/7 gives 0.8063, not 0.8062). */
@@ -65,7 +65,7 @@ export const NO_CASE_WORDS = "evidence naming no case";
  * missing, null, empty or only spaces. Every grouping, count, weight, filter and wording of evidence by case reads its
  * case through this, so those forms are one group everywhere. */
 export function caseKey(c: unknown): string {
-  return c === undefined || c === null || (typeof c === "string" && isBlank(c)) ? NO_CASE : String(c);
+  return c === undefined || c === null || (typeof c === "string" && blank(c)) ? NO_CASE : String(c);
 }
 /** How many named cases a list of case keys holds, and whether evidence naming no case is among them. */
 export function caseSplit(ids: Iterable<string>): [number, boolean] {

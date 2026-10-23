@@ -4,7 +4,7 @@
  * input that would break a view or make it misread; a warning is input the
  * report does not use as written. report.py --check applies the same rules
  * without a browser; tests/test_validate.py keeps the two in agreement. */
-import { esc, entriesOf, isBlank, isId, keysIn } from "./core";
+import { esc, entriesOf, blank, isId, keysIn, said, stripText } from "./core";
 import type { ReportSpec } from "./model";
 import { blockTypes } from "./report";
 import { casePairs, trialArms, wellFormedPairs } from "./trial-model";
@@ -367,7 +367,7 @@ function collectionSectionsShown(collection: Obj): string[] {
 }
 /** A member's trial data, its own or its specification's. */
 const memberTrial = (m: Obj): Obj | null => isObj(m.spec) ? (isObj(m.spec.trial) && Array.isArray(m.spec.trial.runs) ? m.spec.trial : null) : isObj(m.trial) && Array.isArray(m.trial.runs) ? m.trial : null;
-const trimmed = (v: unknown) => typeof v === "string" ? v.trim() : isNumber(v) ? String(v) : "";
+const trimmed = (v: unknown) => typeof v === "string" ? stripText(v) : isNumber(v) ? String(v) : "";
 /** A member the timeline places by day: its own date, or the day its trial's runs began. */
 function dated(m: Obj): boolean {
   if (typeof m.date === "string" && isCalendarDate(m.date.slice(0, 10)) && /^\d{4}-\d{2}-\d{2}/.test(m.date)) return true;
@@ -503,11 +503,11 @@ class Checker {
     if (kind === "prose" && Array.isArray(v)) v.forEach((x, i) => { if (!isText(x)) this.type(x, "text", this.join(where, i)); });
     if (kind === "member-id" && !/^[A-Za-z][\w.-]*$/.test(v as string))
       this.add("error", where, `"${clip(v as string)}" cannot be a report id, since links name reports by id`, "start with a letter and use only letters, digits, _ . or -");
-    if (kind === "theme-id" && isBlank(v as string)) this.add("error", where, "a theme id cannot be blank, since reports join their theme by its id", "name the theme");
+    if (kind === "theme-id" && blank(v as string)) this.add("error", where, "a theme id cannot be blank, since reports join their theme by its id", "name the theme");
     if (kind === "section-id" && !/^[A-Za-z][\w:.-]*$/.test(v as string))
       this.add("warning", where, `"${clip(v as string)}" cannot be used as a section id, so the section gets a generated one`, "start with a letter and use only letters, digits, _ : . or -");
     // An id that is not blank but breaks the identifier rule is refused here; a blank one is told by its kind's own check.
-    if (ID_KINDS.includes(kind) && !isBlank(v as string) && !isId(v)) return this.add("error", where, `"${clip(v as string)}" cannot be an id: an id starts with no "$" (kept for notes) and has no whitespace at either end`, "write the id without them");
+    if (ID_KINDS.includes(kind) && !blank(v as string) && !isId(v)) return this.add("error", where, `"${clip(v as string)}" cannot be an id: an id starts with no "$" (kept for notes) and has no whitespace at either end`, "write the id without them");
     if (kind in IDS) this.id(v as string, kind, where);
   }
 
@@ -540,7 +540,7 @@ class Checker {
     for (const name of f.required || []) {
       const x = v[name];
       if (x === undefined || x === null) this.add("error", where, `missing required field "${name}"`, `required here: ${(f.required || []).join(", ")}`);
-      else if (typeof x === "string" && !x.trim() && ["text", "string", "prose", "alternative-id", "case-id", "metric-id"].includes(f.fields[name] as string))
+      else if (typeof x === "string" && !stripText(x) && ["text", "string", "prose", "alternative-id", "case-id", "metric-id"].includes(f.fields[name] as string))
         this.add("error", this.join(where, name), `"${name}" is empty`, f.empty?.[name] || "write the text the report should show, or remove the entry");
     }
     for (const [name, field] of Object.entries(f.fields)) {
@@ -699,7 +699,7 @@ export function filePointer(text: string): string | null {
 }
 /** Views that are prose or the decision itself; every other block is a view whose data needs a reading. */
 const PROSE_BLOCKS = ["text", "callout", "list", "facts", "verdict"];
-const said = (v: unknown) => (typeof v === "string" && v.trim() !== "") || (Array.isArray(v) && v.some(x => typeof x === "string" && x.trim() !== ""));
+
 const textsOf = (v: unknown): string[] => typeof v === "string" ? [v] : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
 
 function fileRefs(c: Checker, value: unknown, where: string): void {
@@ -724,8 +724,8 @@ function storyChecks(c: Checker, owner: Obj, at: string, needs: StoryNeeds): voi
   for (const k of ["background", "intent", "questions", "covers", "notCovered", ...(needs.rule ? [] : ["rule"])]) {
     const v = story[k];
     // A missing or blank required part is already reported by the shape check.
-    if (v === undefined || v === null || (k !== "rule" && typeof v === "string" && !v.trim())) continue;
-    if (k === "questions") { if (Array.isArray(v)) v.forEach((q, i) => { if (typeof q !== "string" || !q.trim()) c.add("error", c.join(c.join(where, k), i), "is blank", "write the question in plain words, or remove it"); }); }
+    if (v === undefined || v === null || (k !== "rule" && typeof v === "string" && !stripText(v))) continue;
+    if (k === "questions") { if (Array.isArray(v)) v.forEach((q, i) => { if (typeof q !== "string" || !stripText(q)) c.add("error", c.join(c.join(where, k), i), "is blank", "write the question in plain words, or remove it"); }); }
     else if (!said(v)) c.add("error", c.join(where, k), "says nothing", "write it in plain words for a reader new to this work");
   }
   const described = (key: "alternatives" | "cases", needed: Map<string, string> | null) => {
