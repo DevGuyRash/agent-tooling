@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -1044,43 +1045,75 @@ class LauncherTest(unittest.TestCase):
                 shutil.rmtree(out)
 
     def test_what_is_kept_of_a_planted_home_carries_no_attribute_the_run_set(self):
-        # an unchanged planted file, and the directories kept around it, keep their bytes but none of the user
-        # extended attributes the run could have written a credential into
+        # an unchanged planted file, and the directories kept around it, keep their bytes but no extended attribute
+        # the run could have written a credential into: neither a user attribute nor an access control list, whose
+        # named-user entries the file's owner may set to any numbers
         out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
         home = job / "harness" / "home"
         planted = home / ".store" / "planted.jsonl"
         write(planted, "planted\n")
+        token = "".join(["sess", "-", os.urandom(16).hex()]).encode()
+        entries = [(1, 7, 0xFFFFFFFF), *((2, 4, 256 * i + b) for i, b in enumerate(token)),  # one named user a byte
+                   (4, 5, 0xFFFFFFFF), (0x10, 5, 0xFFFFFFFF), (0x20, 5, 0xFFFFFFFF)]
+        acl = struct.pack("<I", 2) + b"".join(struct.pack("<HHI", *e) for e in entries)
         try:
             os.setxattr(planted, "user.probe", b"1")
+            os.setxattr(planted, "system.posix_acl_access", acl)
             os.removexattr(planted, "user.probe")
+            os.removexattr(planted, "system.posix_acl_access")
         except (AttributeError, OSError):
-            self.skipTest("no user extended attributes on this filesystem")
+            self.skipTest("no user extended attributes or access control lists on this filesystem")
         entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]}, keep_planted=True)
-        token = "".join(["sess", "-", os.urandom(16).hex()]).encode()
         for p in (planted, planted.parent, home):
             os.setxattr(p, "user.token", token)
+            os.setxattr(p, "system.posix_acl_access", acl)
+        os.setxattr(planted.parent, "system.posix_acl_default", acl)
         self.assertTrue(trial._end_copies(out, entry, marker))
         self.assertEqual(planted.read_text(), "planted\n")
         for p in (planted, planted.parent, home):
-            self.assertEqual([a for a in os.listxattr(p) if a.startswith("user.")], [], p)
+            self.assertEqual([a for a in os.listxattr(p) if not a.startswith(("security.", "trusted."))], [], p)
 
     def test_a_planted_home_partly_unreadable_or_too_large_to_note_still_starts_and_is_cleared(self):
-        # a directory setup left that nobody may read is not noted, and its run still starts; a home holding more
-        # files than a note may carry keeps none of them, so every note stays small enough for a sweep to read back
+        # a directory setup left that nobody may read, or an entry that cannot be told apart as a file or a directory,
+        # is not noted, and its run still starts; a home whose files' note would be larger than a note may carry
+        # keeps none of them, so every note stays small enough for a sweep to read back
         out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
         home = job / "harness" / "home"
         write(home / ".store" / "planted.jsonl", "planted\n")
         write(home / "locked" / "inside", "unread\n")
+        write(home / "unclassified", "unread\n")
         os.chmod(home / "locked", 0)
-        entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]}, keep_planted=True)
+        real = os.scandir
+
+        class Unclassified:  # an entry whose type needs a lookup that fails, as on some network filesystems
+            def __init__(self, e):
+                self.path, self.name = e.path, e.name
+
+            def is_dir(self, follow_symlinks=True):
+                raise PermissionError("cannot look it up")
+            is_file = is_symlink = is_dir
+
+        class Listing:
+            def __init__(self, path):
+                self.it = real(path)
+
+            def __enter__(self):
+                return iter([Unclassified(e) if e.name == "unclassified" else e for e in self.it])
+
+            def __exit__(self, *a):
+                self.it.close()
+        with mock.patch.object(trial.os, "scandir", Listing):
+            entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]}, keep_planted=True)
         self.assertEqual(list(entry["planted"]), ["runs/r0123456789abcdef/harness/home/.store/planted.jsonl"])
         self.assertTrue(trial._end_copies(out, entry, marker))
         self.assertTrue((home / ".store" / "planted.jsonl").exists())
-        self.assertFalse((home / "locked").exists())
+        self.assertFalse((home / "locked").exists() or (home / "unclassified").exists())
         write(home / ".store" / "second.jsonl", "planted\n")
-        with mock.patch.object(trial, "PLANTED_MAX", 1):
+        budget = len(json.dumps(trial._planted(out, home, []))) - 1  # the note of both files is one byte too large
+        with mock.patch.object(trial, "PLANTED_BYTES", budget):
             entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]}, keep_planted=True)
         self.assertEqual(entry["planted"], {})
+        self.assertEqual(trial._journal_entry(json.loads(marker.read_text())), entry)  # as a sweep reads it back
         self.assertTrue(trial._end_copies(out, entry, marker))
         self.assertFalse((home / ".store").exists())
 

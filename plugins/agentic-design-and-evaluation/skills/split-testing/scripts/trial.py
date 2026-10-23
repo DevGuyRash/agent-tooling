@@ -1975,7 +1975,7 @@ def _start_copies(out: Path, job_dir: Path, arm: dict, awaiting: Path | None = N
     return entry, marker
 
 
-PLANTED_MAX = 10_000  # planted files a credential journal note may name, so it stays far below READ_LIMIT
+PLANTED_BYTES = 4 * 1024 ** 2  # the most a note of planted files may take as JSON, far below READ_LIMIT
 
 
 def _planted(out: Path, home: Path, keep: list[Path]) -> dict[str, str]:
@@ -1984,10 +1984,11 @@ def _planted(out: Path, home: Path, keep: list[Path]) -> dict[str, str]:
     directory, with the digest of its bytes; reached through real directories only, and one that cannot be read whole,
     or lies in a directory that cannot be read, is left out. Setup is never given a credential, so a file still byte
     for byte as it was then holds none, and clearing the home keeps it (see _clear_home). None is noted where Python
-    cannot clear the extended attributes the run could have written to it, or past PLANTED_MAX."""
+    cannot clear the extended attributes the run could have written to it, or when the note of them as JSON would
+    take more than PLANTED_BYTES."""
     if not hasattr(os, "listxattr") or not os.path.isdir(home) or os.path.islink(home):
         return {}
-    found, pending = {}, [home]
+    found, size, pending = {}, 0, [home]
     while pending:
         try:
             with os.scandir(pending.pop()) as listing:
@@ -1998,25 +1999,37 @@ def _planted(out: Path, home: Path, keep: list[Path]) -> dict[str, str]:
             path = Path(e.path)
             if any(path.is_relative_to(k) for k in keep):
                 continue
-            if e.is_dir(follow_symlinks=False):
+            try:  # some filesystems look an entry up to tell its type, which can fail
+                is_dir, is_file = e.is_dir(follow_symlinks=False), e.is_file(follow_symlinks=False)
+            except OSError:
+                continue
+            if is_dir:
                 pending.append(path)
-            elif e.is_file(follow_symlinks=False) and (data := _whole(path)) is not None:
-                if len(found) == PLANTED_MAX:
+            elif is_file and (data := _whole(path)) is not None:
+                rel = path.relative_to(out).as_posix()
+                size += len(json.dumps(rel)) + 70  # its digest, quoted, and the separators, as json.dumps writes them
+                if size > PLANTED_BYTES:
                     return {}
-                found[path.relative_to(out).as_posix()] = hashlib.sha256(data).hexdigest()
+                found[rel] = hashlib.sha256(data).hexdigest()
     return found
 
 
-def _without_user_attributes(path: Path) -> bool:
-    """Remove every extended attribute of the user namespace, the one any process of the owner's can write, from
-    `path`, never following a link, and say whether none is left; a filesystem that keeps none has none."""
+def _without_owner_attributes(path: Path) -> bool:
+    """Remove from `path`, never following a link, every extended attribute its owner could have set (user
+    attributes and access control lists among them), and say whether only those of the security and trusted
+    namespaces, which need privileges to set, are left; a filesystem that keeps none has none."""
+    fixed = ("security.", "trusted.")
     try:
-        for name in os.listxattr(path, follow_symlinks=False):
-            if name.startswith("user."):
-                os.removexattr(path, name, follow_symlinks=False)
-        return not any(n.startswith("user.") for n in os.listxattr(path, follow_symlinks=False))
+        names = os.listxattr(path, follow_symlinks=False)
     except OSError as e:
         return e.errno in (errno.ENOTSUP, errno.EOPNOTSUPP)
+    try:
+        for name in names:
+            if not name.startswith(fixed):
+                os.removexattr(path, name, follow_symlinks=False)
+        return all(n.startswith(fixed) for n in os.listxattr(path, follow_symlinks=False))
+    except OSError:
+        return False
 
 
 def _place_copies(arm: dict, home: Path, private: Path) -> tuple[set[str], dict]:
@@ -2271,8 +2284,9 @@ def _clear_home(out: Path, home_rel: str, keep: list[str], planted: dict[str, st
     link and file a transcript its record names rests on, whole, each directory it passes through, as a directory
     emptied of anything else, and `keep`, the arm's resources and stub skills, which exposure is read against; and
     each file `planted` names (see _planted) that is still that regular file, reached through real directories, with
-    the bytes it had before any credential was placed, for the checks that read it, with the user extended attributes
-    of it and of every directory kept removed (one that cannot be cleared of them is not verified gone). Whatever a
+    the bytes it had before any credential was placed, for the checks that read it, with every extended attribute its
+    owner could have set removed from it and from every directory kept (one that cannot be cleared of them is not
+    verified gone). Whatever a
     tool cached there, or the agent moved, copied, or changed there, goes. Returns what could not be
     removed (the home itself, when a link on the way keeps it from being reached), relative to the run directory."""
     st = _reach(out, home_rel)
@@ -2287,14 +2301,17 @@ def _clear_home(out: Path, home_rel: str, keep: list[str], planted: dict[str, st
     left = []
 
     def as_planted(p: Path, e) -> bool:
-        if p not in as_set or not e.is_file(follow_symlinks=False):
+        try:
+            if p not in as_set or not e.is_file(follow_symlinks=False):
+                return False
+        except OSError:
             return False
         data = _whole(p)
-        return data is not None and hashlib.sha256(data).hexdigest() == as_set[p] and _without_user_attributes(p)
+        return data is not None and hashlib.sha256(data).hexdigest() == as_set[p] and _without_owner_attributes(p)
 
     def clear(d: Path):
         _owner_rwx(d)  # resources sit read-only in it for the agent's sake
-        if as_set and not _without_user_attributes(d):  # kept, it carries nothing the run wrote to it
+        if as_set and not _without_owner_attributes(d):  # kept, it carries nothing the run wrote to it
             left.append(d.relative_to(out).as_posix())
         try:
             entries = list(os.scandir(d))
