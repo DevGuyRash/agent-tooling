@@ -53,6 +53,7 @@ class InstalledArtifact:
     root: Path | None = None
     scope: str | None = None
     project_path: Path | None = None
+    enabled: bool = True  # false only when the host reports the user disabled it
 
 
 @dataclasses.dataclass(frozen=True)
@@ -334,7 +335,7 @@ def discover(host: str, command: str, environment: Mapping[str, str], *,
             root = candidate if candidate.is_dir() else None
         if plugin_id in installed:
             raise InstallError(f"ambiguous duplicate installed identity in the requested scope: {plugin_id}")
-        installed[plugin_id] = InstalledArtifact(version, root, scope, project_path)
+        installed[plugin_id] = InstalledArtifact(version, root, scope, project_path, item.get("enabled") is not False)
     match = matches[0] if matches else None
     return HostState(command, marketplace_source(match) if match else None, bool(match), installed, len(installed_items))
 
@@ -847,13 +848,18 @@ def resolved_source(
         yield root
 
 
-def selected_agent_plan(root: Path, selected: Mapping[str, Identity], args: argparse.Namespace, environment: Mapping[str, str]) -> agent_install.AgentPlan:
+def selected_agent_plan(root: Path, selected: Mapping[str, Identity], args: argparse.Namespace, environment: Mapping[str, str],
+                        state: HostState | None = None) -> agent_install.AgentPlan:
     models = plugin_port.agent_model_map(args.agent_model)
     catalog = json.loads((root / '.agents/plugins/marketplace.json').read_text())
     owners = {}
     for entry in catalog['plugins']:
         owner = entry['name'] + '@' + MARKETPLACE
         if owner not in selected:
+            continue
+        installed = state.installed.get(owner) if state else None
+        if installed is not None and not installed.enabled:
+            owners[owner] = {}  # disabled in Codex: no agents of its own are active, and any it had are removed
             continue
         plugin_root = source_path(root, entry['source'])
         documents = plugin_port.agent_documents(plugin_root, 'codex', models, namespace=entry['name'], source_host=plugin_port.detect_plugin(plugin_root).host)
@@ -890,7 +896,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         raise InstallError(f"missing required command: {command_name}")
                     state = discover(host, str(Path(command).resolve()), environment, claude_scope=args.claude_scope, claude_project_path=args.claude_project_path)
                     plans.append(plan_host(host, state, plugins, receipt, args))
-                agents = selected_agent_plan(root, selected["codex"], args, environment) if selected.get("codex") else None
+                codex_state = next((plan.state for plan in plans if plan.host == "codex"), None)
+                agents = selected_agent_plan(root, selected["codex"], args, environment, codex_state) if selected.get("codex") else None
                 if agents and agents.changes:
                     log(f"Codex custom agents: {len(agents.changes) - (agent_install.RECEIPT in agents.changes)} owned file change(s)")
                 with contextlib.ExitStack() as protections:
