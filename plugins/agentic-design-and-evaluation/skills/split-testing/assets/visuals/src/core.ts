@@ -53,13 +53,32 @@ export const said = (v: unknown): boolean => (typeof v === "string" && !blank(v)
 const WS_CLASS = [...WHITESPACE].map(ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
 /** A run of WHITESPACE, for collapsing it to one space. */
 export const WS_RUN = new RegExp(`[${WS_CLASS}]+`, "g");
-/** The day a date names, as every view and both checks read one: WHITESPACE padding aside, a real calendar day written
- * YYYY-MM-DD, alone or followed by a time ("T09:30:00Z" or " 10:00"); otherwise null (2026-02-30 is not a day). */
-export function calendarDay(v: unknown): string | null {
-  const m = typeof v === "string" ? /^(\d{4})-(\d{2})-(\d{2})(?=$|[T ])/.exec(stripText(v)) : null;
+/** A date as written: a day YYYY-MM-DD, then optionally "T" or a space and a time HH:MM, then optionally :SS and a
+ * fraction, then optionally Z or an offset ±HH:MM. */
+const DATE_TEXT = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+const pad = (n: number, width: number) => String(n).padStart(width, "0");
+/** A date as every view and both checks read one: WHITESPACE padding aside, DATE_TEXT naming a real calendar day and,
+ * when a time follows, a real time (hours to 23, minutes and seconds to 59, offset hours to 23 and minutes to 59; no
+ * zone is UTC). A day alone is that calendar day, with no time. A day with a time is the instant it names: `time` is
+ * that instant (ms) and `day` its day in UTC, so the day, the order and the time shown agree. The day must fall within
+ * 0001-01-01 and 9999-12-31; anything else is null. */
+export function readDate(v: unknown): { day: string; time: number | null } | null {
+  const m = typeof v === "string" ? DATE_TEXT.exec(stripText(v)) : null;
   if (!m) return null;
-  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
-  return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]) ? `${m[1]}-${m[2]}-${m[3]}` : null;
+  const [y, mo, d] = [m[1], m[2], m[3]].map(Number);
+  // setUTCFullYear, not Date.UTC, which reads years 0-99 as 1900-1999.
+  const at = new Date(0);
+  at.setUTCFullYear(y, mo - 1, d);
+  if (y < 1 || at.getUTCFullYear() !== y || at.getUTCMonth() !== mo - 1 || at.getUTCDate() !== d) return null;
+  if (m[4] === undefined) return { day: `${m[1]}-${m[2]}-${m[3]}`, time: null };
+  const [h, mi, s] = [m[4], m[5], m[6] ?? "0"].map(Number);
+  const zone = m[8] && m[8] !== "Z" ? m[8] : "";
+  const [zh, zm] = zone ? [Number(zone.slice(1, 3)), Number(zone.slice(4))] : [0, 0];
+  if (h > 23 || mi > 59 || s > 59 || zh > 23 || zm > 59) return null;
+  const offset = (zone.startsWith("-") ? -1 : 1) * (zh * 60 + zm);
+  const time = at.getTime() + ((h * 60 + mi - offset) * 60 + s) * 1000 + Number((m[7] ?? ".").slice(1).padEnd(3, "0").slice(0, 3));
+  const u = new Date(time), uy = u.getUTCFullYear();
+  return uy < 1 || uy > 9999 ? null : { day: `${pad(uy, 4)}-${pad(u.getUTCMonth() + 1, 2)}-${pad(u.getUTCDate(), 2)}`, time };
 }
 /** A number written as text, padded with any WHITESPACE: both checkers and every view read numeric text by this. */
 export const NUMERIC_TEXT = new RegExp(`^[${WS_CLASS}]*-?(\\d+\\.?\\d*|\\.\\d+)([eE][-+]?\\d+)?[${WS_CLASS}]*$`);

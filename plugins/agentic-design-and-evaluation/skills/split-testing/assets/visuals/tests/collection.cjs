@@ -257,7 +257,7 @@ test("an explicit members list keeps its order in every grouped view", () => {
 
 test("an impossible date is no date: the checker warns and the timeline draws the report undated", () => {
   const data = collection(); data.members[1].date = "2026-02-30";
-  H.equal(H.plain(V.validateCollection(data)).filter(p => p.where === "collection.members[1].date").map(p => p.message), ['"2026-02-30" is not a calendar date written YYYY-MM-DD, so it is not used'], "warning");
+  H.equal(H.plain(V.validateCollection(data)).filter(p => p.where === "collection.members[1].date").map(p => p.message), ['"2026-02-30" is not a calendar day written YYYY-MM-DD, alone or with a time such as T09:30:00Z, so it is not used'], "warning");
   const html = render({ type: "timeline" }, data);
   H.excludes(html, "could not render", "a render failure");
   H.equal([...html.matchAll(/class="av-tl-date">([^<]+)</g)].map(m => m[1].replace(/^\w+,? /, "")), ["15 Oct 2026", "17 Oct 2026"], "beta falls back to its data's own day, 15 Oct");
@@ -1166,8 +1166,66 @@ test("a member's date is read one way by the timeline, the section it draws and 
   H.equal(H.plain(V.collectionModel(collection(["2026-01-01T09:30:00Z", "2026-01-02 10:00"])).members.map(m => m.date)), ["2026-01-01", "2026-01-02"], "a day with its time");
   for (const odd of ["2026-02-30", "2026-01-011", "01/02/2026", "x 2026-01-01"]) {
     const data = collection([odd, "2026-01-02"]);
-    H.equal(said(data), [`warning collection.members[0].date: "${odd}" is not a calendar date written YYYY-MM-DD, so it is not used`], `${odd}: unused, and said to be`);
+    H.equal(said(data), [`warning collection.members[0].date: "${odd}" is not a calendar day written YYYY-MM-DD, alone or with a time such as T09:30:00Z, so it is not used`], `${odd}: unused, and said to be`);
     H.ok(!V.collectionReport(data).sections.some(s => s.id === "timeline"), `${odd}: no timeline from one dated report`);
+  }
+});
+
+test("a time is placed, ordered and shown by the one instant it names, in UTC", () => {
+  // Every expected day, order and time below is worked out by hand from the written values.
+  const story = { background: "b", intent: "i", questions: ["q"], covers: "c", notCovered: "n" };
+  const told = { story: { ...story, alternatives: { a: "A." }, cases: { c1: "C." } }, readings: { setup: "s", cases: "c", runs: "r" }, decision: { verdict: "adopt", headline: "H." } };
+  const runs = [{ job: "j1", arm: "a", scenario: "c1", repeat: 1, passed: true, valid: true }];
+  const all = { glance: "g", reports: "r", shifts: "s", timeline: "t" };
+  const collection = (members, readings = all) => ({ story, readings, members: members.map((m, i) => ({ id: `m${i}`, narrative: told, ...m, trial: { runs, ...m.trial } })) });
+  const ran = first => ({ trial: { ran: { first, last: first } } });
+  const said = data => H.plain(V.validateCollection(data)).filter(p => p.where === "collection.readings" || /\.date$/.test(p.where)).map(p => `${p.level} ${p.where}: ${p.message}`);
+  const placed = data => {
+    const html = render({ type: "timeline" }, data), model = V.collectionModel(data);
+    return {
+      days: [...html.matchAll(/class="av-tl-date">([^<]+)</g)].map(m => m[1]),
+      order: [...html.matchAll(/class="av-tl-title"><a href="#report\/([\w.-]+)"/g)].map(m => m[1]),
+      shown: [...html.matchAll(/class="av-tl-meta">(?:<span>(\d\d:\d\d UTC)<\/span>)?/g)].map(m => m[1] || ""),
+      dates: model.members.map(m => m.date), times: model.members.map(m => m.time), cards: model.members.map(m => m.dates),
+    };
+  };
+  // The reviewer's two runs: A began at 23:30 on 1 Jan at UTC-8, which is 07:30 on 2 Jan in UTC; B began at 00:15 on
+  // 2 Jan in UTC. Both fall on 2 Jan, B first, and A's card says 2 Jan as its timeline entry does.
+  const reviewer = collection([ran("2026-01-01T23:30:00-08:00"), ran("2026-01-02T00:15:00Z")]);
+  H.equal(said(reviewer), [], "both checks: nothing to say");
+  H.equal(placed(reviewer), { days: ["Fri, 2 Jan 2026"], order: ["m1", "m0"], shown: ["00:15 UTC", "07:30 UTC"], dates: ["2026-01-02", "2026-01-02"], times: [Date.UTC(2026, 0, 2, 7, 30), Date.UTC(2026, 0, 2, 0, 15)], cards: ["2 Jan 2026", "2 Jan 2026"] }, "an offset time is placed by its instant in UTC");
+  // A time with no zone is UTC wherever the page is read: in a time zone 14 hours ahead it is still 00:15 on 2 Jan.
+  const zone = process.env.TZ;
+  process.env.TZ = "Pacific/Kiritimati";
+  try {
+    H.equal(placed(collection([ran("2026-01-02 00:15"), ran("2026-01-01T23:30")])), { days: ["Thu, 1 Jan 2026", "Fri, 2 Jan 2026"], order: ["m1", "m0"], shown: ["23:30 UTC", "00:15 UTC"], dates: ["2026-01-02", "2026-01-01"], times: [Date.UTC(2026, 0, 2, 0, 15), Date.UTC(2026, 0, 1, 23, 30)], cards: ["2 Jan 2026", "1 Jan 2026"] }, "a time with no zone is UTC");
+  } finally { if (zone === undefined) delete process.env.TZ; else process.env.TZ = zone; }
+  // A member's own date is read by the same rule: its instant gives its day and its shown time. A day alone has no time,
+  // and comes before the timed reports of its day.
+  H.equal(placed(collection([{ date: "2026-01-01T23:30:00.250-08:00", ...ran("2026-01-01T00:00:00Z") }, { date: "2026-01-02" }])), { days: ["Fri, 2 Jan 2026"], order: ["m1", "m0"], shown: ["", "07:30 UTC"], dates: ["2026-01-02", "2026-01-02"], times: [Date.UTC(2026, 0, 2, 7, 30, 0, 250), null], cards: ["2 Jan 2026", "2 Jan 2026"] }, "a member's own date with a time");
+  // Years 0001-0099 are real years: both checks use the dates (so the timeline's reading is required), the cards and the
+  // headings write the year in full, and the times of one day still run in order.
+  const early = collection([{ date: "0099-01-01" }, { date: "0099-01-02" }], { glance: "g", reports: "r", shifts: "s" });
+  H.equal(said(early), ['error collection.readings: no reading for the "timeline" section'], "a year below 100 is used");
+  H.equal(placed(early), { days: ["Thu, 1 Jan 0099", "Fri, 2 Jan 0099"], order: ["m0", "m1"], shown: ["", ""], dates: ["0099-01-01", "0099-01-02"], times: [null, null], cards: ["1 Jan 0099", "2 Jan 0099"] }, "and written in full");
+  H.equal(placed(collection([ran("0099-01-02T10:00:00Z"), ran("0099-01-02T09:00:00Z")])), { days: ["Fri, 2 Jan 0099"], order: ["m1", "m0"], shown: ["09:00 UTC", "10:00 UTC"], dates: ["0099-01-02", "0099-01-02"], times: [new Date("0099-01-02T10:00:00Z").getTime(), new Date("0099-01-02T09:00:00Z").getTime()], cards: ["2 Jan 0099", "2 Jan 0099"] }, "times before 1970 in order");
+  // The time after a day is a real time: HH:MM, then :SS and a fraction if given, then Z or ±HH:MM if given. Its day is
+  // the instant's day in UTC, which must fall within 0001-01-01 and 9999-12-31.
+  const days = {
+    "2026-01-01T10:00": "2026-01-01", "2026-01-01 10:00Z": "2026-01-01", "2026-01-01T10:00:30": "2026-01-01", "2026-01-01T10:00:30.5": "2026-01-01",
+    "2026-01-01T10:00:30.123456+05:30": "2026-01-01", "2026-01-01T02:00+05:30": "2025-12-31", "2025-12-31T23:59:59.999-00:01": "2026-01-01",
+    "2024-02-28T20:00-08:00": "2024-02-29", "0001-01-01": "0001-01-01", "0001-01-01T00:30-01:00": "0001-01-01", "9999-12-31T23:30+01:00": "9999-12-31",
+    " 2026-01-01T10:00Z\u00a0": "2026-01-01", "2026-01-01 ": "2026-01-01",
+  };
+  for (const [date, day] of Object.entries(days)) {
+    const data = collection([{ date }, { date: "2026-01-02" }]);
+    H.equal(said(data), [], `${JSON.stringify(date)}: used`);
+    H.equal(V.collectionModel(data).members[0].date, day, `${JSON.stringify(date)}: the day`);
+  }
+  for (const odd of ["2026-01-01Tgarbage", "2026-01-02 rubbish", "2026-01-01T24:00", "2026-01-01T10:60", "2026-01-01T10:00:60", "2026-01-01T10", "2026-01-01T1:00", "2026-01-01T10:00+24:00", "2026-01-01T10:00+05:60", "2026-01-01T10:00+0530", "2026-01-01T10:00z", "2026-01-01T10:00:30.", "2026-01-01T", "0000-01-01", "0001-01-01T00:30+01:00", "9999-12-31T23:30-01:00"]) {
+    const data = collection([{ date: odd }, { date: "2026-01-02" }]);
+    H.equal(said(data), [`warning collection.members[0].date: "${odd}" is not a calendar day written YYYY-MM-DD, alone or with a time such as T09:30:00Z, so it is not used`], `${odd}: unused, and said to be`);
+    H.equal(V.collectionModel(data).members[0].date, null, `${odd}: no day`);
   }
 });
 

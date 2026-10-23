@@ -79,7 +79,7 @@ define("core", ["require", "exports"], function (require, exports) {
     exports.hash = hash;
     exports.slug = slug;
     exports.stripText = stripText;
-    exports.calendarDay = calendarDay;
+    exports.readDate = readDate;
     exports.entriesOf = entriesOf;
     exports.valuesIn = valuesIn;
     exports.attrs = attrs;
@@ -167,14 +167,36 @@ define("core", ["require", "exports"], function (require, exports) {
     const WS_CLASS = [...exports.WHITESPACE].map(ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
     /** A run of WHITESPACE, for collapsing it to one space. */
     exports.WS_RUN = new RegExp(`[${WS_CLASS}]+`, "g");
-    /** The day a date names, as every view and both checks read one: WHITESPACE padding aside, a real calendar day written
-     * YYYY-MM-DD, alone or followed by a time ("T09:30:00Z" or " 10:00"); otherwise null (2026-02-30 is not a day). */
-    function calendarDay(v) {
-        const m = typeof v === "string" ? /^(\d{4})-(\d{2})-(\d{2})(?=$|[T ])/.exec(stripText(v)) : null;
+    /** A date as written: a day YYYY-MM-DD, then optionally "T" or a space and a time HH:MM, then optionally :SS and a
+     * fraction, then optionally Z or an offset ±HH:MM. */
+    const DATE_TEXT = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+    const pad = (n, width) => String(n).padStart(width, "0");
+    /** A date as every view and both checks read one: WHITESPACE padding aside, DATE_TEXT naming a real calendar day and,
+     * when a time follows, a real time (hours to 23, minutes and seconds to 59, offset hours to 23 and minutes to 59; no
+     * zone is UTC). A day alone is that calendar day, with no time. A day with a time is the instant it names: `time` is
+     * that instant (ms) and `day` its day in UTC, so the day, the order and the time shown agree. The day must fall within
+     * 0001-01-01 and 9999-12-31; anything else is null. */
+    function readDate(v) {
+        const m = typeof v === "string" ? DATE_TEXT.exec(stripText(v)) : null;
         if (!m)
             return null;
-        const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
-        return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]) ? `${m[1]}-${m[2]}-${m[3]}` : null;
+        const [y, mo, d] = [m[1], m[2], m[3]].map(Number);
+        // setUTCFullYear, not Date.UTC, which reads years 0-99 as 1900-1999.
+        const at = new Date(0);
+        at.setUTCFullYear(y, mo - 1, d);
+        if (y < 1 || at.getUTCFullYear() !== y || at.getUTCMonth() !== mo - 1 || at.getUTCDate() !== d)
+            return null;
+        if (m[4] === undefined)
+            return { day: `${m[1]}-${m[2]}-${m[3]}`, time: null };
+        const [h, mi, s] = [m[4], m[5], m[6] ?? "0"].map(Number);
+        const zone = m[8] && m[8] !== "Z" ? m[8] : "";
+        const [zh, zm] = zone ? [Number(zone.slice(1, 3)), Number(zone.slice(4))] : [0, 0];
+        if (h > 23 || mi > 59 || s > 59 || zh > 23 || zm > 59)
+            return null;
+        const offset = (zone.startsWith("-") ? -1 : 1) * (zh * 60 + zm);
+        const time = at.getTime() + ((h * 60 + mi - offset) * 60 + s) * 1000 + Number((m[7] ?? ".").slice(1).padEnd(3, "0").slice(0, 3));
+        const u = new Date(time), uy = u.getUTCFullYear();
+        return uy < 1 || uy > 9999 ? null : { day: `${pad(uy, 4)}-${pad(u.getUTCMonth() + 1, 2)}-${pad(u.getUTCDate(), 2)}`, time };
     }
     /** A number written as text, padded with any WHITESPACE: both checkers and every view read numeric text by this. */
     exports.NUMERIC_TEXT = new RegExp(`^[${WS_CLASS}]*-?(\\d+\\.?\\d*|\\.\\d+)([eE][-+]?\\d+)?[${WS_CLASS}]*$`);
@@ -7835,21 +7857,21 @@ define("compose", ["require", "exports", "sections", "core", "stats", "trial-mod
     /** The section a name stands for (an earlier id still names a default section). */
     const alias = sections_1.trialSection;
     const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    /** A date range in words (UTC), such as "4–5 Oct 2026"; unreadable dates are shown as written. */
+    /** A date range in words, such as "4–5 Oct 2026": each end's day by the one date rule (core.ts readDate), so a time
+     * is placed on its day in UTC, and the year is written in full. An unreadable first date is shown as written. */
     function fmtDates(first, last) {
-        const read = (v) => { if (typeof v !== "string" || !v)
-            return null; const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d; };
-        const a = read(first), b = read(last) || a;
+        const a = (0, core_18.readDate)(first)?.day, b = (0, core_18.readDate)(last)?.day || a;
         if (!a || !b)
             return typeof first === "string" && first ? String(first) : null;
-        const day = (d) => d.getUTCDate(), mon = (d) => MONTHS[d.getUTCMonth()], yr = (d) => d.getUTCFullYear();
-        if (a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10))
-            return `${day(a)} ${mon(a)} ${yr(a)}`;
-        if (yr(a) === yr(b) && mon(a) === mon(b))
-            return `${day(a)}–${day(b)} ${mon(a)} ${yr(a)}`;
-        if (yr(a) === yr(b))
-            return `${day(a)} ${mon(a)} – ${day(b)} ${mon(b)} ${yr(a)}`;
-        return `${day(a)} ${mon(a)} ${yr(a)} – ${day(b)} ${mon(b)} ${yr(b)}`;
+        const [ya, ma, da] = a.split("-"), [yb, mb, db] = b.split("-");
+        const day = (d) => Number(d), mon = (m) => MONTHS[Number(m) - 1];
+        if (a === b)
+            return `${day(da)} ${mon(ma)} ${ya}`;
+        if (ya === yb && ma === mb)
+            return `${day(da)}–${day(db)} ${mon(ma)} ${ya}`;
+        if (ya === yb)
+            return `${day(da)} ${mon(ma)} – ${day(db)} ${mon(mb)} ${ya}`;
+        return `${day(da)} ${mon(ma)} ${ya} – ${day(db)} ${mon(mb)} ${yb}`;
     }
     const isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
     const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : [];
@@ -8436,7 +8458,7 @@ define("comparison-compose", ["require", "exports", "sections", "core", "compari
 define("collection", ["require", "exports", "core", "stats", "model", "trial-model", "comparison-stats", "compose", "comparison-compose", "blocks/trial", "validate"], function (require, exports, core_20, stats_13, model_1, trial_model_11, comparison_stats_4, compose_1, comparison_compose_1, trial_1, validate_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.COLLECTION_SECTION_IDS = exports.relativeMeasure = exports.calendarDay = exports.MEMBER_ID = void 0;
+    exports.COLLECTION_SECTION_IDS = exports.relativeMeasure = exports.MEMBER_ID = void 0;
     exports.usableMembers = usableMembers;
     exports.measureDomain = measureDomain;
     exports.collectionModel = collectionModel;
@@ -8452,7 +8474,6 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
     exports.collectionReport = collectionReport;
     exports.memberReport = memberReport;
     exports.compareReport = compareReport;
-    Object.defineProperty(exports, "calendarDay", { enumerable: true, get: function () { return core_20.calendarDay; } });
     exports.MEMBER_ID = /^[A-Za-z][\w.-]*$/;
     const isObject = (v) => !!v && typeof v === "object" && !Array.isArray(v);
     const text = (v) => typeof v === "string" ? (0, core_20.stripText)(v) : (0, core_20.isNum)(v) ? String(v) : "";
@@ -8708,20 +8729,20 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             const all = (0, trial_model_11.tally)(t.runs.filter((r) => isObject(r)));
             const costs = t.runs.map(r => isObject(r) ? (0, trial_model_11.costUsd)(r) : null).filter(core_20.isNum);
             const pct = (id) => { const v = t.pct_vs_baseline?.[id]?.cost_usd?.median ?? t.pct_vs_baseline?.[id]?.total_cost_usd?.median; return (0, core_20.isNum)(v) && t.baseline === baseline ? v : null; };
-            const first = text(t.ran?.first) || text(t.generated_at);
-            const time = Date.parse(first), set = (0, core_20.calendarDay)(m.date);
+            // The member's own date, else the time its runs began, read by the one date rule (core.ts readDate) as the checks read them.
+            const first = text(t.ran?.first) || text(t.generated_at), given = (0, core_20.readDate)(m.date), when = given || (0, core_20.readDate)(first);
             return {
                 ...base, ...own(text(t.name)), kind, question: custom ? "" : text(narrative.question),
-                date: set || (0, core_20.calendarDay)(first), time: set || Number.isNaN(time) ? null : time,
-                dates: set ? (0, compose_1.fmtDates)(set) : (0, compose_1.fmtDates)(t.ran?.first || t.generated_at, t.ran?.last),
+                date: when?.day ?? null, time: when?.time ?? null,
+                dates: given ? (0, compose_1.fmtDates)(given.day) : (0, compose_1.fmtDates)(first, t.ran?.last),
                 runs: all.runs, valid: all.valid, invalid: all.invalid, noun: "runs", evidence: [{ n: all.runs, noun: "run", invalid: all.invalid }],
                 models: listed || [...new Set(rows.map(r => r.lane).filter(Boolean))], judge: text(t.plan?.judge?.model) || null,
                 metric: "pass rate", measure: PASS_RATE, rows, baseline, gains: trialGains(rows, baseline, pct),
                 cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null, cases, noCase,
             };
         }
-        const set = (0, core_20.calendarDay)(m.date);
-        const common = { date: set, time: null, dates: set ? (0, compose_1.fmtDates)(set) : null, models: listed || [], judge: null, cost: null };
+        const given = (0, core_20.readDate)(m.date);
+        const common = { date: given?.day ?? null, time: given?.time ?? null, dates: given ? (0, compose_1.fmtDates)(given.day) : null, models: listed || [], judge: null, cost: null };
         if (!c) {
             return { ...base, ...own(""), ...common, kind, question: "", runs: 0, valid: 0, invalid: 0, noun: "observations", evidence: [], metric: "", measure: null, rows: [], baseline: null, gains: [], cases, noCase };
         }
@@ -9103,7 +9124,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         };
     }
 });
-define("blocks/collection", ["require", "exports", "core", "model", "report", "collection", "comparison-stats", "blocks/trial", "blocks/frame"], function (require, exports, core_21, model_2, report_1, collection_1, comparison_stats_5, trial_2, frame_9) {
+define("blocks/collection", ["require", "exports", "core", "model", "report", "compose", "collection", "comparison-stats", "blocks/trial", "blocks/frame"], function (require, exports, core_21, model_2, report_1, compose_2, collection_1, comparison_stats_5, trial_2, frame_9) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.INDEX_LAYOUTS = void 0;
@@ -9420,14 +9441,16 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
         return (0, frame_9.frame)("cost-gain", input, `${plot}<p class="av-muted av-cg-read">Vertical whiskers are 95% intervals of the pass-rate change; one that crosses the middle line could be chance. Cost changes are each trial's median over its cases of the per-case difference in cost per run.</p>${key}${note}`);
     }
     // ------------------------------------------------------------------ timeline
-    const DAY = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+    /** A day's weekday; the day itself is written by fmtDates, with its year in full (Intl writes the year 99 as "99"). */
+    const WEEKDAY = new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone: "UTC" });
     function timeline(input, ctx) {
         const model = need(ctx, "timeline");
         const ms = (0, collection_1.selectMembers)(model, input);
         if (!ms.length)
             return (0, frame_9.frame)("timeline", input, (0, frame_9.empty)("No report to show."));
-        const key = (s) => `${s.date || "9999"}|${String(s.time ?? 0).padStart(15, "0")}|${String(s.index).padStart(5, "0")}`;
-        const sorted = [...ms].sort((a, b) => key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0);
+        // By day (undated last), then by the instant each began (a day with no time first), then as listed.
+        const cmp = (a, b) => a < b ? -1 : a > b ? 1 : 0;
+        const sorted = [...ms].sort((a, b) => cmp(a.date === null ? 1 : 0, b.date === null ? 1 : 0) || cmp(a.date ?? "", b.date ?? "") || cmp(a.time ?? -Infinity, b.time ?? -Infinity) || a.index - b.index);
         const days = [];
         for (const s of sorted) {
             const last = days[days.length - 1];
@@ -9443,7 +9466,7 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
             const time = (0, core_21.isNum)(s.time) ? new Date(s.time).toISOString().slice(11, 16) + " UTC" : "";
             return `<li class="av-tl-item av-cx-v--${s.verdict}"><span class="av-tl-dot" aria-hidden="true">${trial_2.verdictIcons[s.verdict]}</span><div class="av-tl-body"><p class="av-tl-meta">${time ? `<span>${time}</span>` : ""}${themeLabel(s.theme) ? `<span>${(0, core_21.esc)(themeLabel(s.theme))}</span>` : ""}</p><p class="av-tl-title"><a href="${open(s.id)}">${(0, core_21.esc)(s.short)}</a> ${stampHtml(s)}</p>${s.headline ? `<p class="av-tl-head">${(0, core_21.inline)(s.headline)}</p>` : ""}${before ? `<p class="av-tl-link">↳ Follows <a href="${open(before.id)}">${(0, core_21.esc)(before.short)}</a> (${(0, core_21.esc)(before.stamp)}) · <a href="${pairHref(before.id, s.id)}">compare before and after</a></p>` : ""}${after.length ? `<p class="av-tl-link">Followed up by ${after.map(x => `<a href="${open(x.id)}">${(0, core_21.esc)(x.short)}</a>`).join(", ")}</p>` : ""}</div></li>`;
         };
-        return (0, frame_9.frame)("timeline", input, `<ol class="av-tl">${days.map(([d, list]) => `<li class="av-tl-day"><h3 class="av-tl-date">${d ? (0, core_21.esc)(DAY.format(new Date(`${d}T00:00:00Z`))) : "Date not recorded"}</h3><ol class="av-tl-items">${list.map(item).join("")}</ol></li>`).join("")}</ol>`);
+        return (0, frame_9.frame)("timeline", input, `<ol class="av-tl">${days.map(([d, list]) => `<li class="av-tl-day"><h3 class="av-tl-date">${d ? (0, core_21.esc)(`${WEEKDAY.format(new Date(`${d}T00:00:00Z`))}, ${(0, compose_2.fmtDates)(d)}`) : "Date not recorded"}</h3><ol class="av-tl-items">${list.map(item).join("")}</ol></li>`).join("")}</ol>`);
     }
     // ------------------------------------------------------------------ suggested pairs
     function differs(a, b) {
@@ -10048,11 +10071,11 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "sect
     const trimmed = (v) => typeof v === "string" ? (0, core_23.stripText)(v) : isNumber(v) ? String(v) : "";
     /** A member the timeline places by day: its own date, or the day its trial's runs began. */
     function dated(m) {
-        // The one date rule (calendarDay), as the timeline reads a member's date and its runs' first time.
-        if ((0, core_23.calendarDay)(m.date))
+        // The one date rule (readDate), as the timeline reads a member's date and its runs' first time.
+        if ((0, core_23.readDate)(m.date))
             return true;
         const t = memberTrial(m), ran = t && isObj(t.ran) ? t.ran : {};
-        return !!t && (0, core_23.calendarDay)(trimmed(ran.first) || trimmed(t.generated_at)) !== null;
+        return !!t && (0, core_23.readDate)(trimmed(ran.first) || trimmed(t.generated_at)) !== null;
     }
     /** Whether a member draws a point on the cost-against-gain view: a setup measured against its reference on the same
      * model, both with valid runs, and the trial's own cost difference against that reference. */
@@ -11451,8 +11474,8 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "sect
                 c.add("error", at, 'has more than one of "trial", "comparison" and "spec"', "a report draws one trial, one comparison or one specification; make them separate reports");
             else if (!sources)
                 c.add("error", at, 'missing "trial", "comparison" or "spec"', "give the report its trial data (trial.py report), its comparison data, or a specification of its own");
-            if (typeof m.date === "string" && !(0, core_23.calendarDay)(m.date))
-                c.add("warning", `${at}.date`, `"${clip(m.date)}" is not a calendar date written YYYY-MM-DD, so it is not used`, "write the day the runs began, such as 2026-10-15");
+            if (typeof m.date === "string" && !(0, core_23.readDate)(m.date))
+                c.add("warning", `${at}.date`, `"${clip(m.date)}" is not a calendar day written YYYY-MM-DD, alone or with a time such as T09:30:00Z, so it is not used`, "write the day the runs began, such as 2026-10-15");
             const under = (problems) => { for (const p of problems)
                 c.problems.push({ ...p, where: `${at}.${p.where}` }); };
             const narrated = m.narrative !== undefined && m.narrative !== null;
@@ -13213,7 +13236,7 @@ define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", 
     Object.defineProperty(exports, "reportCompare", { enumerable: true, get: function () { return collection_3.reportCompare; } });
     Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_10.frame; } });
 });
-define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_27, model_5, report_4, compose_3, trial_model_14, enhance_2, figures_3, validate_6, comparison_compose_3, comparison_stats_6, collection_5, reader_2, failure_5, stats_15, diff_3, text_layout_3, blocks) {
+define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_3, comparison_compose_2, collection_4, core_27, model_5, report_4, compose_4, trial_model_14, enhance_2, figures_3, validate_6, comparison_compose_3, comparison_stats_6, collection_5, reader_2, failure_5, stats_15, diff_3, text_layout_3, blocks) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.readerRoute = exports.COLLECTION_SECTION_IDS = exports.collectionModel = exports.memberReport = exports.compareReport = exports.collectionReport = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.NO_CASE_WORDS = exports.caseSplit = exports.casesWords = exports.caseKey = exports.evidenceAs = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.reportCases = exports.validateCollection = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
@@ -13226,8 +13249,8 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
     Object.defineProperty(exports, "renderBlock", { enumerable: true, get: function () { return report_4.renderBlock; } });
     Object.defineProperty(exports, "registerBlock", { enumerable: true, get: function () { return report_4.registerBlock; } });
     Object.defineProperty(exports, "blockTypes", { enumerable: true, get: function () { return report_4.blockTypes; } });
-    Object.defineProperty(exports, "trialReport", { enumerable: true, get: function () { return compose_3.trialReport; } });
-    Object.defineProperty(exports, "SECTION_IDS", { enumerable: true, get: function () { return compose_3.SECTION_IDS; } });
+    Object.defineProperty(exports, "trialReport", { enumerable: true, get: function () { return compose_4.trialReport; } });
+    Object.defineProperty(exports, "SECTION_IDS", { enumerable: true, get: function () { return compose_4.SECTION_IDS; } });
     Object.defineProperty(exports, "casePairs", { enumerable: true, get: function () { return trial_model_14.casePairs; } });
     Object.defineProperty(exports, "pairedOrder", { enumerable: true, get: function () { return trial_model_14.pairedOrder; } });
     Object.defineProperty(exports, "invalidReason", { enumerable: true, get: function () { return trial_model_14.invalidReason; } });
@@ -13332,7 +13355,7 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
             else if (embedded("av-general") === true)
                 (0, enhance_1.mount)(target, (0, comparison_compose_2.comparisonReport)((0, comparison_compose_2.fromTrial)(trial), embedded("av-narrative") || {}));
             else
-                (0, enhance_1.mount)(target, (0, compose_2.trialReport)(trial, embedded("av-narrative") || {}));
+                (0, enhance_1.mount)(target, (0, compose_3.trialReport)(trial, embedded("av-narrative") || {}));
         }
         catch (error) {
             target.innerHTML = `<div class="av-block av-block-error" role="alert"><strong>This report could not render.</strong> ${String(error instanceof Error ? error.message : error).replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`)}</div>`;

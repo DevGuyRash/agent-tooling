@@ -105,7 +105,7 @@ class CollectionCliTest(unittest.TestCase):
         for line in ('error: collection.members[1].follows: "fictionl" is not a report in this collection', 'hint: did you mean "fictional"?',
                      'error: collection.members[3].id: "two words" cannot be a report id', 'error: collection.members[3]: has more than one of "trial", "comparison" and "spec"',
                      "error: collection.pairs[1]: pairs a report with itself", "error: collection.members[0].narrative.decision.verdict:",
-                     'warning: collection.members[1].theme: "trails" is not a theme in this collection', 'warning: collection.members[1].date: "16 Oct" is not a calendar date'):
+                     'warning: collection.members[1].theme: "trails" is not a theme in this collection', 'warning: collection.members[1].date: "16 Oct" is not a calendar day'):
             self.assertIn(line, checked.stderr)
         written = run_python(REPORT, "--collection", source, "--output", self.dir / "out.html")
         self.assertEqual(written.returncode, 0, written.stderr)
@@ -160,7 +160,7 @@ class CollectionCliTest(unittest.TestCase):
         checked = run_python(REPORT, "--check", "--spec", spec, "--collection", source)
         self.assertEqual(checked.returncode, 1, "the page checks the collection it borrows, so --check does too")
         self.assertIn('error: collection.members[1].follows: "missing" is not a report in this collection', checked.stderr)
-        self.assertIn('warning: collection.members[1].date: "2026-02-30" is not a calendar date written YYYY-MM-DD, so it is not used', checked.stderr)
+        self.assertIn('warning: collection.members[1].date: "2026-02-30" is not a calendar day written YYYY-MM-DD, alone or with a time such as T09:30:00Z, so it is not used', checked.stderr)
 
     def test_a_member_may_be_a_specification_file(self) -> None:
         source = write_collection(self.dir)

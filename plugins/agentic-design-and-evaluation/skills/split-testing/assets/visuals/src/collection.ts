@@ -5,7 +5,7 @@
  * members as ordinary specifications. Like the rest of the library it computes
  * only counts, pass rates with Wilson intervals and differences between rates
  * with Newcombe intervals; every decision shown is the one its narrative wrote. */
-import { fmtNum, fmtPct, isNum, median, stripText, calendarDay } from "./core";
+import { fmtNum, fmtPct, isNum, median, stripText, readDate } from "./core";
 import { newcombe } from "./stats";
 import { ArmRegistry } from "./model";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
@@ -31,7 +31,7 @@ export interface CollectionMember {
   label?: string;
   /** One line shown beside the decision on the member's card, such as what happened after it. */
   note?: string;
-  /** When it ran (YYYY-MM-DD), when the data's own dates do not say it right. */
+  /** When it ran (a day YYYY-MM-DD, or a time on it, by core.ts readDate), when the data's own dates do not say it right. */
   date?: string;
   /** The id of an earlier member this one follows up. */
   follows?: string;
@@ -120,7 +120,8 @@ export interface MemberSummary {
   id: string; index: number; kind: "trial" | "comparison" | "spec";
   theme: string; title: string; short: string; question: string;
   verdict: VerdictKind; stamp: string; headline: string; note: string;
-  /** ISO date (YYYY-MM-DD) and, where the data record it and no `date` replaces it, the time the runs began. */
+  /** The member's own date, else when its runs began (core.ts readDate): its day in UTC (YYYY-MM-DD) and, where a time is
+   * written, the instant (ms) that day and the time shown both come from. */
   date: string | null; time: number | null; dates: string | null;
   /** Trial runs, or a comparison's observations (valid as the comparison engine reads them). */
   runs: number; valid: number; invalid: number; noun: "runs" | "observations";
@@ -174,9 +175,6 @@ export function usableMembers(data: Collection | undefined): CollectionMember[] 
     return true;
   });
 }
-
-/** A member's day, as the checks read it too (core.ts calendarDay). */
-export { calendarDay };
 
 const PASS_RATE: MemberMeasure = { id: "passed", label: "pass rate", kind: "binary", better: "higher", unit: "", percent: true, domain: [0, 1] };
 const goodness = (d: number | null, better: MemberMeasure["better"]): boolean | null =>
@@ -397,20 +395,20 @@ function summarizeMember(m: CollectionMember, index: number, spec: ReportSpec): 
     const all = tally(t.runs.filter((r): r is TrialRun => isObject(r)));
     const costs = t.runs.map(r => isObject(r) ? costUsd(r) : null).filter(isNum);
     const pct = (id: string) => { const v = t.pct_vs_baseline?.[id]?.cost_usd?.median ?? t.pct_vs_baseline?.[id]?.total_cost_usd?.median; return isNum(v) && t.baseline === baseline ? v : null; };
-    const first = text(t.ran?.first) || text(t.generated_at);
-    const time = Date.parse(first), set = calendarDay(m.date);
+    // The member's own date, else the time its runs began, read by the one date rule (core.ts readDate) as the checks read them.
+    const first = text(t.ran?.first) || text(t.generated_at), given = readDate(m.date), when = given || readDate(first);
     return {
       ...base, ...own(text(t.name)), kind, question: custom ? "" : text(narrative.question),
-      date: set || calendarDay(first), time: set || Number.isNaN(time) ? null : time,
-      dates: set ? fmtDates(set) : fmtDates(t.ran?.first || t.generated_at, t.ran?.last),
+      date: when?.day ?? null, time: when?.time ?? null,
+      dates: given ? fmtDates(given.day) : fmtDates(first, t.ran?.last),
       runs: all.runs, valid: all.valid, invalid: all.invalid, noun: "runs", evidence: [{ n: all.runs, noun: "run", invalid: all.invalid }],
       models: listed || [...new Set(rows.map(r => r.lane).filter(Boolean))], judge: text(t.plan?.judge?.model) || null,
       metric: "pass rate", measure: PASS_RATE, rows, baseline, gains: trialGains(rows, baseline, pct),
       cost: costs.length ? costs.reduce((a, b) => a + b, 0) : null, cases, noCase,
     };
   }
-  const set = calendarDay(m.date);
-  const common = { date: set, time: null, dates: set ? fmtDates(set) : null, models: listed || [], judge: null, cost: null };
+  const given = readDate(m.date);
+  const common = { date: given?.day ?? null, time: given?.time ?? null, dates: given ? fmtDates(given.day) : null, models: listed || [], judge: null, cost: null };
   if (!c) {
     return { ...base, ...own(""), ...common, kind, question: "", runs: 0, valid: 0, invalid: 0, noun: "observations", evidence: [], metric: "", measure: null, rows: [], baseline: null, gains: [], cases, noCase };
   }

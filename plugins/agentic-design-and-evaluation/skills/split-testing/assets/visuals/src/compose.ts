@@ -13,7 +13,7 @@
  * when a narrative's include names it, since the case dossiers already place
  * every run. */
 import { resolveSections, trialSection } from "./sections";
-import { fmtInt, fmtPct, entriesOf, keysIn, stripText } from "./core";
+import { fmtInt, fmtPct, entriesOf, keysIn, stripText, readDate } from "./core";
 import { casesWords } from "./stats";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
 import { armTally, CasePair, caseChecks, casePairs, checkTable, costMeasures, displayPath, judgeFor, pairedOrder, repeatRange, ruleMentions, tally, TrialReport, trialAxes } from "./trial-model";
@@ -67,16 +67,17 @@ export const SECTION_IDS = ["verdict", "setup", "arms", "cases", "grid", "failur
 const alias = trialSection;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-/** A date range in words (UTC), such as "4–5 Oct 2026"; unreadable dates are shown as written. */
+/** A date range in words, such as "4–5 Oct 2026": each end's day by the one date rule (core.ts readDate), so a time
+ * is placed on its day in UTC, and the year is written in full. An unreadable first date is shown as written. */
 export function fmtDates(first?: unknown, last?: unknown): string | null {
-  const read = (v: unknown) => { if (typeof v !== "string" || !v) return null; const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d; };
-  const a = read(first), b = read(last) || a;
+  const a = readDate(first)?.day, b = readDate(last)?.day || a;
   if (!a || !b) return typeof first === "string" && first ? String(first) : null;
-  const day = (d: Date) => d.getUTCDate(), mon = (d: Date) => MONTHS[d.getUTCMonth()], yr = (d: Date) => d.getUTCFullYear();
-  if (a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10)) return `${day(a)} ${mon(a)} ${yr(a)}`;
-  if (yr(a) === yr(b) && mon(a) === mon(b)) return `${day(a)}–${day(b)} ${mon(a)} ${yr(a)}`;
-  if (yr(a) === yr(b)) return `${day(a)} ${mon(a)} – ${day(b)} ${mon(b)} ${yr(a)}`;
-  return `${day(a)} ${mon(a)} ${yr(a)} – ${day(b)} ${mon(b)} ${yr(b)}`;
+  const [ya, ma, da] = a.split("-"), [yb, mb, db] = b.split("-");
+  const day = (d: string) => Number(d), mon = (m: string) => MONTHS[Number(m) - 1];
+  if (a === b) return `${day(da)} ${mon(ma)} ${ya}`;
+  if (ya === yb && ma === mb) return `${day(da)}–${day(db)} ${mon(ma)} ${ya}`;
+  if (ya === yb) return `${day(da)} ${mon(ma)} – ${day(db)} ${mon(mb)} ${ya}`;
+  return `${day(da)} ${mon(ma)} ${ya} – ${day(db)} ${mon(mb)} ${yb}`;
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);

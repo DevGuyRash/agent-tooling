@@ -277,6 +277,16 @@ COLLECTION = {
 }
 
 
+UNTIMED = {s: "r" for s in ("glance", "reports", "shifts", "matchups")}
+DATE_EDGES = (
+    ("0099-01-01", "0099-01-02"), ("0001-01-01", "9999-12-31"), ("0000-01-01", "2026-01-01T10:00:60"),
+    ("2026-01-01T23:30:00-08:00", "2026-01-02T00:15:00Z"), ("2026-01-01T10:00:30.123456+05:30", "2026-01-02 10:00Z"),
+    ("2026-01-01Tgarbage", "2026-01-02 rubbish"), ("2026-01-01T24:00", "2026-01-01T10:60"), ("2026-01-01T10:00+24:00", "2026-01-01T10"),
+    ("2026-01-01T10:00+0530", "2026-01-01T10:00z"), ("0001-01-01T00:30+01:00", "9999-12-31T23:30-01:00"),
+    ("0001-01-01T00:30-01:00", "9999-12-31T23:30+01:00"), ("2026-01-01T10:00:30.", "2026-01-01T"), ("0099-01-02T09:00:00Z", "2024-02-28T20:00-08:00"),
+)
+
+
 def collection_corpus() -> list[dict]:
     """Field probes for a collection, its members and the collection blocks, then the cross-field rules."""
     corpus: list[dict] = [{"kind": "collection", "input": v} for v in ("x", [], None, {}, {"members": "x"})]
@@ -313,6 +323,12 @@ def collection_corpus() -> list[dict]:
         # timeline's reading is required); anything else is unused and said to be.
         *[{"kind": "collection", "input": {**COLLECTION, "members": [{**COLLECTION["members"][0], "date": d1}, {**COLLECTION["members"][1], "date": d2}, COLLECTION["members"][2]]}}
           for d1, d2 in ((" 2026-01-01", "2026-01-02\u00a0"), ("\ufeff2026-01-01", "\t2026-01-02"), ("2026-01-01T09:30:00Z", "2026-01-02 10:00"), ("2026-02-30", "2026-01-02"), ("2026-01-011", "x 2026-01-02"))],
+        # The rule's edges, as member dates and as a trial's run times, with no timeline reading so that the dates used show:
+        # years below 100, offsets that move the day (past 0001 or 9999 too), and times that are not real times.
+        *[{"kind": "collection", "input": {**COLLECTION, "readings": UNTIMED, "members": [{**COLLECTION["members"][0], "date": d1}, {**COLLECTION["members"][1], "date": d2}, COLLECTION["members"][2]]}}
+          for d1, d2 in DATE_EDGES],
+        *[{"kind": "collection", "input": {**COLLECTION, "readings": UNTIMED, "members": [{**COLLECTION["members"][0], "trial": {**TINY, "ran": {"first": d1}}}, {**COLLECTION["members"][1], "trial": {**TINY, "generated_at": d2}}, COLLECTION["members"][2]]}}
+          for d1, d2 in DATE_EDGES],
         # The bad collection of the entry-path matrix, carried and supplied beside; and its trial and comparison as members.
         {"kind": "spec", "input": {"title": "T", "sections": [], "collection": BAD_COLLECTION}, "collection": None},
         {"kind": "spec", "input": {"title": "T", "sections": []}, "collection": "bad"},
@@ -350,7 +366,7 @@ class CollectionAgreementTest(unittest.TestCase):
             "a report that follows itself": ({**COLLECTION, "members": [m1, {**m2, "follows": "m2"}, m3]}, [("error", "collection.members[1].follows", "a report cannot follow itself")]),
             "a report that follows one not in the collection": ({**COLLECTION, "members": [m1, {**m2, "follows": "m99"}, m3]}, [("error", "collection.members[1].follows", '"m99" is not a report in this collection')]),
             "an id used twice": ({**COLLECTION, "members": [m1, m2, {**m3, "id": "m1"}]}, [("error", "collection.members[2].id", 'report id "m1" is already used by an earlier report')]),
-            "an impossible date": ({**COLLECTION, "members": [{**m1, "date": "2026-02-30"}, m2, m3]}, [("warning", "collection.members[0].date", '"2026-02-30" is not a calendar date written YYYY-MM-DD, so it is not used')]),
+            "an impossible date": ({**COLLECTION, "members": [{**m1, "date": "2026-02-30"}, m2, m3]}, [("warning", "collection.members[0].date", '"2026-02-30" is not a calendar day written YYYY-MM-DD, alone or with a time such as T09:30:00Z, so it is not used')]),
             "a theme the collection does not name": ({**COLLECTION, "members": [{**m1, "theme": "nope"}, m2, m3]}, [("warning", "collection.members[0].theme", '"nope" is not a theme in this collection')]),
             "a pair of one report with itself": ({**COLLECTION, "pairs": [{"a": "m1", "b": "m1"}]}, [("error", "collection.pairs[0]", "pairs a report with itself")]),
             "a member narrative's misspelled verdict": ({**COLLECTION, "members": [{**m1, "narrative": {**m1["narrative"], "decision": {"verdict": "adpot", "headline": "H."}}}, m2, m3]},

@@ -517,17 +517,6 @@ def is_collection(v) -> bool:
     return isinstance(v, dict) and isinstance(v.get("members"), list)
 
 
-def is_calendar_date(v: str) -> bool:
-    """A real calendar day written YYYY-MM-DD: 2026-02-30 and 2026-99-99 are not."""
-    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", v, re.ASCII):
-        return False
-    try:
-        datetime.date.fromisoformat(v)
-    except ValueError:
-        return False
-    return True
-
-
 def known_from(trial, comparison=None, collection=None) -> dict:
     known = {"trial": False, "arms": [], "cases": [], "checks": [], "pairs": [], "settings": {}, "comparison": False, "alternatives": [], "metrics": [], "ccases": [], "collection": False, "members": [], "themes": [], "ran_arms": [], "ran_cases": []}
     if is_collection(collection):
@@ -1434,25 +1423,45 @@ def trimmed(v) -> str:
     return strip_ws(v) if isinstance(v, str) else number_text(v) if is_number(v) else ""
 
 
-DAY = re.compile(r"(\d{4}-\d{2}-\d{2})(?=$|[T ])", re.ASCII)
+DATE_TEXT = re.compile(r"(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?", re.ASCII)
 
 
-def calendar_day(v):
-    """The day a date names (src/core.ts calendarDay): WHITESPACE padding aside, a real calendar day written YYYY-MM-DD,
-    alone or followed by a time ("T09:30:00Z" or " 10:00"); otherwise None."""
-    m = DAY.match(strip_ws(v)) if isinstance(v, str) else None
-    return m.group(1) if m and is_calendar_date(m.group(1)) else None
+def read_date(v):
+    """The day a date names (src/core.ts readDate): WHITESPACE padding aside, a real calendar day written YYYY-MM-DD,
+    alone, or followed by "T" or a space and a real time: HH:MM, then optionally :SS and a fraction, then optionally Z
+    or an offset +HH:MM or -HH:MM (no zone is UTC). A day with a time is the instant it names, so its day is that
+    instant's day in UTC, which must fall within 0001-01-01 and 9999-12-31. Anything else is None."""
+    m = DATE_TEXT.fullmatch(strip_ws(v)) if isinstance(v, str) else None
+    if not m:
+        return None
+    try:
+        day = datetime.date(int(m[1]), int(m[2]), int(m[3]))
+    except ValueError:
+        return None
+    if m[4] is None:
+        return day.isoformat()
+    h, mi, s = int(m[4]), int(m[5]), int(m[6] or 0)
+    zone = m[8] if m[8] and m[8] != "Z" else ""
+    zh, zm = (int(zone[1:3]), int(zone[4:])) if zone else (0, 0)
+    if h > 23 or mi > 59 or s > 59 or zh > 23 or zm > 59:
+        return None
+    offset = (-1 if zone.startswith("-") else 1) * (zh * 60 + zm)
+    try:
+        at = datetime.datetime(day.year, day.month, day.day, h, mi, s) - datetime.timedelta(minutes=offset)
+    except OverflowError:
+        return None
+    return at.date().isoformat()
 
 
 def dated(m: dict) -> bool:
     """A member the timeline places by day: its own date, or the day its trial's runs began, by the one date rule."""
-    if calendar_day(m.get("date")):
+    if read_date(m.get("date")):
         return True
     t = member_trial(m)
     if not t:
         return False
     ran = t["ran"] if isinstance(t.get("ran"), dict) else {}
-    return calendar_day(trimmed(ran.get("first")) or trimmed(t.get("generated_at"))) is not None
+    return read_date(trimmed(ran.get("first")) or trimmed(t.get("generated_at"))) is not None
 
 
 def cost_shown(m: dict) -> bool:
@@ -1627,8 +1636,8 @@ def validate_collection(collection) -> list[dict]:
             c.add("error", at, 'has more than one of "trial", "comparison" and "spec"', "a report draws one trial, one comparison or one specification; make them separate reports")
         elif not sources:
             c.add("error", at, 'missing "trial", "comparison" or "spec"', "give the report its trial data (trial.py report), its comparison data, or a specification of its own")
-        if isinstance(m.get("date"), str) and not calendar_day(m["date"]):
-            c.add("warning", f"{at}.date", f'"{clip(m["date"])}" is not a calendar date written YYYY-MM-DD, so it is not used', "write the day the runs began, such as 2026-10-15")
+        if isinstance(m.get("date"), str) and not read_date(m["date"]):
+            c.add("warning", f"{at}.date", f'"{clip(m["date"])}" is not a calendar day written YYYY-MM-DD, alone or with a time such as T09:30:00Z, so it is not used', "write the day the runs began, such as 2026-10-15")
         narrated = m.get("narrative") is not None
         found_problems: list[dict] = []
         if has_spec and sources == 1:

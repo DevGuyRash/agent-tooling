@@ -4,7 +4,7 @@
  * input that would break a view or make it misread; a warning is input the
  * report does not use as written. report.py --check applies the same rules
  * without a browser; tests/test_validate.py keeps the two in agreement. */
-import { esc, entriesOf, blank, isId, keysIn, said, stripText, NUMERIC_TEXT, numberOf, calendarDay } from "./core";
+import { esc, entriesOf, blank, isId, keysIn, said, stripText, NUMERIC_TEXT, numberOf, readDate } from "./core";
 import type { ReportSpec } from "./model";
 import { blockTypes } from "./report";
 import { casePairs, trialArms, wellFormedPairs } from "./trial-model";
@@ -369,10 +369,10 @@ const memberTrial = (m: Obj): Obj | null => isObj(m.spec) ? (isObj(m.spec.trial)
 const trimmed = (v: unknown) => typeof v === "string" ? stripText(v) : isNumber(v) ? String(v) : "";
 /** A member the timeline places by day: its own date, or the day its trial's runs began. */
 function dated(m: Obj): boolean {
-  // The one date rule (calendarDay), as the timeline reads a member's date and its runs' first time.
-  if (calendarDay(m.date)) return true;
+  // The one date rule (readDate), as the timeline reads a member's date and its runs' first time.
+  if (readDate(m.date)) return true;
   const t = memberTrial(m), ran = t && isObj(t.ran) ? t.ran : {};
-  return !!t && calendarDay(trimmed(ran.first) || trimmed(t.generated_at)) !== null;
+  return !!t && readDate(trimmed(ran.first) || trimmed(t.generated_at)) !== null;
 }
 /** Whether a member draws a point on the cost-against-gain view: a setup measured against its reference on the same
  * model, both with valid runs, and the trial's own cost difference against that reference. */
@@ -1462,7 +1462,7 @@ export function validateCollection(collection: unknown): Problem[] {
     const sources = [hasTrial, hasComparison, hasSpec].filter(Boolean).length;
     if (sources > 1) c.add("error", at, 'has more than one of "trial", "comparison" and "spec"', "a report draws one trial, one comparison or one specification; make them separate reports");
     else if (!sources) c.add("error", at, 'missing "trial", "comparison" or "spec"', "give the report its trial data (trial.py report), its comparison data, or a specification of its own");
-    if (typeof m.date === "string" && !calendarDay(m.date)) c.add("warning", `${at}.date`, `"${clip(m.date)}" is not a calendar date written YYYY-MM-DD, so it is not used`, "write the day the runs began, such as 2026-10-15");
+    if (typeof m.date === "string" && !readDate(m.date)) c.add("warning", `${at}.date`, `"${clip(m.date)}" is not a calendar day written YYYY-MM-DD, alone or with a time such as T09:30:00Z, so it is not used`, "write the day the runs began, such as 2026-10-15");
     const under = (problems: Problem[]) => { for (const p of problems) c.problems.push({ ...p, where: `${at}.${p.where}` }); };
     const narrated = m.narrative !== undefined && m.narrative !== null;
     if (hasSpec && sources === 1) {

@@ -11,6 +11,7 @@ import { attrs, esc, fmtInt, fmtNum, fmtPct, fmtUsd, inline, isNum, prose, svg }
 import { createContext } from "../model";
 import type { RenderContext, ReportSpec } from "../model";
 import { renderBlock } from "../report";
+import { fmtDates } from "../compose";
 import { caseBalanced, caseCell, collectionModel, matchRows, measureDomain, measureKey, measuresApart, relativeMeasure, sameMeasure, selectGroups, selectMembers } from "../collection";
 import { caseSplit, casesWords, eachWeighted, NO_CASE } from "../comparison-stats";
 import type { CollectionModel, MemberGain, MemberMeasure, MemberRow, MemberSummary } from "../collection";
@@ -310,13 +311,15 @@ export function costGain(input: Subset, ctx: RenderContext): string {
 
 // ------------------------------------------------------------------ timeline
 
-const DAY = new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
+/** A day's weekday; the day itself is written by fmtDates, with its year in full (Intl writes the year 99 as "99"). */
+const WEEKDAY = new Intl.DateTimeFormat("en-GB", { weekday: "short", timeZone: "UTC" });
 export function timeline(input: Subset, ctx: RenderContext): string {
   const model = need(ctx, "timeline");
   const ms = selectMembers(model, input);
   if (!ms.length) return frame("timeline", input, empty("No report to show."));
-  const key = (s: MemberSummary) => `${s.date || "9999"}|${String(s.time ?? 0).padStart(15, "0")}|${String(s.index).padStart(5, "0")}`;
-  const sorted = [...ms].sort((a, b) => key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0);
+  // By day (undated last), then by the instant each began (a day with no time first), then as listed.
+  const cmp = (a: string | number, b: string | number) => a < b ? -1 : a > b ? 1 : 0;
+  const sorted = [...ms].sort((a, b) => cmp(a.date === null ? 1 : 0, b.date === null ? 1 : 0) || cmp(a.date ?? "", b.date ?? "") || cmp(a.time ?? -Infinity, b.time ?? -Infinity) || a.index - b.index);
   const days: Array<[string | null, MemberSummary[]]> = [];
   for (const s of sorted) { const last = days[days.length - 1]; if (last && last[0] === s.date) last[1].push(s); else days.push([s.date, [s]]); }
   const themeLabel = (id: string) => model.themes.find(t => t.id === id)?.label || "";
@@ -326,7 +329,7 @@ export function timeline(input: Subset, ctx: RenderContext): string {
     const time = isNum(s.time) ? new Date(s.time).toISOString().slice(11, 16) + " UTC" : "";
     return `<li class="av-tl-item av-cx-v--${s.verdict}"><span class="av-tl-dot" aria-hidden="true">${verdictIcons[s.verdict]}</span><div class="av-tl-body"><p class="av-tl-meta">${time ? `<span>${time}</span>` : ""}${themeLabel(s.theme) ? `<span>${esc(themeLabel(s.theme))}</span>` : ""}</p><p class="av-tl-title"><a href="${open(s.id)}">${esc(s.short)}</a> ${stampHtml(s)}</p>${s.headline ? `<p class="av-tl-head">${inline(s.headline)}</p>` : ""}${before ? `<p class="av-tl-link">↳ Follows <a href="${open(before.id)}">${esc(before.short)}</a> (${esc(before.stamp)}) · <a href="${pairHref(before.id, s.id)}">compare before and after</a></p>` : ""}${after.length ? `<p class="av-tl-link">Followed up by ${after.map(x => `<a href="${open(x.id)}">${esc(x.short)}</a>`).join(", ")}</p>` : ""}</div></li>`;
   };
-  return frame("timeline", input, `<ol class="av-tl">${days.map(([d, list]) => `<li class="av-tl-day"><h3 class="av-tl-date">${d ? esc(DAY.format(new Date(`${d}T00:00:00Z`))) : "Date not recorded"}</h3><ol class="av-tl-items">${list.map(item).join("")}</ol></li>`).join("")}</ol>`);
+  return frame("timeline", input, `<ol class="av-tl">${days.map(([d, list]) => `<li class="av-tl-day"><h3 class="av-tl-date">${d ? esc(`${WEEKDAY.format(new Date(`${d}T00:00:00Z`))}, ${fmtDates(d)}`) : "Date not recorded"}</h3><ol class="av-tl-items">${list.map(item).join("")}</ol></li>`).join("")}</ol>`);
 }
 
 // ------------------------------------------------------------------ suggested pairs
