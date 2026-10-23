@@ -10,7 +10,7 @@ ANTHROPIC_API_KEY for the CLI; "base_url" becomes ANTHROPIC_BASE_URL). Optionall
 settings and memory in the run's private home, for selection trials (then hide /etc/claude-code with "hide");
 "args" adds command-line flags. Without bare mode it signs in with whatever login the run's home holds (a copied
 credential file, say), and a claude.ai login would bring that account's synced skills and connectors into every run:
-it turns both off (see without_account). As a judge (TRIAL_SCHEMA_FILE set) it runs with no tools and the schema as
+it turns both off (see ACCOUNT_OFF). As a judge (TRIAL_SCHEMA_FILE set) it runs with no tools and the schema as
 its JSON schema, and prints the verdict alone on standard output.
 """
 import json
@@ -25,9 +25,11 @@ STATE = HOME / ".launcher-state"
 TRANSIENT = ("overloaded", "Overloaded", "529", "502", "503", "Connection error", "ECONNRESET", "rate_limit",
              "Request timed out", "fetch failed")
 WRITING_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
-# What a claude.ai login brings into a run that Claude Code lets a user turn off: the account's synced skills (read from
-# user, local, or managed settings only) and its connectors (any settings file, or ENABLE_CLAUDEAI_MCP_SERVERS=false).
-# See code.claude.com/docs/en/skills ("how synced skills behave"), docs/en/settings-reference, and docs/en/env-vars.
+# What a claude.ai login brings into a run that Claude Code lets a user turn off: the account's synced skills
+# (syncClaudeAiSkills) and its connectors (disableClaudeAiConnectors, and ENABLE_CLAUDEAI_MCP_SERVERS=false). See
+# code.claude.com/docs/en/skills ("how synced skills behave"), docs/en/settings-reference, and docs/en/env-vars. Passed
+# with --settings, so they layer over the run's own user settings, which an arm may place read-only (skillOverrides,
+# say), and nothing in the private home is written; Claude Code 2.1.299 honours both keys from there.
 ACCOUNT_OFF = {"syncClaudeAiSkills": False, "disableClaudeAiConnectors": True}
 
 
@@ -35,16 +37,6 @@ def settings() -> dict:
     path = HOME / ".launcher" / "settings.json"
     return json.loads(path.read_text()) if path.is_file() else {}
 
-
-def without_account():
-    """Turn off, for a run that signs in with a login (not bare mode), what the login's claude.ai account would bring
-    into it that Claude Code allows turning off: its synced skills and its connectors, in the run's own user settings
-    (the private home's ~/.claude/settings.json, never this machine's), keeping whatever else they hold. The account's
-    identity in Claude Code's own context is not something it lets a user turn off."""
-    path = HOME / ".claude" / "settings.json"
-    current = json.loads(path.read_text()) if path.is_file() else {}
-    path.parent.mkdir(exist_ok=True)
-    path.write_text(json.dumps({**current, **ACCOUNT_OFF}))
 
 
 def run_turn(turn: int) -> int:
@@ -59,6 +51,8 @@ def run_turn(turn: int) -> int:
         cmd += ["--append-system-prompt-file", os.environ["TRIAL_INSTRUCTIONS"]]
     if judge:
         cmd += ["--tools", "", "--json-schema", Path(judge).read_text()]
+    if extra.get("bare") is False:  # a login: what its account brings, off (the identity in context cannot be)
+        cmd += ["--settings", json.dumps(ACCOUNT_OFF)]
     cmd += list(extra.get("args", []))
     session = (STATE / "session").read_text().strip() if (STATE / "session").exists() else None
     if turn > 1:
@@ -74,7 +68,7 @@ def run_turn(turn: int) -> int:
         env["ANTHROPIC_BASE_URL"] = os.environ["TRIAL_BASE_URL"]
     if extra.get("bare") is False:
         env["CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL"] = "1"
-        env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"  # with the user settings without_account wrote
+        env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"  # with ACCOUNT_OFF on the command
     message = Path(os.environ["TRIAL_PROMPT_FILE"]).read_bytes()
     events = STATE / f"events-{turn}.jsonl"
     with events.open("wb") as out:
@@ -300,8 +294,6 @@ def main() -> int:
     turn = int(os.environ["TRIAL_TURN"])
     if turn == 0:
         STATE.mkdir(exist_ok=True)
-        if settings().get("bare") is False:
-            without_account()
         return 0
     code = run_turn(turn)
     if turn == int(os.environ.get("TRIAL_TURNS", turn)):  # caches that hold no evidence

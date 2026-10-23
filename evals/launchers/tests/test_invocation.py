@@ -142,36 +142,43 @@ class ClaudeInvocationTest(LauncherCase):
 
     def test_a_signed_in_run_turns_off_the_accounts_synced_skills_and_connectors_and_a_bare_run_is_unchanged(self):
         # A signed-in login (not bare) would bring the claude.ai account's synced skills and connectors into every run:
-        # the private home's own user settings turn both off (syncClaudeAiSkills is read only from user, local, or
-        # managed settings; disableClaudeAiConnectors from any), and ENABLE_CLAUDEAI_MCP_SERVERS=false stops connectors
-        # being fetched. A bare run reads no account and is left as it was.
+        # the command's own settings turn both off, layered over the arm's user settings, which it may place read-only
+        # (skillOverrides, say) and which stay as placed, and ENABLE_CLAUDEAI_MCP_SERVERS=false stops connectors being
+        # fetched. A bare run reads no account and is left as it was.
+        import stat
         init = {"type": "system", "subtype": "init", "session_id": "S1", "model": "model-a"}
         result = {"type": "result", "subtype": "success", "is_error": False, "result": "done", "session_id": "S1", "usage": {}}
+        placed = '{"skillOverrides": {"ledgerline-import": "on"}}'
+        user = self.home / ".claude" / "settings.json"
         for bare in (False, True):
             with self.subTest(bare=bare):
-                for f in (self.home / ".launcher" / "settings.json", self.home / ".claude" / "settings.json"):
-                    f.unlink(missing_ok=True)
-                if not bare:
-                    (self.home / ".launcher").mkdir(exist_ok=True)
-                    (self.home / ".launcher" / "settings.json").write_text('{"bare": false}')
-                    (self.home / ".claude").mkdir(exist_ok=True)
-                    (self.home / ".claude" / "settings.json").write_text('{"theme": "dark"}')  # what is there stays
-                module = self.launcher()
-                with mock.patch.dict(os.environ, {**self.env, "TRIAL_TURN": "0"}):
-                    module.main()
-                launched = Launched([[init, result]])
-                self.assertEqual(self.turn(module, 1, launched, TRIAL_TURNS="1"), 0)
+                (self.home / ".launcher").mkdir(exist_ok=True)
+                (self.home / ".launcher" / "settings.json").write_text("{}" if bare else '{"bare": false}')
+                (self.home / ".claude").mkdir(exist_ok=True)
+                if user.exists():
+                    user.chmod(0o644)
+                user.write_text(placed)
+                user.chmod(0o444)  # a resource the runtime places read-only
+                (self.home / ".claude").chmod(0o555)
+                try:
+                    module = self.launcher()
+                    with mock.patch.dict(os.environ, {**self.env, "TRIAL_TURN": "0"}):
+                        self.assertEqual(module.main(), 0)
+                    launched = Launched([[init, result]])
+                    self.assertEqual(self.turn(module, 1, launched, TRIAL_TURNS="1"), 0)
+                finally:
+                    (self.home / ".claude").chmod(0o755)
                 cmd, env = launched.calls[0]["cmd"], launched.calls[0]["env"]
-                user = self.home / ".claude" / "settings.json"
+                self.assertEqual(user.read_text(), placed)  # the arm's own settings, as placed
                 if bare:
                     self.assertIn("--bare", cmd)
+                    self.assertNotIn("--settings", cmd)
                     self.assertNotIn("ENABLE_CLAUDEAI_MCP_SERVERS", env)
-                    self.assertFalse(user.exists())
                 else:
                     self.assertNotIn("--bare", cmd)
+                    self.assertEqual(json.loads(cmd[cmd.index("--settings") + 1]),
+                                     {"syncClaudeAiSkills": False, "disableClaudeAiConnectors": True})
                     self.assertEqual(env["ENABLE_CLAUDEAI_MCP_SERVERS"], "false")
-                    self.assertEqual(json.loads(user.read_text()),
-                                     {"theme": "dark", "syncClaudeAiSkills": False, "disableClaudeAiConnectors": True})
 
     def test_an_unconfined_run_accepts_edits_and_a_judge_has_no_tools(self):
         module = self.launcher()
