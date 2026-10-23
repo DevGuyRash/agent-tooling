@@ -1921,7 +1921,8 @@ def _start_copies(out: Path, job_dir: Path, arm: dict, awaiting: Path | None = N
     """Note, in the credential journal (RUN_DIR/.copies/<id>.json), what a run holding credentials will need cleared
     before any credential is placed: its copies' directory (made here, owner-only, in _copies_root, when it copies
     anything, and made before it is noted, under a name no other run holds, so no note ever names another run's
-    directory; an interruption between the two leaves it empty and unnoted, holding nothing), each placement's path in its private home, the home itself, and what of the home is the runtime's own
+    directory; an interruption between the two leaves it empty and unnoted, holding nothing), each placement's path
+    in its private home, the home itself, and what of the home is the runtime's own
     and stays (the arm's resources and stub skills). Paths only, never content. A run interrupted before it is
     cleared is cleared by the next run, recheck, or pairwise on the directory (see _sweep_copies). A host job's is
     noted as it is dispatched, with its `awaiting` marker: every sweep clears its home, and keeps it noted while it
