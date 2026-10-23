@@ -12,24 +12,106 @@ Scale the comparison to the stakes and to what it costs: price the observations 
 
 Anything that can be chosen between is an alternative, including a direction that holds alternatives of its own, and your observations may come from any source: runs of the trial runtime, people's ratings and choices, analytics, measurements, and evidence that already exists. Compare a decision nothing can measure by its reasons against stated criteria. Before observing, fix what you observe each alternative on, which way is better on each measure (or that neither is), the units, and the cases the claim will cover. Record each observation with its alternative, measure, case, and the unit it came from (a repeat, rater, session, or person), and record totals as totals where only totals exist. Compare nested alternatives within each group and between groups, and read a pooled result after the parts it pools. Where criteria must be traded off, the weights are the decider's own: show them and the arithmetic, or each criterion unweighted.
 
-How a comparison moves from the decision to the answer; a choice that existing evidence or reasoned comparison settles skips new observation and setup, never the assessment of whether that basis supports this decision:
+Who does what, stage by stage, from the decision to the answer; a choice that existing evidence or reasoned comparison settles skips new observation and setup, never the assessment of whether that basis supports this decision:
 
 ```mermaid
-flowchart TD
-  D["Decision, intended use, claim scope"] --> G["Discover concerns; draft criteria and cases grounded in real use"]
-  G -- "costly or hard to reverse" --> I["Independent challenge of the draft"]
-  G -- "otherwise" --> P
-  I -- "revise" --> G
-  I --> P["Choose evidence; state common and alternative-specific conditions"]
-  P -- "existing evidence or reasoned comparison" --> A
-  P --> Q["Qualify instruments; verify setup is live"]
-  Q --> F["Fix the comparison and decision rule"]
-  F --> O["Observe: blind, isolated, repeated"]
-  O --> A["Assess adequacy, trade-offs, uncertainty"]
-  A --> R["Decision, limits, what would change it"]
-  Q -- "material gap" --> N["Keep findings; revise scope or design"]
-  A -- "new material concern" --> N
-  N --> G
+sequenceDiagram
+  actor D as Decider
+  participant Y as Lead (you)
+  participant S as Second contributor
+  participant W as Executors (new each run)
+  participant K as Checks
+  participant J as Judges or raters
+  participant R as Independent reviewer
+  Note over S,R: Each starts fresh with only its role's inputs.<br/>Costly: design, execution, and judging each<br/>draw on more than one model family.
+
+  rect rgba(128, 128, 128, 0.12)
+    Note over D,Y: Frame
+    D->>Y: the choice, its use,<br/>how far the claim must reach
+    Note over Y: price the observations,<br/>scale safeguards to the stakes
+  end
+
+  rect rgba(70, 130, 180, 0.14)
+    Note over Y,S: Design, before any result
+    Note over Y: alternatives and groups, measures,<br/>cases, units of observation
+    Note over Y: discover concerns widely,<br/>ground each criterion
+    alt costly or hard to reverse
+      Y->>S: the draft criteria and the originals
+      S-->>Y: passes but fails intended use?<br/>fails for an irrelevant reason?<br/>missing consequential concern?
+    else small and reversible
+      Note over Y: ask the same three questions<br/>of your own draft
+    end
+    Note over Y: choose the evidence the decision needs
+  end
+
+  alt existing evidence or reasoning settles it
+    Note over Y: skip Prepare and Observe
+  else new observations are needed
+    rect rgba(46, 139, 87, 0.14)
+      Note over Y,J: Prepare
+      Note over Y: setup defaults to none. Small, reversible choice:<br/>check an item copied unchanged from an<br/>alternative's spec against that spec yourself
+      Y->>S: every other setup item and its grounds
+      S-->>Y: grounds and scope checked
+      Note over Y: probe each item live under scored conditions,<br/>a step under test is scored, not pre-run
+      opt deterministic checks are used
+        Y->>K: known-good and known-bad cases,<br/>real outputs read by hand
+        K-->>Y: counts only if every verdict is right
+      end
+      opt a judge or rater is used
+        alt verdicts have grounded right answers
+          Y->>J: the same kind of reference cases and real outputs
+          J-->>Y: counts only if every verdict is right
+        else a preference with no right answer
+          Y->>J: the attribute, the scale,<br/>presentation tests
+          J-->>Y: understood, disagreement is an outcome
+        end
+        Note over Y,J: costly model judging includes a judge<br/>from a family the executors don't use
+      end
+      Note over Y: fix the decision rule
+    end
+
+    rect rgba(218, 165, 32, 0.16)
+      Note over Y,J: Observe, blind and repeated
+      loop every alternative × case × repeat, interleaved
+        alt agents do the work
+          Y->>W: fresh workspace,<br/>its instructions, the task only
+          W-->>Y: output, actions, final state
+        else people, measurements, or a ready artifact
+          Note over Y: obtain it, with its source
+        end
+        opt deterministic checks apply
+          Y->>K: the resulting state
+          K-->>Y: true, false, or cannot tell
+        end
+        opt a judge or rater assesses it
+          Y->>J: the output, its producer unnamed,<br/>same judge or panel across alternatives,<br/>a fresh context per verdict
+          J-->>Y: verdict, rating, or choice
+        end
+        Note over Y: record it, or mark it invalid<br/>when what decides it was not observed
+      end
+      opt both pass and which is better matters
+        loop each matched case and repeat
+          Y->>J: both outputs, unnamed, in both orders
+          J-->>Y: consistent winner, tie,<br/>or order-inconsistent
+        end
+      end
+    end
+  end
+
+  rect rgba(178, 34, 34, 0.12)
+    Note over D,Y: Decide
+    Note over Y: adequacy, trade-offs, uncertainty,<br/>then rank the survivors
+    Note over Y: counts, with intervals<br/>where the sample supports them
+    Note over Y: within and between groups<br/>before any pooled result
+    Note over Y: apply any rule fixed before observing
+    opt a review of the conclusion is organized
+      Y->>R: the original evidence
+      R-->>Y: adversarial findings,<br/>or a verdict that it is sound
+    end
+    Y->>D: decision, grounds, limits,<br/>what would change it
+  end
+
+  Note over D,R: A material gap or new material concern: keep the findings, revise scope or design
 ```
 
 When you observe, the comparison SHALL hold these properties:
