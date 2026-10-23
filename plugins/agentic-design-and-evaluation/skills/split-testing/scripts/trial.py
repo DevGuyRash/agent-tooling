@@ -1909,7 +1909,7 @@ def _with_credentials(arm: dict, job_dir: Path, out: Path, turns):
     whose cleanup cannot be verified is "credential-kept", which nothing reads. Returns (status, confined)."""
     if not _holds_credentials(arm):
         return turns([], set())
-    entry, marker = _start_copies(out, job_dir, arm)
+    entry, marker = _start_copies(out, job_dir, arm, keep_planted=True)
     home = job_dir / "harness" / "home"
     status, confined, given = "credential-kept", False, {}
     try:
@@ -1931,13 +1931,17 @@ def _with_credentials(arm: dict, job_dir: Path, out: Path, turns):
     return (status if cleared else "credential-kept"), confined
 
 
-def _start_copies(out: Path, job_dir: Path, arm: dict, awaiting: Path | None = None) -> tuple[dict, Path]:
+def _start_copies(out: Path, job_dir: Path, arm: dict, awaiting: Path | None = None,
+                  keep_planted: bool = False) -> tuple[dict, Path]:
     """Note, in the credential journal (RUN_DIR/.copies/<id>.json), what a run holding credentials will need cleared
     before any credential is placed: its copies' directory (made here, owner-only, in _copies_root, when it copies
     anything, and made before it is noted, under a name no other run holds, so no note ever names another run's
     directory; an interruption between the two leaves it empty and unnoted, holding nothing), each placement's path
-    in its private home, the home itself, and what of the home is the runtime's own
-    and stays (the arm's resources and stub skills). Paths only, never content. A run interrupted before it is
+    in its private home, the home itself, what of the home is the runtime's own
+    and stays (the arm's resources and stub skills), and, with `keep_planted`, given only where nothing has yet used
+    a credential in the home (before a run's first turn, or as a host job is dispatched), each other file the home
+    holds, such as what the scenario's setup.sh planted, with the digest of its bytes (see _planted). Paths and those
+    digests only, never a credential. A run interrupted before it is
     cleared is cleared by the next run, recheck, or pairwise on the directory (see _sweep_copies). A host job's is
     noted as it is dispatched, with its `awaiting` marker: every sweep clears its home, and keeps it noted while it
     awaits its executor. Returns (entry, journal file)."""
@@ -1947,6 +1951,9 @@ def _start_copies(out: Path, job_dir: Path, arm: dict, awaiting: Path | None = N
         raise TrialError(f"the runtime keeps copied credentials in {root}, which is inside the run directory {out} or "
                          f"holds it; give --out a directory apart from {root}")
     journal = _owned(out / ".copies")
+    keep = [(home / rel).relative_to(out).as_posix()
+            for rel in [*(arm.get("resources") or {}), *(d for d, _ in _stub_files(arm))]]
+    planted = _planted(out, home, [out / k for k in keep]) if keep_planted else {}
     private = None
     while arm.get("copy") and private is None:  # made before it is noted, so a note only ever names this run's own
         candidate = root / "".join(random.SystemRandom().choices("abcdefghijklmnopqrstuvwxyz0123456789_", k=8))
@@ -1955,9 +1962,8 @@ def _start_copies(out: Path, job_dir: Path, arm: dict, awaiting: Path | None = N
             private = candidate
     entry = {"private": str(private) if private else None,
              "placed": [(home / rel).relative_to(out).as_posix() for rel in arm.get("copy") or {}],
-             "home": home.relative_to(out).as_posix(),
-             "keep": [(home / rel).relative_to(out).as_posix()
-                      for rel in [*(arm.get("resources") or {}), *(d for d, _ in _stub_files(arm))]],
+             "home": home.relative_to(out).as_posix(), "keep": keep,
+             "planted": planted,
              **({"awaiting": awaiting.relative_to(out).as_posix()} if awaiting else {})}
     marker = journal / f"{os.urandom(8).hex()}.json"
     try:
@@ -1967,6 +1973,66 @@ def _start_copies(out: Path, job_dir: Path, arm: dict, awaiting: Path | None = N
             os.rmdir(private)  # nothing is in it yet
         raise
     return entry, marker
+
+
+PLANTED_BYTES = 4 * 1024 ** 2  # the most a note of planted files may take as JSON, far below READ_LIMIT
+
+
+def _planted(out: Path, home: Path, keep: list[Path]) -> dict[str, str]:
+    """Each regular file a private home holds outside `keep` before any credential is placed (what a scenario's
+    setup.sh planted for its checks to read, such as session records where a harness keeps them), relative to the run
+    directory, with the digest of its bytes; reached through real directories only, and one that cannot be read whole,
+    or lies in a directory that cannot be read, is left out. Setup is never given a credential, so a file still byte
+    for byte as it was then holds none, and clearing the home keeps it (see _clear_home). None is noted where Python
+    cannot clear the extended attributes the run could have written to it, or when the note of them as JSON would
+    take more than PLANTED_BYTES."""
+    if not hasattr(os, "listxattr") or not os.path.isdir(home) or os.path.islink(home):
+        return {}
+    found, size, pending = {}, 0, [home]
+    while pending:
+        try:
+            with os.scandir(pending.pop()) as listing:
+                entries = list(listing)
+        except OSError:
+            continue
+        for e in entries:
+            path = Path(e.path)
+            if any(path.is_relative_to(k) for k in keep):
+                continue
+            try:  # some filesystems look an entry up to tell its type, which can fail
+                is_dir, is_file = e.is_dir(follow_symlinks=False), e.is_file(follow_symlinks=False)
+            except OSError:
+                continue
+            if is_dir:
+                pending.append(path)
+            elif is_file and (data := _whole(path)) is not None:
+                rel = path.relative_to(out).as_posix()
+                size += len(json.dumps(rel)) + 70  # its digest, quoted, and the separators, as json.dumps writes them
+                if size > PLANTED_BYTES:
+                    return {}
+                found[rel] = hashlib.sha256(data).hexdigest()
+    return found
+
+
+def _without_owner_attributes(path: Path) -> bool:
+    """Remove from `path`, never following a link, every extended attribute a process of its owner's could have set
+    (user attributes, access control lists, and file capabilities set from a user namespace among them), and say
+    whether only an SELinux label, which a process may not simply remove, and trusted attributes, which need
+    privilege outside any user namespace, are left; a filesystem that keeps none has none. One that cannot be
+    removed (a file capability set from a user namespace, say) leaves the answer no."""
+    def fixed(name):
+        return name == "security.selinux" or name.startswith("trusted.")
+    try:
+        names = os.listxattr(path, follow_symlinks=False)
+    except OSError as e:
+        return e.errno in (errno.ENOTSUP, errno.EOPNOTSUPP)
+    try:
+        for name in names:
+            if not fixed(name):
+                os.removexattr(path, name, follow_symlinks=False)
+        return all(fixed(n) for n in os.listxattr(path, follow_symlinks=False))
+    except OSError:
+        return False
 
 
 def _place_copies(arm: dict, home: Path, private: Path) -> tuple[set[str], dict]:
@@ -2216,11 +2282,15 @@ def _transcript_chain(job_dir: Path, name) -> list[Path] | None:
     return [job_dir / p.relative_to(root) for p in steps if p.is_relative_to(root)]
 
 
-def _clear_home(out: Path, home_rel: str, keep: list[str]) -> list[str]:
+def _clear_home(out: Path, home_rel: str, keep: list[str], planted: dict[str, str] | None = None) -> list[str]:
     """Empty a run's private home (out/home_rel), keeping only what is evidence or the runtime's own (see _kept): every
     link and file a transcript its record names rests on, whole, each directory it passes through, as a directory
-    emptied of anything else, and `keep`, the arm's resources and stub skills, which exposure is read against.
-    Whatever a tool cached there, or the agent moved or copied there, goes. Returns what could not be
+    emptied of anything else, and `keep`, the arm's resources and stub skills, which exposure is read against; and
+    each file `planted` names (see _planted) that is still that regular file, reached through real directories, with
+    the bytes it had before any credential was placed, for the checks that read it, with every extended attribute its
+    owner could have set removed from it and from every directory kept (one that cannot be cleared of them is not
+    verified gone). Whatever a
+    tool cached there, or the agent moved, copied, or changed there, goes. Returns what could not be
     removed (the home itself, when a link on the way keeps it from being reached), relative to the run directory."""
     st = _reach(out, home_rel)
     if st is None:
@@ -2230,10 +2300,22 @@ def _clear_home(out: Path, home_rel: str, keep: list[str]) -> list[str]:
     home = out / home_rel
     job_dir = home.parent.parent
     whole, dirs = _kept(job_dir, [out / k for k in keep])
+    as_set = {out / rel: digest for rel, digest in (planted or {}).items()}
     left = []
+
+    def as_planted(p: Path, e) -> bool:
+        try:
+            if p not in as_set or not e.is_file(follow_symlinks=False):
+                return False
+        except OSError:
+            return False
+        data = _whole(p)
+        return data is not None and hashlib.sha256(data).hexdigest() == as_set[p] and _without_owner_attributes(p)
 
     def clear(d: Path):
         _owner_rwx(d)  # resources sit read-only in it for the agent's sake
+        if as_set and not _without_owner_attributes(d):  # kept, it carries nothing the run wrote to it
+            left.append(d.relative_to(out).as_posix())
         try:
             entries = list(os.scandir(d))
         except OSError:
@@ -2241,9 +2323,10 @@ def _clear_home(out: Path, home_rel: str, keep: list[str]) -> list[str]:
             return
         for e in entries:
             p = Path(e.path)
-            if p in whole:
+            if p in whole or as_planted(p, e):
                 continue
-            if e.is_dir(follow_symlinks=False) and (p in dirs or any(k.is_relative_to(p) for k in (*whole, *dirs))):
+            if e.is_dir(follow_symlinks=False) and (p in dirs or any(k.is_relative_to(p) for k in (*whole, *dirs))
+                                                    or any(k != p and k.is_relative_to(p) for k in as_set)):
                 clear(p)
             elif not _drop(p):
                 left.append(p.relative_to(out).as_posix())
@@ -2263,7 +2346,7 @@ def _settle(out: Path, entry: dict) -> tuple[list[str], list[str]]:
             left.append(rel)
     if entry["private"] and not _drop_copies(Path(entry["private"])):
         left.append(entry["private"])
-    left += _clear_home(out, entry["home"], entry["keep"])
+    left += _clear_home(out, entry["home"], entry["keep"], entry["planted"])
     removed = [p for p in [*entry["placed"], *([entry["private"]] if entry["private"] else [])] if p not in left]
     return removed, left
 
@@ -2305,11 +2388,13 @@ def _inside_home(rel, home: str | None = None) -> bool:
 
 def _journal_entry(entry) -> dict | None:
     """A credential journal entry as the runtime writes it (see _start_copies), or None for anything else, which is
-    never acted on: a copies' directory with the runtime's own name in its container, or none; placements and kept
-    paths below its private home; and the home a run directory's own."""
+    never acted on: a copies' directory with the runtime's own name in its container, or none; placements, kept paths,
+    and planted files with their digests below its private home (an entry written before files were planted has
+    none); and the home a run directory's own."""
     if not isinstance(entry, dict):
         return None
     home, private, placed, keep = entry.get("home"), entry.get("private"), entry.get("placed"), entry.get("keep")
+    planted = entry.get("planted", {})
     if not (isinstance(home, str) and not Path(home).is_absolute() and ".." not in Path(home).parts
             and Path(home).parts[-2:] == ("harness", "home") and len(Path(home).parts) > 2):
         return None
@@ -2317,10 +2402,13 @@ def _journal_entry(entry) -> dict | None:
         return None
     if not all(isinstance(x, list) and all(_inside_home(p, home) for p in x) for x in (placed, keep)):
         return None
+    if not (isinstance(planted, dict) and all(_inside_home(p, home) and isinstance(d, str)
+                                              and re.fullmatch(r"[0-9a-f]{64}", d) for p, d in planted.items())):
+        return None
     awaiting = entry.get("awaiting")
     if awaiting is not None and not (isinstance(awaiting, str) and re.fullmatch(r"runs/[^/]+\.awaiting", awaiting)):
         return None
-    return {"home": home, "private": private, "placed": placed, "keep": keep,
+    return {"home": home, "private": private, "placed": placed, "keep": keep, "planted": planted,
             **({"awaiting": awaiting} if awaiting else {})}
 
 
@@ -4850,7 +4938,7 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             _remove(pending)
             raise
         if arm["executor"] == "host":  # prepared like any other run; the host starts its executor
-            noted = _start_copies(out, job_dir, arm, awaiting=waiting) if _holds_credentials(arm) else None
+            noted = _start_copies(out, job_dir, arm, awaiting=waiting, keep_planted=True) if _holds_credentials(arm) else None
             marker = {"awaiting": "host", "dispatch": _host_request(arm, spec, job_id, job_dir, env),  # pass_env values left out
                       **({"copies": noted[1].name} if noted else {}),
                       "result": {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep,

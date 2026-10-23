@@ -1,10 +1,12 @@
 """Launcher arms and judges (see references/launching.md), exercised through the CLI with a pretend agent launcher."""
 import contextlib
+import errno
 import io
 import json
 import os
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -818,6 +820,25 @@ class LauncherTest(unittest.TestCase):
         self.assertTrue((home / "skills" / "helper" / "SKILL.md").is_file())  # a resource, which exposure is read against
         self._no_credential_left(secret, r.stdout + r.stderr)
 
+    def test_what_setup_planted_in_the_home_stays_for_the_checks_while_it_is_as_planted(self):
+        # a scenario's setup.sh can plant records its checks read after the run in the private home (session logs a
+        # healing pass has to find where a harness keeps them): clearing a signed-in run's home keeps each one the run
+        # left byte for byte as setup wrote it, which can hold nothing the run was given, and removes one the run
+        # changed or replaced, as it removes everything else
+        secret = "".join(["sess", "-", os.urandom(16).hex()])
+        self._signed_in(secret)
+        write(self.tmp / "scenarios" / "make-file" / "setup.sh",
+              'mkdir -p "$HOME/.store/deep"\n'
+              'for f in deep/kept edited linked; do printf "%s\\n" "$f" > "$HOME/.store/$f.jsonl"; done\n')
+        r = self.run_plan("signed-in-planted", FAKE_LAUNCHER_MARK=secret)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIs(self.result()["passed"], True)
+        store = (self.out / "runs" / "make-file__a__r1").resolve() / "harness" / "home" / ".store"
+        self.assertEqual((store / "deep" / "kept.jsonl").read_text(), "deep/kept\n")
+        self.assertFalse(os.path.lexists(store / "edited.jsonl"))  # it holds the sign-in now
+        self.assertFalse(os.path.lexists(store / "linked.jsonl"))  # a link the run put in its place
+        self._no_credential_left(secret, r.stdout + r.stderr)
+
     def test_a_credential_passed_by_name_never_enters_a_digest(self):
         # secret_env passes a value on without digesting it: two runs with two values hold one set of conditions
         first, second = ("".join(["sess", "-", os.urandom(16).hex()]) for _ in range(2))
@@ -1002,6 +1023,132 @@ class LauncherTest(unittest.TestCase):
         trial._sweep_copies(out, "recheck")
         self.assertFalse(marker.exists() or trial._held(out, job) or (home / ".tool" / "stash").exists())
         self.assertEqual((home / ".tool" / "session.jsonl").read_text(), "a session\n")  # the transcript stays
+
+    def test_only_a_home_noted_before_any_use_keeps_what_was_planted_in_it(self):
+        # what the home held when its run was noted before any turn stays while it is unchanged, through a sweep too;
+        # a home noted only after an executor used it (a host job collected without its note) keeps nothing of it,
+        # since what was there by then could hold what the executor was given
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        arm = {"secret_env": ["TOKEN"]}
+        for before_use in (True, False):
+            with self.subTest(before_use=before_use):
+                write(home / ".store" / "planted.jsonl", "planted\n")
+                write(home / ".store" / "changed.jsonl", "planted\n")
+                entry, marker = trial._start_copies(out, job, arm, keep_planted=before_use)
+                write(home / ".store" / "changed.jsonl", "planted\nand the run's own line\n")
+                write(home / ".tool" / "cache", "".join(["sess", "-", os.urandom(16).hex()]))  # a tool's, during the run
+                (marker.parent / "copy.json").write_text(marker.read_text())  # the same note, left for a sweep
+                self.assertTrue(trial._end_copies(out, entry, marker))
+                trial._sweep_copies(out, "recheck")
+                self.assertEqual((home / ".store" / "planted.jsonl").exists(), before_use)
+                self.assertFalse((home / ".store" / "changed.jsonl").exists() or (home / ".tool").exists())
+                shutil.rmtree(out)
+
+    def test_what_is_kept_of_a_planted_home_carries_no_attribute_the_run_set(self):
+        # an unchanged planted file, and the directories kept around it, keep their bytes but no extended attribute
+        # the run could have written a credential into: neither a user attribute nor an access control list, whose
+        # named-user entries the file's owner may set to any numbers, nor a file capability, which a process may set
+        # on its own file from a user namespace and the runtime outside it cannot remove, so that file goes
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        planted = home / ".store" / "planted.jsonl"
+        write(planted, "planted\n")
+        token = "".join(["sess", "-", os.urandom(16).hex()]).encode()
+        entries = [(1, 7, 0xFFFFFFFF), *((2, 4, 256 * i + b) for i, b in enumerate(token)),  # one named user a byte
+                   (4, 5, 0xFFFFFFFF), (0x10, 5, 0xFFFFFFFF), (0x20, 5, 0xFFFFFFFF)]
+        acl = struct.pack("<I", 2) + b"".join(struct.pack("<HHI", *e) for e in entries)
+        try:
+            os.setxattr(planted, "user.probe", b"1")
+            os.setxattr(planted, "system.posix_acl_access", acl)
+            os.removexattr(planted, "user.probe")
+            os.removexattr(planted, "system.posix_acl_access")
+        except (AttributeError, OSError):
+            self.skipTest("no user extended attributes or access control lists on this filesystem")
+        capable = home / ".store" / "capable.jsonl"
+        write(capable, "planted\n")
+        entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]}, keep_planted=True)
+        for p in (planted, planted.parent, home):
+            os.setxattr(p, "user.token", token)
+            os.setxattr(p, "system.posix_acl_access", acl)
+        os.setxattr(planted.parent, "system.posix_acl_default", acl)
+        mask = struct.pack("<IIIIII", 0x03000001, int.from_bytes(token[:4], "little"), 0, 0, 0, 0)  # revision 3
+        capability = shutil.which("unshare") is not None and subprocess.run(
+            ["unshare", "-Ur", sys.executable, "-c",
+             "import os, sys; os.setxattr(sys.argv[1], 'security.capability', bytes.fromhex(sys.argv[2]))",
+             str(capable), mask.hex()], capture_output=True).returncode == 0
+        self.assertTrue(trial._end_copies(out, entry, marker))
+        self.assertEqual(planted.read_text(), "planted\n")
+        for p in (planted, planted.parent, home):
+            self.assertEqual([a for a in os.listxattr(p) if a != "security.selinux" and not a.startswith("trusted.")], [], p)
+        with self.subTest("a file capability set from a user namespace"):
+            if not capability:
+                self.skipTest("no unprivileged user namespace here to set a file capability from")
+            self.assertFalse(capable.exists())
+
+    def test_a_planted_file_whose_attribute_cannot_be_removed_goes(self):
+        # an attribute the runtime cannot remove (a file capability set from a user namespace) makes the file go, on
+        # every machine, whether or not it lets a test set one
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        stuck, kept = home / ".store" / "stuck.jsonl", home / ".store" / "kept.jsonl"
+        write(stuck, "planted\n")
+        write(kept, "planted\n")
+
+        def listing(path, *a, **k):  # whatever the filesystem keeps
+            return ["security.capability"] if Path(path) == stuck else []
+
+        def removing(path, name, *a, **k):
+            raise PermissionError(errno.EPERM, "Operation not permitted")
+        entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]}, keep_planted=True)
+        with mock.patch.object(trial.os, "listxattr", listing), mock.patch.object(trial.os, "removexattr", removing):
+            self.assertTrue(trial._end_copies(out, entry, marker))
+        self.assertFalse(stuck.exists())
+        self.assertEqual(kept.read_text(), "planted\n")
+
+    def test_a_planted_home_partly_unreadable_or_too_large_to_note_still_starts_and_is_cleared(self):
+        # a directory setup left that nobody may read, or an entry that cannot be told apart as a file or a directory,
+        # is not noted, and its run still starts; a home whose files' note would be larger than a note may carry
+        # keeps none of them, so every note stays small enough for a sweep to read back
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        write(home / ".store" / "planted.jsonl", "planted\n")
+        write(home / "locked" / "inside", "unread\n")
+        write(home / "unclassified", "unread\n")
+        os.chmod(home / "locked", 0)
+        real = os.scandir
+
+        class Unclassified:  # an entry whose type needs a lookup that fails, as on some network filesystems
+            def __init__(self, e):
+                self.path, self.name = e.path, e.name
+
+            def is_dir(self, follow_symlinks=True):
+                raise PermissionError("cannot look it up")
+            is_file = is_symlink = is_dir
+
+        class Listing:
+            def __init__(self, path):
+                self.it = real(path)
+
+            def __enter__(self):
+                return iter([Unclassified(e) if e.name == "unclassified" else e for e in self.it])
+
+            def __exit__(self, *a):
+                self.it.close()
+        with mock.patch.object(trial.os, "scandir", Listing):
+            entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]}, keep_planted=True)
+        self.assertEqual(list(entry["planted"]), ["runs/r0123456789abcdef/harness/home/.store/planted.jsonl"])
+        self.assertTrue(trial._end_copies(out, entry, marker))
+        self.assertTrue((home / ".store" / "planted.jsonl").exists())
+        self.assertFalse((home / "locked").exists() or (home / "unclassified").exists())
+        write(home / ".store" / "second.jsonl", "planted\n")
+        budget = len(json.dumps(trial._planted(out, home, []))) - 1  # the note of both files is one byte too large
+        with mock.patch.object(trial, "PLANTED_BYTES", budget):
+            entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]}, keep_planted=True)
+        self.assertEqual(entry["planted"], {})
+        self.assertEqual(trial._journal_entry(json.loads(marker.read_text())), entry)  # as a sweep reads it back
+        self.assertTrue(trial._end_copies(out, entry, marker))
+        self.assertFalse((home / ".store").exists())
 
     def test_an_expanded_key_variable_is_held_apart_from_configuration_like_a_written_one(self):
         self.plan({"a": dict(self.arm(), api_key_var="${FAKE_KEY_NAME}")})  # whose pass_env holds FAKE_LAUNCHER_MARK

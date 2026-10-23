@@ -41,6 +41,8 @@ FAKE_LAUNCHER_MODE (passed with "pass_env") makes it misbehave in one way a real
                         permission bits of what it was copied into $TRIAL_HARNESS/sign-in-modes-<turn>.json, and
                         whether each is inside its run's directory into $TRIAL_HARNESS/sign-in-where-<turn>.json
     signed-in-stash     as signed-in, and a scenario's first turn copies its sign-in to ~/.config/stash/sign-in
+    signed-in-planted   as signed-in, and a scenario's first turn appends its sign-in to ~/.store/edited.jsonl and
+                        puts a link to it in place of ~/.store/linked.jsonl, files its scenario's setup planted
     list-account-skill  its record lists the skills in ~/skills and one more, "account-extra", that no arm placed
     leak                every call prints the key variable's value, FAKE_LAUNCHER_MARK, and ~/.fake-sign-in on
                         standard error, and an arm's on standard output too
@@ -219,6 +221,11 @@ def main():
     if MODE == "signed-in-stash" and scenario and TURN == 1:  # its own copy, under another name in its home
         (HOME / ".config" / "stash").mkdir(parents=True, exist_ok=True)
         (HOME / ".config" / "stash" / "sign-in").write_text((HOME / ".fake-sign-in").read_text())
+    if MODE == "signed-in-planted" and scenario and TURN == 1:  # files its scenario planted, now holding the sign-in
+        with open(HOME / ".store" / "edited.jsonl", "a") as f:
+            f.write((HOME / ".fake-sign-in").read_text())
+        (HOME / ".store" / "linked.jsonl").unlink()
+        (HOME / ".store" / "linked.jsonl").symlink_to(HOME / ".fake-sign-in")
     if MODE == "swap-harness" and scenario and TURN == 1:
         job = Path(os.environ["TRIAL_JOB_DIR"])
         os.rename(job / "harness", job / "harness-moved")
