@@ -1,3 +1,4 @@
+import { blank } from "./core";
 /** Line and word diffs for comparing two texts, such as two arms' instructions.
  * Myers' O(ND) shortest edit script over lines, after the common head and tail
  * are set aside. Pure functions over strings: no DOM, no markup. */
@@ -131,7 +132,7 @@ export function wordDiff(before: string, after: string): { before: WordPiece[]; 
   const steps = myers(a, b, WORD_BUDGET);
   if (!steps) return null;
   let shared = 0;
-  for (const [op, i] of steps) if (op === "same" && /\S/.test(a[i])) shared += a[i].length;
+  for (const [op, i] of steps) if (op === "same" && !blank(a[i])) shared += a[i].length;
   const visible = (s: string) => s.replace(/\s+/g, "").length;
   if (shared < 0.4 * Math.max(visible(before), visible(after), 1)) return null;
   const pieces = (side: "before" | "after"): WordPiece[] => {
@@ -144,7 +145,7 @@ export function wordDiff(before: string, after: string): { before: WordPiece[]; 
       if (prev && prev.changed === changed) prev.text += text; else out.push({ text, changed });
     }
     for (let k = 1; k < out.length - 1; k++) {
-      if (!out[k].changed && /^\s+$/.test(out[k].text) && out[k - 1].changed && out[k + 1].changed) {
+      if (!out[k].changed && out[k].text !== "" && blank(out[k].text) && out[k - 1].changed && out[k + 1].changed) {
         out[k - 1].text += out[k].text + out[k + 1].text;
         out.splice(k, 2); k--;
       }

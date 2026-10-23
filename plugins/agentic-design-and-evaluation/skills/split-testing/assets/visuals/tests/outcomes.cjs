@@ -28,7 +28,8 @@ const ladderRow = arm => H.element(block("ladder"), `class="av-ladder-row" role=
 
 test("the ladder rates an arm over valid runs only", () => {
   const row = ladderRow("steady");
-  H.includes(row, "2 of 3 valid runs passed, 67%", "a rate over the three valid runs");
+  // Its valid runs come from two cases (2 passes on c1, 1 failure on c2): counted, with no pooled rate or interval.
+  H.includes(row, "2 of 3 valid runs passed across 2 cases", "a count over the three valid runs");
   H.includes(row, '<span class="av-frac"><b>2</b>/3</span>', "the 2/3 fraction");
   H.excludes(row, "of 6 valid", "the invalid runs in the denominator");
 });

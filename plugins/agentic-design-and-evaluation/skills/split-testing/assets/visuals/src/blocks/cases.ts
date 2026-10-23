@@ -3,10 +3,10 @@
  * Variants of one case (the same prompt with an added turn, say) sit side by
  * side with the difference per arm. For a single-arm trial this is the main
  * result view, so it opens with the pass rate of every case. */
-import { count, esc, fmtInt, fmtPct, inline, num, outcomeLabel, outcomeMark, prose, slug } from "../core";
+import { count, esc, fmtInt, fmtPct, inline, num, outcomeLabel, outcomeMark, prose, slug, entriesOf, keysIn, stripText, WS_RUN } from "../core";
 import { failureCause, failureDetail, oneLine } from "../failure";
 import type { RenderContext } from "../model";
-import { newcombe } from "../stats";
+import { casesWords, newcombe } from "../stats";
 import { judgeFor, outcomeOf, tally, Tally, TrialReport, TrialRun, TrialScenario, trialAxes } from "../trial-model";
 import { empty, frame, FrameInput, pos } from "./frame";
 
@@ -30,6 +30,9 @@ export interface CasesInput extends FrameInput {
   pairs?: "auto" | "off" | PairSpec[];
   /** The pass-rate-by-case overview at the top; on by default when there are two or more entries. */
   index?: boolean;
+  /** Each case in plain words, keyed by case id, for a reader new to the work: shown as the case's description in
+   * place of the scenario file's own notes, which were written for its authors. */
+  descriptions?: Record<string, string | string[]>;
 }
 
 /** A case and its variants: the base comes first. */
@@ -84,13 +87,13 @@ export function caseVariants(data: TrialReport, cases: string[], pairs: CasesInp
         const vs: Array<[string, string | undefined]> = [];
         if (typeof o.variant === "string") vs.push([o.variant, str(o.label) || undefined]);
         if (Array.isArray(o.variants)) for (const v of strs(o.variants)) vs.push([v, str(o.label) || undefined]);
-        else if (o.variants && typeof o.variants === "object") for (const [v, l] of Object.entries(o.variants as Record<string, unknown>)) vs.push([v, str(l) || undefined]);
+        else if (o.variants && typeof o.variants === "object") for (const [v, l] of entriesOf(o.variants as Record<string, unknown>)) vs.push([v, str(l) || undefined]);
         if (vs.length) add(o.base, vs, str(o.baseLabel) || undefined); else notes.push(`Variant set ${i + 1} names no variant.`);
       } else notes.push(`Variant set ${i + 1} is not [base, variant], {base, variants} or {suffix}.`);
     });
     return { sets: sets.filter(s => s.members.length > 1), notes };
   }
-  const prompt = (c: string) => str(scen.get(c)?.prompt).trim();
+  const prompt = (c: string) => stripText(str(scen.get(c)?.prompt));
   const parent = new Map<string, string>();
   for (const b of cases) {
     let best: string | undefined;
@@ -111,13 +114,13 @@ function judgeOf(s?: TrialScenario): Judge {
   const j = s?.judge;
   const question = typeof j === "string" ? j : j && typeof j === "object" ? str((j as Record<string, unknown>).question) : "";
   const passWhen = j && typeof j === "object" ? str((j as Record<string, unknown>).pass_when) : "";
-  const present = !!(question.trim() || passWhen.trim() || (j && typeof j === "object"));
+  const present = !!(stripText(question) || stripText(passWhen) || (j && typeof j === "object"));
   return { present, decides: present && s?.judge_required !== false, question, passWhen, role: str(s?.judge_role) };
 }
 
 interface Cell { arm: string; runs: TrialRun[]; t: Tally; failed: Map<string, number>; invalid: Map<string, number> }
 interface Member {
-  name: string; label: string; scenario?: TrialScenario; judge: Judge; required: string[];
+  name: string; label: string; about: string; scenario?: TrialScenario; judge: Judge; required: string[];
   runs: TrialRun[]; cells: Cell[]; pooled: Tally; anchor: string;
 }
 
@@ -131,7 +134,7 @@ function failedKeys(r: TrialRun, m: Pick<Member, "required" | "judge">): string[
 /** The one-line cause from failure.ts, with a fallback built from the run itself. */
 function causeText(r: TrialRun, m: Member): string {
   let text = "";
-  try { text = str(failureCause(r, m.scenario)?.text).trim(); } catch { text = ""; }
+  try { text = stripText(str(failureCause(r, m.scenario)?.text)); } catch { text = ""; }
   if (text) return text;
   if (r.passed === null) return str(r.invalid_reason) || str(r.status) || "invalid";
   const keys = failedKeys(r, m), checks = keys.filter(k => k.startsWith("check:")).map(k => k.slice(6)), judge = keys.find(k => k.startsWith("judge:"));
@@ -139,10 +142,10 @@ function causeText(r: TrialRun, m: Member): string {
   return parts.join("; ") || "no reason recorded";
 }
 
-function memberOf(data: TrialReport, ctx: RenderContext, scen: Map<string, TrialScenario>, name: string, arms: string[], label = ""): Member {
+function memberOf(data: TrialReport, ctx: RenderContext, scen: Map<string, TrialScenario>, name: string, arms: string[], label = "", about = ""): Member {
   const scenario = scen.get(name), judge = judgeOf(scenario), required = strs(scenario?.required);
   const runs = (Array.isArray(data.runs) ? data.runs : []).filter(r => r && r.scenario === name && arms.includes(r.arm)).sort((a, b) => (num(a.repeat) ?? 0) - (num(b.repeat) ?? 0));
-  const base = { name, label, scenario, judge, required, runs, anchor: ctx.uid(`case-${name}`) };
+  const base = { name, label, about, scenario, judge, required, runs, anchor: ctx.uid(`case-${name}`) };
   const cells = arms.map(arm => {
     const rs = runs.filter(r => r.arm === arm), failed = new Map<string, number>(), invalid = new Map<string, number>();
     for (const r of rs) {
@@ -160,7 +163,7 @@ function memberOf(data: TrialReport, ctx: RenderContext, scen: Map<string, Trial
 const caseLabel = (ctx: RenderContext, id: string) => ctx.caseLabels[id] || id;
 const words = (t: string) => (t.match(/\S+/g) || []).length;
 function cut(t: string, n: number): string {
-  const flat = t.replace(/\s+/g, " ").trim();
+  const flat = stripText(t.replace(WS_RUN, " "));
   if (flat.length <= n) return flat;
   const at = flat.lastIndexOf(" ", n);
   let head = flat.slice(0, at > n * 0.6 ? at : n);
@@ -171,7 +174,7 @@ function cut(t: string, n: number): string {
 
 /** A piece of supplied text in a dossier column: whole when short, a preview when long. */
 interface Piece { label?: string; text: string; kind: "verbatim" | "prose"; limit: number; wrap?: (inner: string) => string }
-const norm = (t: string) => t.replace(/\r\n?/g, "\n").trim();
+const norm = (t: string) => stripText(t.replace(/\r\n?/g, "\n"));
 const isLong = (p: Piece) => { const t = norm(p.text); return t.length > p.limit || t.split("\n").reduce((n, l) => n + Math.max(1, Math.ceil(l.length / 92)), 0) > 6; };
 /** A preview's length: about three lines of a dossier column. The preview is cut here,
  * at a word, and nowhere else (no line clamp), so it never ends mid-word. */
@@ -271,31 +274,34 @@ function criteriaTable(ms: Member[]): string {
 const PASS_WHOLE = 4000;
 function judgeTexts(j: Judge): string {
   if (!j.present) return "";
-  const whole = !!j.passWhen.trim() && norm(j.passWhen).length <= PASS_WHOLE;
+  const whole = !!stripText(j.passWhen) && norm(j.passWhen).length <= PASS_WHOLE;
   const ps: Piece[] = [
-    ...(j.question.trim() ? [{ label: "The judge was asked", text: j.question, kind: "prose" as const, limit: 360 }] : []),
+    ...(stripText(j.question) ? [{ label: "The judge was asked", text: j.question, kind: "prose" as const, limit: 360 }] : []),
     ...(whole ? [] : [{ label: "It says pass when", text: j.passWhen, kind: "prose" as const, limit: 360 }]),
   ];
   const criterion = whole ? `<p class="av-cs-label">It says pass when</p>${prose(j.passWhen, "av-cs-prose")}` : "";
-  const role = j.role.trim() ? `<p class="av-cs-label">How the judge was framed</p>${prose(j.role, "av-cs-prose av-cs-role")}` : "";
-  const missing = j.passWhen.trim() ? "" : '<p class="av-cs-label">It says pass when</p><p><span class="av-missing">no pass criterion recorded</span></p>';
+  const role = stripText(j.role) ? `<p class="av-cs-label">How the judge was framed</p>${prose(j.role, "av-cs-prose av-cs-role")}` : "";
+  const missing = stripText(j.passWhen) ? "" : '<p class="av-cs-label">It says pass when</p><p><span class="av-missing">no pass criterion recorded</span></p>';
   const long = ps.some(p => norm(p.text) && isLong(p));
   const framing = role ? `<details class="av-cs-more av-cs-more--role"><summary><span class="av-cs-show">How the judge was framed</span><span class="av-cs-hide">Hide the framing</span></summary><div class="av-cs-full">${prose(j.role, "av-cs-prose av-cs-role")}</div></details>` : "";
-  const what = [j.question.trim() ? "question" : "", whole ? "" : "criterion", role ? "framing" : ""].filter(Boolean).join(" and ");
+  const what = [stripText(j.question) ? "question" : "", whole ? "" : "criterion", role ? "framing" : ""].filter(Boolean).join(" and ");
   const body = long ? `${pieces(ps, `Read the judge's whole ${what}`, role)}${criterion}${missing}` : `${pieces(ps, "")}${criterion}${missing}${framing}`;
   return `<div class="av-cs-judge">${body}</div>`;
 }
 
 function taskHtml(m: Member, opts: { followups?: boolean } = {}): string {
-  const s = m.scenario, prompt = str(s?.prompt), followups = opts.followups === false ? [] : strs(s?.followups), desc = str(s?.description);
+  const s = m.scenario, prompt = str(s?.prompt), followups = opts.followups === false ? [] : strs(s?.followups), own = str(s?.description);
   const cutNote = s?.description_truncated ? '<p class="av-cs-cutnote">The report carries the first 24,000 characters of this description.</p>' : "";
+  // A plain description for a newcomer, where the narrative gives one, stands in for the scenario file's notes,
+  // which were written for the scenario's authors and may point at files the report does not hold.
+  const desc = m.about || own;
   const ps: Piece[] = [
-    ...(desc.trim() ? [{ text: desc, kind: "prose" as const, limit: 360, wrap: (x: string) => `<div class="av-cs-desc">${x}${cutNote}</div>` }] : []),
-    ...(prompt.trim() ? [{ label: "What the agent was asked", text: prompt, kind: "verbatim" as const, limit: 480, wrap: (x: string) => `<blockquote class="av-cs-prompt">${x}</blockquote>` }] : []),
+    ...(stripText(desc) ? [{ text: desc, kind: "prose" as const, limit: 360, wrap: (x: string) => `<div class="av-cs-desc">${x}${m.about ? "" : cutNote}</div>` }] : []),
+    ...(stripText(prompt) ? [{ label: "What the agent was asked", text: prompt, kind: "verbatim" as const, limit: 480, wrap: (x: string) => `<blockquote class="av-cs-prompt">${x}</blockquote>` }] : []),
     ...followups.map((f, i) => ({ label: `Then, follow-up ${i + 1}`, text: f, kind: "verbatim" as const, limit: 360, wrap: (x: string) => `<blockquote class="av-cs-prompt av-cs-prompt--followup">${x}</blockquote>` })),
   ];
-  const what = `Read the whole ${[desc.trim() ? "description" : "", prompt.trim() ? "prompt" : "", followups.length ? (followups.length === 1 ? "follow-up" : "follow-ups") : ""].filter(Boolean).join(", ").replace(/, ([^,]*)$/, " and $1")}`;
-  return `${desc.trim() ? "" : '<p class="av-cs-desc"><span class="av-missing">no description recorded</span></p>'}${pieces(ps, what)}${prompt.trim() ? "" : '<p class="av-cs-label">What the agent was asked</p><p><span class="av-missing">prompt not in this report</span></p>'}${s?.artifact ? `<p class="av-cs-artifact"><span class="av-cs-label">Judged output</span> ${codeName(String(s.artifact))}</p>` : ""}`;
+  const what = `Read the whole ${[stripText(desc) ? "description" : "", stripText(prompt) ? "prompt" : "", followups.length ? (followups.length === 1 ? "follow-up" : "follow-ups") : ""].filter(Boolean).join(", ").replace(/, ([^,]*)$/, " and $1")}`;
+  return `${stripText(desc) ? "" : '<p class="av-cs-desc"><span class="av-missing">no description recorded</span></p>'}${pieces(ps, what)}${stripText(prompt) ? "" : '<p class="av-cs-label">What the agent was asked</p><p><span class="av-missing">prompt not in this report</span></p>'}${s?.artifact ? `<p class="av-cs-artifact"><span class="av-cs-label">Judged output</span> ${codeName(String(s.artifact))}</p>` : ""}`;
 }
 
 function followupsHtml(m: Member): string {
@@ -401,7 +407,7 @@ function differences(ms: Member[]): string[] {
   const bs = b.scenario;
   for (const v of vs) {
     const s = v.scenario, who = `<b>${esc(v.label)}</b>`, base = `<b>${esc(b.label)}</b>`;
-    if (str(bs?.prompt).trim() !== str(s?.prompt).trim()) out.push(`The prompt differs in ${who}; both are shown below.`);
+    if (stripText(str(bs?.prompt)) !== stripText(str(s?.prompt))) out.push(`The prompt differs in ${who}; both are shown below.`);
     const bf = strs(bs?.followups), vf = strs(s?.followups);
     for (let i = 0; i < Math.max(bf.length, vf.length); i++) {
       if (bf[i] === vf[i]) continue;
@@ -418,7 +424,7 @@ function differences(ms: Member[]): string[] {
     if (more.length) out.push(`${who} also requires ${more.map(codeName).join(", ")}.`);
     if (fewer.length) out.push(`${who} does not require ${fewer.map(codeName).join(", ")}.`);
     if (str(bs?.artifact) !== str(s?.artifact)) out.push(`The judged output differs: ${bs?.artifact ? codeName(str(bs.artifact)) : "none"} against ${s?.artifact ? codeName(str(s.artifact)) : "none"}.`);
-    if (str(bs?.description).trim() !== str(s?.description).trim()) out.push(`The description differs in ${who}.`);
+    if (stripText(str(bs?.description)) !== stripText(str(s?.description))) out.push(`The description differs in ${who}.`);
   }
   return out;
 }
@@ -426,7 +432,7 @@ function differences(ms: Member[]): string[] {
 /** A short name for what a variant changes, when the recorded fields show it. */
 function variantLabel(base: TrialScenario | undefined, v: TrialScenario | undefined, baseName: string, name: string): string {
   const bf = strs(base?.followups), vf = strs(v?.followups);
-  const same = str(base?.prompt).trim() === str(v?.prompt).trim() && JSON.stringify(base?.judge ?? null) === JSON.stringify(v?.judge ?? null) && JSON.stringify(strs(base?.required)) === JSON.stringify(strs(v?.required));
+  const same = stripText(str(base?.prompt)) === stripText(str(v?.prompt)) && JSON.stringify(base?.judge ?? null) === JSON.stringify(v?.judge ?? null) && JSON.stringify(strs(base?.required)) === JSON.stringify(strs(v?.required));
   if (same && vf.length > bf.length && bf.every((f, i) => vf[i] === f)) return vf.length - bf.length === 1 ? "+ follow-up" : `+ ${vf.length - bf.length} follow-ups`;
   if (same && vf.length < bf.length && vf.every((f, i) => bf[i] === f)) return bf.length - vf.length === 1 ? "− follow-up" : `− ${bf.length - vf.length} follow-ups`;
   const suffix = name.startsWith(baseName) ? name.slice(baseName.length).replace(/^[-_.:+/~]+/, "") : "";
@@ -441,7 +447,9 @@ export function cases(input: CasesInput, ctx: RenderContext): string {
   if (!ctx.trial) throw new TypeError('A cases block needs trial data: supply the report spec\'s "trial" field (trialReport() does).');
   const data = ctx.trial, scen = scenarioMap(data), axes = trialAxes(data);
   const notes: string[] = [];
-  const knownArms = new Set([...axes.arms, ...Object.keys(data.plan?.arms || {})]);
+  const told = input.descriptions && typeof input.descriptions === "object" ? input.descriptions as Record<string, unknown> : {};
+  const about = (c: string) => { const v = Object.prototype.hasOwnProperty.call(told, c) ? told[c] : undefined; return typeof v === "string" ? v : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").join("\n\n") : ""; };
+  const knownArms = new Set([...axes.arms, ...keysIn(data.plan?.arms || {})]);
   let arms = Array.isArray(input.arms) ? strs(input.arms).filter(a => knownArms.has(a)) : axes.arms;
   if (Array.isArray(input.arms) && arms.length < input.arms.length) notes.push(`Arms not in this trial were left out: ${strs(input.arms).filter(a => !knownArms.has(a)).join(", ") || "entries that are not text"}.`);
   arms = [...new Set(arms)].sort((a, b) => ctx.arms.index(a) - ctx.arms.index(b));
@@ -462,12 +470,12 @@ export function cases(input: CasesInput, ctx: RenderContext): string {
   const entries: Entry[] = [];
   for (const c of names) {
     const s = inSet.get(c);
-    if (!s) { entries.push({ kind: "case", m: memberOf(data, ctx, scen, c, arms, caseLabel(ctx, c)) }); continue; }
+    if (!s) { entries.push({ kind: "case", m: memberOf(data, ctx, scen, c, arms, caseLabel(ctx, c), about(c)) }); continue; }
     if (s.base !== c) continue;
     const ms = s.members.map((mm, i) => {
       const fromGroup = crossing && groupOf(mm.case) >= 0 ? groups[groupOf(mm.case)].label : "";
       const label = mm.label || fromGroup || (i ? variantLabel(scen.get(s.base), scen.get(mm.case), s.base, mm.case) : "Base");
-      return memberOf(data, ctx, scen, mm.case, arms, label);
+      return memberOf(data, ctx, scen, mm.case, arms, label, about(mm.case));
     });
     entries.push({ kind: "set", set: s, ms });
   }
@@ -496,9 +504,9 @@ export function cases(input: CasesInput, ctx: RenderContext): string {
     }
     const msx = e.ms, diff = differences(msx);
     const sameText = (f: (m: Member) => unknown) => msx.every(m => JSON.stringify(f(m)) === JSON.stringify(f(msx[0])));
-    const sharedTask = sameText(m => [str(m.scenario?.prompt).trim(), strs(m.scenario?.followups), str(m.scenario?.description).trim(), str(m.scenario?.artifact)]);
-    const sharedDesc = sameText(m => str(m.scenario?.description).trim());
-    const sharedPrompt = sameText(m => str(m.scenario?.prompt).trim());
+    const sharedTask = sameText(m => [stripText(str(m.scenario?.prompt)), strs(m.scenario?.followups), stripText(str(m.scenario?.description)), str(m.scenario?.artifact)]);
+    const sharedDesc = sameText(m => stripText(str(m.scenario?.description)));
+    const sharedPrompt = sameText(m => stripText(str(m.scenario?.prompt)));
     const sharedJudge = sameText(m => [m.judge.question, m.judge.passWhen, m.judge.role, m.judge.decides]);
     const sharedLead = sameText(m => criteriaLead(m, planJudge));
     const cols = (f: (m: Member) => string) => `<div class="av-cs-cols">${msx.map(m => `<div class="av-cs-col"><p class="av-cs-col-label">${esc(m.label)}</p>${f(m)}</div>`).join("")}</div>`;
@@ -568,7 +576,7 @@ export function cases(input: CasesInput, ctx: RenderContext): string {
   const body = blocks.map(b => {
     const head = b.group ? (() => {
       const cs = b.items.flatMap(([e]) => e.kind === "case" ? [e.m] : e.ms), t = tally(cs.flatMap(m => m.runs));
-      return `<div class="av-cs-group"><h4 class="av-cs-group-label">${esc(b.group.label)}</h4><span class="av-muted">${plural(cs.length, "case")} · ${count(t.pass)}/${count(t.valid)} passed${t.invalid ? ` · ${fmtInt(t.invalid)} invalid` : ""}${b.group.note ? ` · ${esc(b.group.note)}` : ""}</span></div>`;
+      return `<div class="av-cs-group"><h4 class="av-cs-group-label">${esc(b.group.label)}</h4><span class="av-muted">${casesWords(cs.length, false)} · ${count(t.pass)}/${count(t.valid)} passed${t.invalid ? ` · ${fmtInt(t.invalid)} invalid` : ""}${b.group.note ? ` · ${esc(b.group.note)}` : ""}</span></div>`;
     })() : "";
     return head + b.items.map(([e, k]) => dossier(e, k)).join("");
   }).join("");

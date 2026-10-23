@@ -8,14 +8,16 @@
  * a two-alternative taste test and a study of research directions with many
  * concepts each get the same reader-first page at their own size. A narrative
  * can include, exclude, reorder (after) and append, as with the trial report. */
-import { fmtInt } from "./core";
+import { comparisonSection, resolveSections } from "./sections";
+import { fmtInt, entriesOf, keysIn, stripText } from "./core";
 import type { Alternative, Case, Comparison, Metric, Observation, Preference } from "./comparison-model";
-import { alternativeIds, groupPath, invalidJudgments, judgmentMetric, observationStatus, winMatrix } from "./comparison-stats";
+import { alternativeIds, caseKey, casesWords, groupPath, invalidJudgments, judgmentMetric, NO_CASE, NO_CASE_WORDS, observationStatus, winMatrix } from "./comparison-stats";
 import type { ReportSpec, SectionSpec, BlockSpec, ArmSpec } from "./model";
 import { costMeasures, displayPath, trialAxes } from "./trial-model";
 import type { TrialReport } from "./trial-model";
-import { validateComparison } from "./validate";
+import { composed, filePointer, validateComparison } from "./validate";
 import type { Problem } from "./validate";
+import type { Story } from "./reading";
 
 /** One row of a decision matrix: a metric that measures it, the author's own scores per alternative, or cells that rate it. */
 export interface Criterion {
@@ -46,14 +48,19 @@ export interface ComparisonNarrative {
   include?: string[]; exclude?: string[];
   sections?: Array<SectionSpec & { after?: string }>;
   append?: Record<string, BlockSpec[]>;
+  /** What a reader new to the work needs before the results (see catalog.md#the-story). */
+  story?: Story;
+  /** What each section's views say for this data, by section id. */
+  readings?: Record<string, string | string[]>;
   footer?: string;
 }
 
 /** The default sections' ids, in reading order; each appears only when the comparison holds its data. */
 export const COMPARISON_SECTION_IDS = ["verdict", "compared", "results", "differences", "groups", "cases", "judgments", "decision", "observations", "sources"] as const;
 /** Other names readers reach for, mapped to a default section. */
-export const COMPARISON_SECTION_ALIASES: Record<string, string> = { setup: "compared", alternatives: "compared", metrics: "results", hierarchy: "groups", preferences: "judgments", pairwise: "judgments", matrix: "decision", ledger: "observations", runs: "observations" };
-const alias = (id: unknown) => { const k = String(id); return Object.prototype.hasOwnProperty.call(COMPARISON_SECTION_ALIASES, k) ? COMPARISON_SECTION_ALIASES[k] : k; };
+export { COMPARISON_SECTION_ALIASES } from "./sections";
+/** The section a name stands for. */
+const alias = comparisonSection;
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const strings = (v: unknown): string[] => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
@@ -71,7 +78,7 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
 
   // Narrative labels win over the data's; narrative order leads, but only for alternatives that exist.
   const ids = alternativeIds(dataIn);
-  const rawLabels: unknown[] = Array.isArray(narrative.alternatives) ? narrative.alternatives : isObject(narrative.alternatives) ? Object.entries(narrative.alternatives).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
+  const rawLabels: unknown[] = Array.isArray(narrative.alternatives) ? narrative.alternatives : isObject(narrative.alternatives) ? entriesOf(narrative.alternatives).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
   const labels = rawLabels.filter((a): a is ArmSpec => isObject(a) && typeof a.id === "string");
   const order = [...new Set([...labels.map(a => a.id).filter(id => ids.includes(id)), ...ids])];
   const given = (id: string) => labels.find(a => a.id === id);
@@ -86,12 +93,17 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
   const baseline = [narrative.baseline, dataIn.baseline].find((b): b is string => typeof b === "string" && ids.includes(b));
   const identical = (Array.isArray(narrative.identical) ? narrative.identical : Array.isArray(dataIn.identical) ? dataIn.identical : [])
     .map(g => [...new Set(strings(g).filter(a => ids.includes(a)))]).filter(g => g.length > 1);
-  const data: Comparison = { ...dataIn, alternatives, metrics, ...(baseline ? { baseline } : {}), identical };
+  // The report carries its metrics as given: the sections are composed from those of a known kind, and a metric of no
+  // known kind stays in the data, so checking the report finds what checking its input finds, and nothing the
+  // composition made.
+  const data: Comparison = { ...dataIn, alternatives, ...(baseline ? { baseline } : {}), identical };
 
   const observations = objects<Observation>(dataIn.observations);
   const preferences = objects<Preference>(dataIn.preferences);
   const rankings = objects<{ order: unknown }>(dataIn.rankings).filter(r => Array.isArray(r.order));
-  const caseIds = [...new Set([...objects<Case>(dataIn.cases).map(c => c.id), ...[...observations, ...objects<{ case?: unknown }>(dataIn.aggregates), ...preferences, ...objects<{ case?: unknown }>(dataIn.rankings)].map(x => (x as { case?: unknown }).case)].filter((c): c is string => typeof c === "string"))];
+  const caseIds = [...new Set([...objects<Case>(dataIn.cases).map(c => c.id), ...[...observations, ...objects<{ case?: unknown }>(dataIn.aggregates), ...preferences, ...objects<{ case?: unknown }>(dataIn.rankings)].map(x => caseKey((x as { case?: unknown }).case))].filter((c): c is string => typeof c === "string" && caseKey(c) !== NO_CASE))];
+  // Evidence naming no case is a group of its own beside the cases, never counted as one.
+  const namesNoCase = [...observations, ...objects<{ case?: unknown }>(dataIn.aggregates), ...preferences, ...objects<{ case?: unknown }>(dataIn.rankings)].some(x => caseKey((x as { case?: unknown }).case) === NO_CASE);
   const grouped = alternatives.filter(a => groupPath(a.group).length > 0);
   const topGroups = new Set(grouped.map(a => groupPath(a.group)[0]));
   // Validity comes from the same reading the summaries use, so the verdict and the views agree.
@@ -99,7 +111,10 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
   const recorded = status.length, invalid = status.filter(x => x !== null).length, valid = recorded - invalid;
   const judgments = preferences.length + rankings.length;
   const unreached = invalidJudgments(data) + metrics.filter(m => m.kind === "preference").reduce((a, m) => a + invalidJudgments(data, m.id), 0);
-  const rule = typeof dataIn.decision_rule === "string" && dataIn.decision_rule.trim() ? dataIn.decision_rule : undefined;
+  // The comparison's rule, word for word; where it only points at a file the reader cannot open, the rule as the narrative states it.
+  const recordedRule = typeof dataIn.decision_rule === "string" && stripText(dataIn.decision_rule) ? dataIn.decision_rule : undefined;
+  const statedRule = isObject(narrative.story) ? (v => typeof v === "string" ? stripText(v) : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!stripText(x)).join(" ") : "")((narrative.story as Record<string, unknown>).rule) : "";
+  const rule = recordedRule && filePointer(recordedRule) && statedRule ? statedRule : recordedRule;
   const alert = recorded && !valid
     ? { text: `All ${plural(recorded, "observation")} are invalid, so no value can be given. Invalid observations are not failures.`, href: "#observations", link: "What was recorded" }
     : invalid && invalid / recorded >= 0.2
@@ -107,9 +122,12 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
       : undefined;
 
   const appended = new Map<string, BlockSpec[]>();
-  for (const [k, blocks] of Object.entries(isObject(narrative.append) ? narrative.append : {})) if (Array.isArray(blocks)) appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
+  for (const [k, blocks] of entriesOf(isObject(narrative.append) ? narrative.append : {})) if (Array.isArray(blocks)) appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
   const sections: Array<{ key: string; section: SectionSpec }> = [];
-  const add = (key: string, s: SectionSpec) => sections.push({ key, section: { ...s, id: key, blocks: [...s.blocks, ...(appended.get(key) || [])] } });
+  // What each section's views say for this data, from the narrative's readings (keyed by section id or another name).
+  // Resolved as the checks resolve them (resolveSections): the first key naming a section gives its reading.
+  const readings = resolveSections(narrative.readings, alias).values;
+  const add = (key: string, s: SectionSpec) => sections.push({ key, section: { ...s, id: key, ...(readings.has(key) ? { reading: readings.get(key) as string | string[] } : {}), blocks: [...s.blocks, ...(appended.get(key) || [])] } });
 
   // ---------------------------------------------------------------- verdict
   const decision = isObject(narrative.decision) ? narrative.decision : null;
@@ -126,7 +144,7 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
         type: "figures", items: [
           { value: order.length, label: order.length === 1 ? "Alternative" : "Alternatives", note: topGroups.size ? plural(topGroups.size, "group") : undefined },
           { value: metrics.length, label: metrics.length === 1 ? "Metric" : "Metrics", note: primary ? `primary: ${primary.label || primary.id}` : undefined },
-          ...(caseIds.length ? [{ value: caseIds.length, label: caseIds.length === 1 ? "Case" : "Cases" }] : []),
+          ...(caseIds.length ? [{ value: caseIds.length, label: caseIds.length === 1 ? "Case" : "Cases", ...(namesNoCase ? { note: `plus ${NO_CASE_WORDS}` } : {}) }] : []),
           ...(recorded ? [{ value: valid, label: "Valid observations", tone: valid ? "pass" : "warn" }, { value: invalid, label: "Invalid", note: invalid ? "counted apart, not failures" : "none", tone: invalid ? "warn" : "neutral" }] : []),
           ...(judgments ? [{ value: judgments, label: judgments === 1 ? "Judgment" : "Judgments", note: unreached ? `${fmtInt(unreached)} unreached` : rankings.length ? `${plural(rankings.length, "ranking")}` : undefined }] : []),
         ],
@@ -237,10 +255,10 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
   const altText = order.length === 1 ? `One alternative (${label(order[0])})` : order.length <= 4 ? `${order.length} alternatives (${listed(order.map(label))})` : plural(order.length, "alternative");
   const groupText = topGroups.size ? ` in ${plural(topGroups.size, "group")}` : "";
   const metricText = metrics.length ? ` on ${metrics.length <= 3 ? listed(metrics.map(m => m.label || m.id)) : plural(metrics.length, "metric")}` : "";
-  const shape = order.length ? `${altText}${groupText}${metricText}${caseIds.length > 1 ? ` across ${plural(caseIds.length, "case")}` : ""}${recorded ? `: ${plural(recorded, "observation")}${invalid ? ` (${fmtInt(invalid)} invalid)` : ""}` : ""}${judgments ? `${recorded ? " and" : ":"} ${plural(judgments, "judgment")}` : ""}.` : undefined;
-  const question = [narrative.question, dataIn.question].find((q): q is string => typeof q === "string" && !!q.trim());
-  const title = [narrative.title, narrative.question, dataIn.title, dataIn.question].find((t): t is string => typeof t === "string" && !!t.trim()) || "Comparison";
-  return {
+  const shape = order.length ? `${altText}${groupText}${metricText}${caseIds.length + (namesNoCase ? 1 : 0) > 1 ? ` across ${casesWords(caseIds.length, namesNoCase)}` : ""}${recorded ? `: ${plural(recorded, "observation")}${invalid ? ` (${fmtInt(invalid)} invalid)` : ""}` : ""}${judgments ? `${recorded ? " and" : ":"} ${plural(judgments, "judgment")}` : ""}.` : undefined;
+  const question = [narrative.question, dataIn.question].find((q): q is string => typeof q === "string" && !!stripText(q));
+  const title = [narrative.title, narrative.question, dataIn.title, dataIn.question].find((t): t is string => typeof t === "string" && !!stripText(t)) || "Comparison";
+  return composed({
     title,
     kicker: typeof narrative.kicker === "string" && narrative.kicker ? narrative.kicker : "Comparison",
     summary: narrative.summary ?? dataIn.summary ?? shape,
@@ -250,10 +268,11 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
     ],
     arms: order.map(id => ({ id, label: label(id), ...(alternatives.find(a => a.id === id)?.note ? { note: alternatives.find(a => a.id === id)!.note } : {}) })),
     comparison: data,
+    ...(isObject(narrative.story) ? { story: narrative.story as unknown as Story } : {}),
     footer: narrative.footer || "A self-contained report: every view is drawn from the comparison embedded in this file.",
     problems,
     sections: kept.map(s => s.section as SectionSpec),
-  };
+  }, problems);
 }
 
 // ------------------------------------------------------------------ trial data as a comparison
@@ -276,7 +295,7 @@ export function fromTrial(trial: TrialReport): Comparison {
   const valid = runs.filter(r => r.passed === true || r.passed === false);
   const alternatives: Alternative[] = axes.arms.map(id => {
     const entry = isObject(planned[id]) ? planned[id] as Record<string, unknown> : {};
-    const attributes = Object.fromEntries(Object.entries(entry).filter(([k]) => !MATERIAL.has(k)).map(([k, v]) => [k, scalar(v)]));
+    const attributes = Object.fromEntries(entriesOf(entry).filter(([k]) => !MATERIAL.has(k)).map(([k, v]) => [k, scalar(v)]));
     const text = typeof entry.instructions_text === "string" ? entry.instructions_text : undefined;
     return { id, ...(Object.keys(attributes).length ? { attributes } : {}), ...(text ? { content: text } : {}), ...(entry.instructions_truncated === true ? { note: "instructions shortened to the report's text bound" } : {}) };
   });
@@ -309,7 +328,7 @@ export function fromTrial(trial: TrialReport): Comparison {
   }
   // Check values: all-boolean checks are binary, all-numeric ones numeric; other values stay in the trial views.
   const checkTypes = new Map<string, Set<string>>();
-  for (const r of valid) for (const [k, v] of Object.entries(isObject(r.checks) ? r.checks : {})) (checkTypes.get(k) || checkTypes.set(k, new Set()).get(k)!).add(typeof v === "boolean" ? "boolean" : typeof v === "number" && Number.isFinite(v) ? "number" : "other");
+  for (const r of valid) for (const [k, v] of entriesOf(isObject(r.checks) ? r.checks : {})) (checkTypes.get(k) || checkTypes.set(k, new Set()).get(k)!).add(typeof v === "boolean" ? "boolean" : typeof v === "number" && Number.isFinite(v) ? "number" : "other");
   for (const [name, types] of [...checkTypes].sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)) {
     if (types.size !== 1 || types.has("other")) continue;
     const boolean = types.has("boolean"), id = `check:${name}`, req = required.get(name);
@@ -322,12 +341,12 @@ export function fromTrial(trial: TrialReport): Comparison {
   }
   // Pairwise summaries: one judgment per counted pair, with inconsistent and invalid pairs as unreached judgments.
   const preferences: Preference[] = [];
-  const pairs = Object.entries(isObject(trial.pairwise) ? trial.pairwise : {}).filter(([, s]) => isObject(s) && Array.isArray(s.arms) && s.arms.length === 2);
+  const pairs = entriesOf(isObject(trial.pairwise) ? trial.pairwise : {}).filter(([, s]) => isObject(s) && Array.isArray(s.arms) && s.arms.length === 2);
   for (const [key, summary] of pairs) {
     const [a, b] = summary.arms.map(String), id = pairs.length === 1 ? "pairwise" : `pairwise:${key}`;
     const judge = isObject(summary.judge) && typeof summary.judge.model === "string" ? summary.judge.model : undefined;
     metrics.push({ id, label: pairs.length === 1 ? "Pairwise preference" : `Pairwise: ${a} vs ${b}`, kind: "preference", better: "higher", description: "A judge saw matched runs side by side in both orders; only pairs decided the same way in both orders count as decided." });
-    const scenarios = isObject(summary.scenarios) && Object.keys(summary.scenarios).length ? Object.entries(summary.scenarios) : [[undefined, summary.overall] as const];
+    const scenarios = isObject(summary.scenarios) && keysIn(summary.scenarios).length ? entriesOf(summary.scenarios) : [[undefined, summary.overall] as const];
     for (const [scenario, st] of scenarios) {
       if (!isObject(st)) continue;
       const n = (v: unknown) => typeof v === "number" && Number.isInteger(v) && v > 0 ? v : 0;
@@ -341,7 +360,7 @@ export function fromTrial(trial: TrialReport): Comparison {
     ...(name ? { title: name } : {}),
     alternatives, cases, metrics, observations, ...(preferences.length ? { preferences } : {}),
     ...(typeof trial.baseline === "string" && axes.arms.includes(trial.baseline) ? { baseline: trial.baseline } : {}),
-    ...(typeof plan.decision_rule === "string" && plan.decision_rule.trim() ? { decision_rule: plan.decision_rule } : {}),
+    ...(typeof plan.decision_rule === "string" && stripText(plan.decision_rule) ? { decision_rule: plan.decision_rule } : {}),
     ...(typeof trial.run_directory === "string" && trial.run_directory ? { sources: [{ label: "trial.py report", note: `run directory ${displayPath(trial.run_directory)}` }] } : {}),
   };
 }

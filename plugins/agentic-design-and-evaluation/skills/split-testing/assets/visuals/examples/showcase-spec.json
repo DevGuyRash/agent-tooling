@@ -2,26 +2,409 @@
   "title": "Every general view, with invented data",
   "kicker": "Visual library · showcase",
   "summary": "A fictional specification that uses each general block once, so a reader can see what each view does before composing one. None of these numbers describes anything real.",
-  "arms": [{"id": "a", "label": "Option A"}, {"id": "b", "label": "Option B"}, {"id": "c", "label": "Option C"}],
+  "story": {
+    "background": "Three invented note-taking tools, **Option A**, **Option B** and **Option C**, are compared on made-up evidence so that every general view of the library appears once with numbers a reader can follow. Option A is the tool in use, B and C the two candidates. None of the numbers describes anything real.",
+    "intent": "Show an author what each general view looks like and how it reads, before they compose a report of their own.",
+    "questions": [
+      "How does each general view present evidence, missing values and uncertainty?",
+      "How do the three invented options compare on pass rate, features and head-to-head preference?"
+    ],
+    "rule": "No real decision rests on this page; if it did, the option with the highest pass rate whose interval clears Option A's would be chosen.",
+    "covers": "Every general block once: text, callouts, lists, facts, a table, a requirement matrix, intervals, bars, a trend, excerpts and a diagram, each with invented values.",
+    "notCovered": "Trial and comparison views, which read real trial or comparison data, and any real tool or measurement.",
+    "alternatives": {
+      "a": "The note-taking tool in use today: the reference the other two are held against.",
+      "b": "The first candidate, which shares notes directly within one team.",
+      "c": "The second candidate, which works offline only from a prepared bundle and had few valid runs."
+    }
+  },
+  "arms": [
+    {
+      "id": "a",
+      "label": "Option A"
+    },
+    {
+      "id": "b",
+      "label": "Option B"
+    },
+    {
+      "id": "c",
+      "label": "Option C"
+    }
+  ],
   "sections": [
-    {"title": "Text, callouts and lists", "label": "Text", "blocks": [
-      {"type": "text", "title": "Plain text", "text": ["Paragraphs separate on blank lines. Inline `code` and **emphasis** are the only markup; every other character is shown exactly as supplied, so <tags> in evidence stay text."]},
-      {"type": "callout", "tone": "limit", "title": "What this does not show", "text": "A callout states a condition or limit beside the evidence it qualifies."},
-      {"type": "list", "title": "Open questions", "items": ["Does the effect hold at higher effort?", {"text": "Is the judge consistent across orders?", "tone": "warn", "detail": "Order-inconsistent pairs are reported separately."}]},
-      {"type": "facts", "title": "Facts", "items": [{"label": "Judge", "value": "fictional-judge", "mono": true}, {"label": "Repeats", "value": 6}, {"label": "Missing value", "value": null}]}
-    ]},
-    {"title": "Tables and requirement matrices", "label": "Tables", "blocks": [
-      {"type": "table", "title": "A table with a missing value", "columns": ["Option", "Passed", "Median words", "Note"], "numeric": [1, 2], "rows": [["Option A", 14, 312, "baseline"], ["Option B", {"value": 20, "status": "pass"}, 288, null], ["Option C", {"value": 15, "status": "warn", "note": "two runs timed out"}, null, "words not recorded"]]},
-      {"type": "matrix", "title": "What each option supports", "columns": [{"id": "a", "label": "Option A", "arm": true}, {"id": "b", "label": "Option B", "arm": true}, {"id": "c", "label": "Option C", "arm": true}], "rows": [{"id": "offline", "label": "Works offline"}, {"id": "export", "label": "Exports originals"}, {"id": "share", "label": "Shares directly", "detail": "within one team"}], "cells": [{"row": "offline", "column": "a", "status": "pass", "text": "all ten notes"}, {"row": "offline", "column": "b", "status": "fail", "text": "two unsaved"}, {"row": "offline", "column": "c", "status": "warn", "text": "with a prepared bundle"}, {"row": "export", "column": "a", "status": "pass", "text": "retained"}, {"row": "export", "column": "b", "status": "warn", "text": "after sync"}, {"row": "share", "column": "b", "status": "pass", "text": "opens directly"}, {"row": "share", "column": "a", "status": "warn", "text": "manual export"}]}
-    ]},
-    {"title": "Quantities", "label": "Quantities", "blocks": [
-      {"type": "intervals", "title": "Pass rates with intervals", "rows": [{"label": "Option A", "arm": "a", "k": 14, "n": 24}, {"label": "Option B", "arm": "b", "k": 20, "n": 23}, {"label": "Option C", "arm": "c", "k": 3, "n": 4, "note": "few valid runs"}], "reference": {"value": 0.5, "label": "half"}},
-      {"type": "bars", "title": "Pairwise outcomes", "segments": [{"id": "win", "label": "preferred", "tone": "accent"}, {"id": "tie", "label": "tie", "tone": "neutral"}, {"id": "loss", "label": "not preferred", "tone": "warn"}], "rows": [{"label": "Option B vs A", "arm": "b", "values": {"win": 12, "tie": 4, "loss": 3}}, {"label": "Option C vs A", "arm": "c", "values": {"win": 6, "tie": 6, "loss": null}}]},
-      {"type": "trend", "title": "Pass rate across rounds", "stages": ["Round 1", "Round 2", "Round 3", "Holdout"], "series": [{"label": "Option A", "arm": "a", "points": [{"stage": "Round 1", "k": 9, "n": 18}, {"stage": "Round 2", "k": 10, "n": 18}, {"stage": "Round 3", "k": 9, "n": 18}, {"stage": "Holdout", "k": 14, "n": 24}]}, {"label": "Option B", "arm": "b", "points": [{"stage": "Round 1", "k": 11, "n": 18}, {"stage": "Round 2", "k": 14, "n": 18}, {"stage": "Round 3", "k": 16, "n": 18}, {"stage": "Holdout", "k": 20, "n": 23}]}]}
-    ]},
-    {"title": "Excerpts and diagrams", "label": "Excerpts", "blocks": [
-      {"type": "excerpts", "title": "What the replies said", "items": [{"text": "The harbour sits under a violet sky; two moored boats, lights just coming on.", "arm": "b", "outcome": "pass", "source": "label-a-photo r2"}, {"text": "The fishing boat 'Marigold' returns at dusk.", "arm": "a", "outcome": "fail", "source": "label-a-photo r4", "note": "invents a boat name"}]},
-      {"type": "diagram", "title": "How a run is scored", "source": "flowchart LR\n  R[Run] --> C{Required checks}\n  C -- all hold --> J{Judge}\n  C -- any fails --> F[Failed]\n  J -- pass --> P[Passed]\n  J -- fail --> F\n  R -. no result .-> I[Invalid: excluded]"}
-    ]}
+    {
+      "title": "Text, callouts and lists",
+      "label": "Text",
+      "blocks": [
+        {
+          "type": "text",
+          "title": "Plain text",
+          "text": [
+            "Paragraphs separate on blank lines. Inline `code` and **emphasis** are the only markup; every other character is shown exactly as supplied, so <tags> in evidence stay text."
+          ]
+        },
+        {
+          "type": "callout",
+          "tone": "limit",
+          "title": "What this does not show",
+          "text": "A callout states a condition or limit beside the evidence it qualifies."
+        },
+        {
+          "type": "list",
+          "title": "Open questions",
+          "items": [
+            "Does the effect hold at higher effort?",
+            {
+              "text": "Is the judge consistent across orders?",
+              "tone": "warn",
+              "detail": "Order-inconsistent pairs are reported separately."
+            }
+          ]
+        },
+        {
+          "type": "facts",
+          "title": "Facts",
+          "items": [
+            {
+              "label": "Judge",
+              "value": "fictional-judge",
+              "mono": true
+            },
+            {
+              "label": "Repeats",
+              "value": 6
+            },
+            {
+              "label": "Missing value",
+              "value": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Tables and requirement matrices",
+      "label": "Tables",
+      "blocks": [
+        {
+          "type": "table",
+          "title": "A table with a missing value",
+          "columns": [
+            "Option",
+            "Passed",
+            "Median words",
+            "Note"
+          ],
+          "numeric": [
+            1,
+            2
+          ],
+          "rows": [
+            [
+              "Option A",
+              14,
+              312,
+              "baseline"
+            ],
+            [
+              "Option B",
+              {
+                "value": 20,
+                "status": "pass"
+              },
+              288,
+              null
+            ],
+            [
+              "Option C",
+              {
+                "value": 15,
+                "status": "warn",
+                "note": "two runs timed out"
+              },
+              null,
+              "words not recorded"
+            ]
+          ],
+          "read": {
+            "says": "Option B passed 20 runs against 14 for Option A; Option C's word count was not recorded, so the table says missing rather than zero."
+          }
+        },
+        {
+          "type": "matrix",
+          "title": "What each option supports",
+          "columns": [
+            {
+              "id": "a",
+              "label": "Option A",
+              "arm": true
+            },
+            {
+              "id": "b",
+              "label": "Option B",
+              "arm": true
+            },
+            {
+              "id": "c",
+              "label": "Option C",
+              "arm": true
+            }
+          ],
+          "rows": [
+            {
+              "id": "offline",
+              "label": "Works offline"
+            },
+            {
+              "id": "export",
+              "label": "Exports originals"
+            },
+            {
+              "id": "share",
+              "label": "Shares directly",
+              "detail": "within one team"
+            }
+          ],
+          "cells": [
+            {
+              "row": "offline",
+              "column": "a",
+              "status": "pass",
+              "text": "all ten notes"
+            },
+            {
+              "row": "offline",
+              "column": "b",
+              "status": "fail",
+              "text": "two unsaved"
+            },
+            {
+              "row": "offline",
+              "column": "c",
+              "status": "warn",
+              "text": "with a prepared bundle"
+            },
+            {
+              "row": "export",
+              "column": "a",
+              "status": "pass",
+              "text": "retained"
+            },
+            {
+              "row": "export",
+              "column": "b",
+              "status": "warn",
+              "text": "after sync"
+            },
+            {
+              "row": "share",
+              "column": "b",
+              "status": "pass",
+              "text": "opens directly"
+            },
+            {
+              "row": "share",
+              "column": "a",
+              "status": "warn",
+              "text": "manual export"
+            }
+          ],
+          "read": {
+            "says": "Only Option A works fully offline, Option B shares directly, and Option C's offline support needs a prepared bundle."
+          }
+        }
+      ],
+      "reading": "Option B passed 20 runs against 14 for Option A; Option C's word count was not recorded, so the table says missing rather than zero. In the matrix only Option A works fully offline, Option B shares directly, and Option C's offline support needs a prepared bundle."
+    },
+    {
+      "title": "Quantities",
+      "label": "Quantities",
+      "blocks": [
+        {
+          "type": "intervals",
+          "independent": true,
+          "title": "Pass rates with intervals",
+          "rows": [
+            {
+              "label": "Option A",
+              "arm": "a",
+              "k": 14,
+              "n": 24
+            },
+            {
+              "label": "Option B",
+              "arm": "b",
+              "k": 20,
+              "n": 23
+            },
+            {
+              "label": "Option C",
+              "arm": "c",
+              "k": 3,
+              "n": 4,
+              "note": "few valid runs"
+            }
+          ],
+          "reference": {
+            "value": 0.5,
+            "label": "half"
+          },
+          "read": {
+            "says": "Option B's band sits above the half line and clear of Option A's; Option C's band is wide because only four runs back it."
+          }
+        },
+        {
+          "type": "bars",
+          "title": "Pairwise outcomes",
+          "segments": [
+            {
+              "id": "win",
+              "label": "preferred",
+              "tone": "accent"
+            },
+            {
+              "id": "tie",
+              "label": "tie",
+              "tone": "neutral"
+            },
+            {
+              "id": "loss",
+              "label": "not preferred",
+              "tone": "warn"
+            }
+          ],
+          "rows": [
+            {
+              "label": "Option B vs A",
+              "arm": "b",
+              "values": {
+                "win": 12,
+                "tie": 4,
+                "loss": 3
+              }
+            },
+            {
+              "label": "Option C vs A",
+              "arm": "c",
+              "values": {
+                "win": 6,
+                "tie": 6,
+                "loss": null
+              }
+            }
+          ],
+          "read": {
+            "says": "Head to head, Option B was preferred in 12 of 19 pairings with Option A; Option C's losses were not recorded."
+          }
+        },
+        {
+          "type": "trend",
+          "independent": true,
+          "title": "Pass rate across rounds",
+          "stages": [
+            "Round 1",
+            "Round 2",
+            "Round 3",
+            "Holdout"
+          ],
+          "series": [
+            {
+              "label": "Option A",
+              "arm": "a",
+              "points": [
+                {
+                  "stage": "Round 1",
+                  "k": 9,
+                  "n": 18
+                },
+                {
+                  "stage": "Round 2",
+                  "k": 10,
+                  "n": 18
+                },
+                {
+                  "stage": "Round 3",
+                  "k": 9,
+                  "n": 18
+                },
+                {
+                  "stage": "Holdout",
+                  "k": 14,
+                  "n": 24
+                }
+              ]
+            },
+            {
+              "label": "Option B",
+              "arm": "b",
+              "points": [
+                {
+                  "stage": "Round 1",
+                  "k": 11,
+                  "n": 18
+                },
+                {
+                  "stage": "Round 2",
+                  "k": 14,
+                  "n": 18
+                },
+                {
+                  "stage": "Round 3",
+                  "k": 16,
+                  "n": 18
+                },
+                {
+                  "stage": "Holdout",
+                  "k": 20,
+                  "n": 23
+                }
+              ]
+            }
+          ],
+          "read": {
+            "says": "Option B's pass rate rose round by round while Option A's stayed near half."
+          }
+        }
+      ],
+      "reading": "Every invented run is a different note, so the counts are independent samples and carry intervals. Option B passed 20 of 23 valid runs (87%) against 14 of 24 (58%) for Option A, and its interval clears A's. Option C's 3 of 4 rests on too few runs to say anything. Head to head, B was preferred in 12 of 19 pairings with A, and B's pass rate rose round by round while A's stayed near half."
+    },
+    {
+      "title": "Excerpts and diagrams",
+      "label": "Excerpts",
+      "blocks": [
+        {
+          "type": "excerpts",
+          "title": "What the replies said",
+          "items": [
+            {
+              "text": "The harbour sits under a violet sky; two moored boats, lights just coming on.",
+              "arm": "b",
+              "outcome": "pass",
+              "source": "label-a-photo r2"
+            },
+            {
+              "text": "The fishing boat 'Marigold' returns at dusk.",
+              "arm": "a",
+              "outcome": "fail",
+              "source": "label-a-photo r4",
+              "note": "invents a boat name"
+            }
+          ],
+          "read": {
+            "says": "The judge passed Option B's reply, which describes what is in the photo, and failed Option A's, which invents a boat name."
+          }
+        },
+        {
+          "type": "diagram",
+          "title": "How a run is scored",
+          "source": "flowchart LR\n  R[Run] --> C{Required checks}\n  C -- all hold --> J{Judge}\n  C -- any fails --> F[Failed]\n  J -- pass --> P[Passed]\n  J -- fail --> F\n  R -. no result .-> I[Invalid: excluded]",
+          "read": {
+            "says": "A run passes only when every required check holds and the judge then passes it; a run with no result is invalid and left out of every rate, never counted as a failure."
+          }
+        }
+      ],
+      "reading": "The excerpts show the difference the judge scored: Option B describes what is in the photo, Option A invents a boat name. The diagram shows how any run becomes passed, failed or invalid."
+    }
   ]
 }

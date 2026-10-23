@@ -21,7 +21,7 @@ const ALL = ["verdict", "setup", "arms", "cases", "failures", "checks", "pairwis
 test("the example trial composes every default section in order", () => {
   const spec = V.trialReport(example, exampleNarrative);
   H.equal(ids(spec), ALL, "section ids");
-  H.equal(H.sectionIds(V.renderReport(spec)), ALL, "rendered section ids");
+  H.equal(H.sectionIds(V.renderReport(spec)), ["story", ...ALL], "rendered section ids: the story first");
 });
 
 test("pairwise appears only with pairwise data", () => {
@@ -293,7 +293,7 @@ test("auto-mount renders trial data with its narrative", () => {
   H.ok(stub.attributes.has("data-av-mounted"), "the target is not marked mounted");
   H.ok(stub.attributes.has("data-av-ready"), "the report is not marked ready");
   H.includes(stub.target.innerHTML, V.escapeText(exampleNarrative.title), "the narrative title");
-  H.equal(H.sectionIds(stub.target.innerHTML), ALL, "rendered section ids");
+  H.equal(H.sectionIds(stub.target.innerHTML), ["story", ...ALL], "rendered section ids: the story first");
 });
 
 test("auto-mount renders a specification, lending it the trial when present", () => {

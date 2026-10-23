@@ -35,6 +35,77 @@ export function slug(value: string, prefix = "av"): string {
   return `${prefix}-${base || "x"}-${hash(String(value))}`;
 }
 
+/** Whitespace, one explicit set for both checkers and every view: ASCII space and tab, line breaks, and all Unicode
+ * whitespace (no-break and em spaces, the byte-order mark, next-line and the information separators among them). */
+export const WHITESPACE = "\t\n\u000b\f\r \u001c\u001d\u001e\u001f\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff";
+/** Whether text says nothing: whitespace alone (WHITESPACE), or nothing. The one blank test of both checkers and every
+ * view: a reading, a story part, a description, a title or an id is blank exactly when this says so. */
+export const blank = (v: string): boolean => [...v].every(ch => WHITESPACE.includes(ch));
+/** Text with WHITESPACE removed from both ends: how every view trims what it shows. */
+export function stripText(v: string): string {
+  let i = 0, j = v.length;
+  while (i < j && WHITESPACE.includes(v[i])) i++;
+  while (j > i && WHITESPACE.includes(v[j - 1])) j--;
+  return v.slice(i, j);
+}
+/** Whether a value says something: text, or a list holding text, that is not blank. */
+export const said = (v: unknown): boolean => (typeof v === "string" && !blank(v)) || (Array.isArray(v) && v.some(x => typeof x === "string" && !blank(x)));
+const WS_CLASS = [...WHITESPACE].map(ch => `\\u${ch.charCodeAt(0).toString(16).padStart(4, "0")}`).join("");
+/** A run of WHITESPACE, for collapsing it to one space. */
+export const WS_RUN = new RegExp(`[${WS_CLASS}]+`, "g");
+/** A date as written: a day YYYY-MM-DD, then optionally "T" or a space and a time HH:MM, then optionally :SS and a
+ * fraction, then optionally Z or an offset ±HH:MM. */
+const DATE_TEXT = /^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+const pad = (n: number, width: number) => String(n).padStart(width, "0");
+/** A date as every view and both checks read one: WHITESPACE padding aside, DATE_TEXT naming a real calendar day and,
+ * when a time follows, a real time (hours to 23, minutes and seconds to 59, offset hours to 23 and minutes to 59; no
+ * zone is UTC). A day alone is that calendar day, with no time. A day with a time is the instant it names: `time` is
+ * that instant (ms) and `day` its day in UTC, so the day, the order and the time shown agree. The day must fall within
+ * 0001-01-01 and 9999-12-31; anything else is null. */
+export function readDate(v: unknown): { day: string; time: number | null } | null {
+  const m = typeof v === "string" ? DATE_TEXT.exec(stripText(v)) : null;
+  if (!m) return null;
+  const [y, mo, d] = [m[1], m[2], m[3]].map(Number);
+  // setUTCFullYear, not Date.UTC, which reads years 0-99 as 1900-1999.
+  const at = new Date(0);
+  at.setUTCFullYear(y, mo - 1, d);
+  if (y < 1 || at.getUTCFullYear() !== y || at.getUTCMonth() !== mo - 1 || at.getUTCDate() !== d) return null;
+  if (m[4] === undefined) return { day: `${m[1]}-${m[2]}-${m[3]}`, time: null };
+  const [h, mi, s] = [m[4], m[5], m[6] ?? "0"].map(Number);
+  const zone = m[8] && m[8] !== "Z" ? m[8] : "";
+  const [zh, zm] = zone ? [Number(zone.slice(1, 3)), Number(zone.slice(4))] : [0, 0];
+  if (h > 23 || mi > 59 || s > 59 || zh > 23 || zm > 59) return null;
+  const offset = (zone.startsWith("-") ? -1 : 1) * (zh * 60 + zm);
+  const time = at.getTime() + ((h * 60 + mi - offset) * 60 + s) * 1000 + Number((m[7] ?? ".").slice(1).padEnd(3, "0").slice(0, 3));
+  const u = new Date(time), uy = u.getUTCFullYear();
+  return uy < 1 || uy > 9999 ? null : { day: `${pad(uy, 4)}-${pad(u.getUTCMonth() + 1, 2)}-${pad(u.getUTCDate(), 2)}`, time };
+}
+/** A number written as text, padded with any WHITESPACE: both checkers and every view read numeric text by this. */
+export const NUMERIC_TEXT = new RegExp(`^[${WS_CLASS}]*-?(\\d+\\.?\\d*|\\.\\d+)([eE][-+]?\\d+)?[${WS_CLASS}]*$`);
+/** The number numeric text writes, its WHITESPACE padding removed first (Number alone knows a different set). */
+export const numberOf = (text: string): number => Number(stripText(text));
+/** A blank line between paragraphs: a line break, any WHITESPACE, a line break. */
+const PARAGRAPH_BREAK = new RegExp(`\\n[${WS_CLASS}]*\\n`);
+/** An identifier: text with something in it that starts with no "$" (kept for notes) and has no whitespace at either
+ * end. Every check of every kind of data holds each id to this, so every view compares ids exactly as written. */
+export const isId = (v: unknown): v is string => typeof v === "string" && v !== "" && !v.startsWith("$") && !WHITESPACE.includes(v[0]) && !WHITESPACE.includes(v[v.length - 1]);
+/** The entries of a keyed map in data, in its own order, as every check and every view lists them: a trial's pairwise
+ * judgments, a judgment's counts by case, a plan's arms, a run's checks and usage, a total's level counts, an
+ * alternative's attributes, a criterion's scores, and a narrative's or story's records. A key starting with "$" is a
+ * note, not an entry, for every check and every view alike. */
+export function entriesOf<T>(map: { [key: string]: T } | null | undefined): Array<[string, T]>;
+export function entriesOf(map: unknown): Array<[string, unknown]>;
+export function entriesOf(map: unknown): Array<[string, unknown]> {
+  if (!map || typeof map !== "object" || Array.isArray(map)) return [];
+  return Object.keys(map).filter(k => !k.startsWith("$")).map(k => [k, (map as Record<string, unknown>)[k]]);
+}
+/** The keys entriesOf lists. */
+export const keysIn = (map: unknown): string[] => entriesOf(map).map(e => e[0]);
+/** The values entriesOf lists. */
+export function valuesIn<T>(map: { [key: string]: T } | null | undefined): T[];
+export function valuesIn(map: unknown): unknown[];
+export function valuesIn(map: unknown): unknown[] { return entriesOf(map).map(e => e[1]); }
+
 export type AttrValue = string | number | boolean | null | undefined;
 /** Attribute text; false, null and undefined omit the attribute, true writes it bare. */
 export function attrs(map: Record<string, AttrValue>): string {
@@ -193,7 +264,7 @@ export function outcomeBadge(outcome: Outcome, label?: string): string {
  * other characters are escaped, so supplied text can never become markup. */
 export function prose(text: string | string[] | null | undefined, className = "av-prose"): string {
   if (text === null || text === undefined) return "";
-  const parts = (Array.isArray(text) ? text : String(text).split(/\n\s*\n/)).map(s => String(s).trim()).filter(Boolean);
+  const parts = (Array.isArray(text) ? text : String(text).split(PARAGRAPH_BREAK)).map(s => stripText(String(s))).filter(Boolean);
   if (!parts.length) return "";
   return `<div class="${className}">${parts.map(p => `<p>${inline(p)}</p>`).join("")}</div>`;
 }

@@ -147,13 +147,19 @@ test("preferences counts undecided judgments and never as losses", () => {
   H.includes(H.element(rate, 'data-arm="a"'), 'data-label="Losses">1<', "the undecided judgment is not a loss");
 });
 
-test("preferences gives win rates over decisive judgments with a Wilson interval", () => {
+test("preferences gives win rates over decisive judgments, with a Wilson interval where cases are not repeated", () => {
+  // A's decisive judgments: 3 in case us (two wins over B, one over C) and 2 in uk (a win and a loss against B).
+  // Pooled over two cases that each were judged more than once, 4 of 5 has no interval: Wilson's 37.6%–96.4% ("38%–96%") must not show.
   const html = render("preferences", {}, judged());
   const a = H.element(H.element(html, 'class="av-jv-table"'), 'data-arm="a"');
-  const ci = V.wilson(4, 5), pct = x => `${Math.round(x * 100)}%`;
-  H.includes(a, `<span class="av-rate">${pct(4 / 5)}</span>`, "4 wins in 5 decisive judgments");
-  H.includes(a, `${pct(ci[0])}–${pct(ci[1])}`, "the interval");
-  H.includes(a, "5 decisive", "the decisive count");
+  H.includes(a, '<span class="av-rate">80%</span>', "4 wins in 5 decisive judgments");
+  H.includes(a, "5 decisive across 2 cases, no interval", "the decisive count, and why it has no interval");
+  H.excludes(a, "38%–96%", "the pooled interval");
+  // Within one case the judgments are its repeats, and the rate keeps its interval: 3 of 3, Wilson 43.9%–100%.
+  const us = H.element(H.element(render("preferences", { cases: ["us"] }, judged()), 'class="av-jv-table"'), 'data-arm="a"');
+  H.includes(us, '<span class="av-rate">100%</span>', "3 wins in 3 decisive judgments in us");
+  H.includes(us, "44%–100%", "the interval within one case");
+  H.includes(us, "3 decisive", "the decisive count");
 });
 
 test("preferences names the judges and counts judgments without one", () => {

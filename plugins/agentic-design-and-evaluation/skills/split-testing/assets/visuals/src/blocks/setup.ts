@@ -3,7 +3,8 @@
  * received identical material, and the instruction and artifact texts
  * themselves, lettered (Text A, Text B) with a line diff from a reference text.
  * Reads the trial plan in the render context, or explicit `settings`. */
-import { esc, fmtInt } from "../core";
+import { esc, fmtInt, entriesOf, keysIn } from "../core";
+import { casesWords } from "../stats";
 import { diffRuns, diffStats, DiffLine, lineDiff, splitLines, wordDiff } from "../diff";
 import { fingerprint } from "../identity";
 import type { RenderContext } from "../model";
@@ -124,7 +125,7 @@ function valueHtml(key: string, vc: ValueCtx): string {
       : clamp(items.join("\n"), label(key));
   }
   if (isObject(v)) {
-    const entries = Object.keys(v).sort().map(k => `${k} ${displayText(typeof v[k] === "string" ? v[k] as string : canon(v[k]))}`);
+    const entries = keysIn(v).sort().map(k => `${k} ${displayText(typeof v[k] === "string" ? v[k] as string : canon(v[k]))}`);
     return entries.length ? `<span class="av-setup-items av-setup-items--inline">${entries.map(x => `<code class="av-setup-code">${esc(x)}</code>`).join("")}</span>` : missing("empty", "An empty setting.");
   }
   return `<code class="av-setup-code">${esc(displayText(canon(v)))}</code>`;
@@ -273,7 +274,7 @@ function variantSection(v: { added: Added[]; other: Pair[]; count: number }, ctx
   }).join("");
   const other = v.other.length ? `<p class="av-setup-textnote">${esc(`${v.other.length === 1 ? "This pair was named as a variant but differs" : "These pairs were named as variants but differ"} from the base case in more than added turns:`)}</p>${pairList(v.other)}` : "";
   const n = v.added.reduce((k, g) => k + g.pairs.length, 0);
-  const note = n ? `${plural(n, "case")} also ran as a variant with ${v.added.every(g => g.turns.length === 1) ? "one follow-up turn" : "follow-up turns"} added${many || n === 1 ? "" : `, the same ${v.added[0].turns.length === 1 ? "turn" : "turns"} in every variant`}` : `${plural(v.other.length, "named variant")}`;
+  const note = n ? `${casesWords(n, false)} also ran as a variant with ${v.added.every(g => g.turns.length === 1) ? "one follow-up turn" : "follow-up turns"} added${many || n === 1 ? "" : `, the same ${v.added[0].turns.length === 1 ? "turn" : "turns"} in every variant`}` : `${plural(v.other.length, "named variant")}`;
   return `<div class="av-setup-materials av-setup-variants"><h4 class="av-setup-subhead"><span class="av-eyebrow">Case variants</span><span class="av-setup-subnote">${esc(note)}</span></h4><div class="av-setup-texts">${items}</div>${other}</div>`;
 }
 
@@ -285,15 +286,15 @@ export function setup(input: SetupInput, ctx: RenderContext): string {
   if (!explicit && !data) throw new TypeError('A setup block needs trial data (the report spec\'s "trial" field, which trialReport() sets) or its own "settings".');
   const source: Record<string, unknown> = explicit || (isObject(data?.plan?.arms) ? data!.plan!.arms as Record<string, unknown> : {});
   const settings: Record<string, Settings | undefined> = {};
-  for (const [k, v] of Object.entries(source)) settings[k] = isObject(v) ? v : undefined;
+  for (const [k, v] of entriesOf(source)) settings[k] = isObject(v) ? v : undefined;
 
   // Which arms: the trial's arms that ran (or every explicit entry), narrowed to a requested subset.
-  const pool = explicit ? Object.keys(source) : trialAxes(data!).arms;
+  const pool = explicit ? keysIn(source) : trialAxes(data!).arms;
   const known = new Set(pool);
   const asked = Array.isArray(input.arms) ? input.arms.filter((a): a is string => typeof a === "string") : null;
   const unknown = asked ? asked.filter(a => !known.has(a)) : [];
   const arms = (asked ? pool.filter(a => asked.includes(a)) : pool).slice().sort((x, y) => ctx.arms.index(x) - ctx.arms.index(y));
-  const notRun = !explicit && !asked ? Object.keys(source).filter(a => !known.has(a)) : [];
+  const notRun = !explicit && !asked ? keysIn(source).filter(a => !known.has(a)) : [];
   const footnotes = [
     ...(notRun.length ? [`Planned but never run: ${notRun.join(", ")}.`] : []),
     ...(unknown.length ? [`Not in this trial, so not shown: ${unknown.join(", ")}.`] : []),
@@ -307,7 +308,7 @@ export function setup(input: SetupInput, ctx: RenderContext): string {
 
   // Every setting any shown arm records, in reading order; a material counts when only its text is present.
   const keySet = new Set<string>();
-  for (const a of arms) for (const [k, v] of Object.entries(settings[a] || {})) if (!NOT_SETTINGS.has(k) && present(v)) keySet.add(k);
+  for (const a of arms) for (const [k, v] of entriesOf(settings[a] || {})) if (!NOT_SETTINGS.has(k) && present(v)) keySet.add(k);
   for (const kind of KINDS) if (lists.get(kind.digest)!.length) keySet.add(kind.digest);
   const keys = [...keySet].filter(k => !hide.has(k)).sort(byOrder);
   const compareValue = (a: string, k: string): string => {
@@ -355,7 +356,7 @@ export function setup(input: SetupInput, ctx: RenderContext): string {
     ? `The plan records no settings for ${n === 1 ? "this arm" : "these arms"}, so this view cannot show what ${n === 1 ? "it" : "they"} received.`
     : n === 1
     ? varied
-      ? `One arm ran, so no arms are compared: the comparison is between ${varied === 1 ? "one case and its variant, which adds" : `${esc(fmtInt(varied))} cases and their variants, which add`} ${variants.added.every(g => g.turns.length === 1) ? "a follow-up turn" : "follow-up turns"}.`
+      ? `One arm ran, so no arms are compared: the comparison is between ${varied === 1 ? "one case and its variant, which adds" : `${esc(casesWords(varied, false))} and their variants, which add`} ${variants.added.every(g => g.turns.length === 1) ? "a follow-up turn" : "follow-up turns"}.`
       : `One arm ran, so no arms are compared: each case’s runs are measured against that case’s own pass criteria.`
     : r === 1
       ? `Only one of the ${esc(fmtInt(n))} arms has recorded settings, so this view cannot show how they differ.${missingNote}`
@@ -364,7 +365,7 @@ export function setup(input: SetupInput, ctx: RenderContext): string {
         : `The ${esc(fmtInt(r))} arms${r === n ? "" : " with recorded settings"} differ ${shared.length ? "only " : ""}in ${joinWords(differs.map(phrase))}${shared.length ? "; every other recorded setting is the same" : ""}.${missingNote}`;
   // With several arms and case variants, the variants are a comparison of their own: it leads, and the arms are where it ran.
   const variantLede = n > 1 && varied
-    ? `Each ${varied === 1 ? "case with a variant" : `of the ${esc(fmtInt(varied))} cases`} ran as written and with ${variants.added.every(g => g.turns.length === 1) ? "a follow-up turn" : "follow-up turns"} added (the case variants, first below), on every arm. `
+    ? `Each ${varied === 1 ? "case with a variant" : `of the ${esc(casesWords(varied, false))}`} ran as written and with ${variants.added.every(g => g.turns.length === 1) ? "a follow-up turn" : "follow-up turns"} added (the case variants, first below), on every arm. `
     : "";
 
   // Whether the arms faced the same cases: a comparison across different cases is not like for like.
@@ -380,7 +381,7 @@ export function setup(input: SetupInput, ctx: RenderContext): string {
     // Repeats that differ only between arms are said per arm, plainly.
     const perArm = arms.map(a => { const v = runs.filter(x => x.arm === a).length ? [...cells.entries()].filter(([k]) => k.startsWith(`${a}\u0000`)).map(([, c]) => c) : [0]; return { a, lo: Math.min(...v), hi: Math.max(...v) }; });
     const byArm = lo !== hi && perArm.every(x => x.lo === x.hi);
-    const versions = variants.count ? `${plural(all.size - variants.count, "case")}, as written and as variants (${fmtInt(all.size)} case versions)` : plural(all.size, "case");
+    const versions = variants.count ? `${casesWords(all.size - variants.count, false)}, as written and as variants (${fmtInt(all.size)} case versions)` : casesWords(all.size, false);
     if (all.size && n > 1) scope = short.length
       ? `<p class="av-setup-scope av-setup-scope--warn">Not every arm ran every case: ${short.map(a => `${ctx.arms.tag(a, { id: false })} ${esc(`ran ${casesOf.get(a)!.size} of ${all.size}`)}`).join(", ")}. Compare arms within the cases they share.</p>`
       : `<p class="av-setup-scope">${esc(`Each arm ran the same ${versions}${byArm ? `: ${perArm.map(x => `${ctx.arms.label(x.a)} ${fmtInt(x.lo)} ${x.lo === 1 ? "run" : "runs"} of each`).join(", ")}.` : `, ${lo === hi ? fmtInt(lo) : `${fmtInt(lo)}–${fmtInt(hi)}`} ${hi === 1 ? "run" : "runs"} per case.`}`)}</p>`;
@@ -400,7 +401,7 @@ export function setup(input: SetupInput, ctx: RenderContext): string {
   if (judgeSettings) {
     // An arm that records a judge of its own is scored by that one, which shows among its settings above; this judge scores the others.
     const scored = arms.filter(a => !isObject(settings[a]?.judge));
-    const jkeys = Object.keys(judgeSettings).filter(k => !NOT_SETTINGS.has(k) && !hide.has(k) && present(judgeSettings[k])).sort(byOrder);
+    const jkeys = keysIn(judgeSettings).filter(k => !NOT_SETTINGS.has(k) && !hide.has(k) && present(judgeSettings[k])).sort(byOrder);
     // A judge that is the same model as an arm it scores is worth knowing before trusting its verdicts.
     const jm = str(judgeSettings.model), same = jm ? scored.filter(a => str(settings[a]?.model) === jm) : [];
     const selfNote = same.length ? `<p class="av-setup-textnote av-setup-judge-same"><span class="av-chip av-chip--warn">same model</span> ${esc(`The judge is the same model as ${same.length === scored.length ? (scored.length === 1 ? "the arm" : "every arm") : joinWords(same.map(a => ctx.arms.label(a)))} it judges (${jm}).`)}</p>` : "";

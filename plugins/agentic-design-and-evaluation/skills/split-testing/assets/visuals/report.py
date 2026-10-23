@@ -5,6 +5,7 @@
   report.py --data COMPARISON.json [--csv TABLE.csv] [--narrative NARRATIVE.json] --output report.html
   report.py --csv TABLE.csv [--narrative NARRATIVE.json] --output report.html
   report.py --spec SPEC.json [--trial REPORT.json] [--data COMPARISON.json] --output report.html
+  report.py --collection COLLECTION.json [--spec SPEC.json] --output collection.html
   report.py --check (any of the inputs above)
   report.py --skeleton [NARRATIVE.json] (--trial REPORT.json | --data COMPARISON.json | --csv TABLE.csv)
 
@@ -16,7 +17,11 @@ valid, note, source, invalid_reason, excerpt), merged into COMPARISON.json when
 both are given, with metric kinds inferred where COMPARISON.json does not
 define them and ambiguous input refused. NARRATIVE.json adds the decision,
 labels and extra sections to the default composition; SPEC.json is a complete
-report specification instead (see catalog.md). The library renders the report
+report specification instead (see catalog.md). COLLECTION.json names many
+reports, each a member with its trial or comparison file and its narrative
+file (paths relative to COLLECTION.json), with themes and pairs worth
+comparing; the page shows them all at a glance with one copy of the library,
+opens any of them in full, and sets any two side by side. The library renders the report
 in the reader's browser from the embedded data, so this needs only Python: no
 Node.js, no network, no build step.
 
@@ -41,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import datetime
 import io
 import json
 import math
@@ -89,7 +95,8 @@ def load(path: Path, label: str, strict: bool = False):
 # arm or case without opening a browser. tests/test_validate.py runs both
 # implementations over the same inputs and requires identical problems.
 
-FRAME = {"title": "text", "description": "prose", "note": "text", "id": "text"}
+READ = {"fields": {"shows": "prose", "how": "prose", "says": "prose"}}
+FRAME = {"title": "text", "description": "prose", "note": "text", "id": "text", "read": READ}
 NUMBER_OR_NULL = {"oneOf": ["number", "null"]}
 TONES = ["neutral", "pass", "fail", "invalid", "warn", "accent"]
 TONE = {"enum": TONES, "warn": True}
@@ -120,13 +127,16 @@ CRITERION_FIELDS = {"id": "text", "label": "text", "weight": "number", "better":
 DECISION_CELL = {"fields": {"criterion": "text", "alternative": "alternative-ref", "rating": {"oneOf": ["text", "null"]}, "text": "text", "evidence": "prose"}, "required": ["criterion", "alternative"]}
 DECISION_SCALE = {"fields": {"min": "number", "max": "number", "levels": {"list": "text"}, "labels": {"record": "text"}, "note": "text"}}
 
+# Collection views: a subset of members by id or by theme, and pairs of members.
+SUBSET = {**FRAME, "members": {"list": "member"}, "themes": {"list": "theme"}}
+PAIR = {"fields": {"a": "member", "b": "member", "title": "text", "note": "text"}, "required": ["a", "b"]}
 BLOCKS = {
     "verdict": {"fields": {**FRAME, **VERDICT, "rule": "prose"}, "required": ["headline"]},
     "figures": {"fields": {**FRAME, "items": {"list": {"fields": {"value": {"oneOf": ["text", "null"]}, "label": "text", "note": "text", "tone": {"enum": ["neutral", "pass", "fail", "warn", "invalid"], "warn": True}}, "required": ["label"]}}}, "required": ["items"]},
     "ladder": {
         "trial": "without-rows",
         "fields": {
-            **FRAME, "rows": {"list": {"fields": {"arm": "arm-ref", "case": "case-ref", "k": "count", "n": "count", "invalid": "count", "note": "text"}, "required": ["k", "n"], "kn": [["k", "n"]]}},
+            **FRAME, "rows": {"list": {"fields": {"arm": "arm-ref", "case": "case-ref", "k": "count", "n": "count", "invalid": "count", "note": "text", "cases": "count"}, "required": ["k", "n"], "kn": [["k", "n"]]}}, "independent": "boolean",
             "by": {"enum": ["arm", "case"]}, "case": "case", "cases": {"list": "case"}, "arms": {"list": "arm"}, "identical": {"list": {"list": "arm"}}, "baseline": "text",
             "sort": {"enum": ["identity", "rate"], "warn": True}, "references": {"list": {"fields": {"value": "rate", "label": "text"}, "required": ["value", "label"]}}, "pairs": {"list": CASE_PAIR},
         },
@@ -142,13 +152,13 @@ BLOCKS = {
         "trial": "without-settings",
         "fields": {**FRAME, "arms": {"list": "arm"}, "baseline": "arm", "identical": {"list": {"list": "arm"}}, "hide": {"list": "text"}, "settings": {"record": "any", "keys": "arm-ref"}, "judge": "any", "pairs": {"oneOf": [AUTO_OFF, PAIR_LIST]}},
     },
-    "cases": {"trial": "always", "fields": {**FRAME, "cases": {"list": "case"}, "arms": {"list": "arm"}, "groups": {"list": GROUP}, "pairs": {"oneOf": [AUTO_OFF, PAIR_SPECS]}, "index": "boolean"}},
+    "cases": {"trial": "always", "fields": {**FRAME, "cases": {"list": "case"}, "arms": {"list": "arm"}, "groups": {"list": GROUP}, "pairs": {"oneOf": [AUTO_OFF, PAIR_SPECS]}, "index": "boolean", "descriptions": {"record": "prose", "keys": "case-ref"}}},
     "failures": {"trial": "always", "fields": {**FRAME, "cases": {"list": "case"}, "arms": {"list": "arm"}, "by": {"enum": ["cause", "case"], "warn": True}, "reasons": "count"}},
     "contrast": {
         "trial": "without-rows",
         "fields": {
             **FRAME,
-            "rows": {"list": {"fields": {"label": "text", "arm": "arm-ref", "vs": "arm-ref", "note": "text", "k1": "count", "n1": "count", "k2": "count", "n2": "count", "invalid1": "count", "invalid2": "count", "identical": "boolean"}, "required": ["k1", "n1", "k2", "n2"], "kn": [["k1", "n1"], ["k2", "n2"]]}},
+            "rows": {"list": {"fields": {"label": "text", "arm": "arm-ref", "vs": "arm-ref", "note": "text", "k1": "count", "n1": "count", "k2": "count", "n2": "count", "invalid1": "count", "invalid2": "count", "identical": "boolean", "cases": "count"}, "required": ["k1", "n1", "k2", "n2"], "kn": [["k1", "n1"], ["k2", "n2"]]}}, "independent": "boolean",
             "baseline": {"oneOf": ["arm", {"list": "arm"}]}, "arms": {"list": "arm"}, "cases": {"list": "case"}, "a": CONTRAST_SIDE, "b": CONTRAST_SIDE,
             "pair": {"oneOf": ["text", {"fields": {"suffix": "text"}, "required": ["suffix"]}]}, "by": {"enum": ["arm", "case", "none"], "warn": True}, "identical": {"list": {"list": "arm"}},
             "threshold": {"oneOf": ["number", {"fields": {"value": "number", "label": "text"}, "required": ["value"]}]}, "sort": {"enum": ["identity", "difference"], "warn": True}, "method": "boolean",
@@ -169,7 +179,7 @@ BLOCKS = {
     },
     "intervals": {
         "fields": {
-            **FRAME, "rows": {"list": {"fields": {"label": "text", "arm": "arm-ref", "k": "count", "n": "count", "value": NUMBER_OR_NULL, "lo": NUMBER_OR_NULL, "hi": NUMBER_OR_NULL, "note": "text"}, "kn": [["k", "n"]]}},
+            **FRAME, "rows": {"list": {"fields": {"label": "text", "arm": "arm-ref", "k": "count", "n": "count", "cases": "count", "value": NUMBER_OR_NULL, "lo": NUMBER_OR_NULL, "hi": NUMBER_OR_NULL, "note": "text"}, "kn": [["k", "n"]]}}, "independent": "boolean",
             "domain": {"list": "number"}, "unit": "text", "percent": "boolean", "reference": {"fields": {"value": "number", "label": "text"}, "required": ["value", "label"]},
         },
         "required": ["rows"],
@@ -184,8 +194,8 @@ BLOCKS = {
     "trend": {
         "fields": {
             **FRAME, "stages": {"list": "text"},
-            "series": {"list": {"fields": {"label": "text", "arm": "arm-ref", "points": {"list": {"fields": {"stage": "text", "k": "count", "n": "count", "value": NUMBER_OR_NULL, "lo": NUMBER_OR_NULL, "hi": NUMBER_OR_NULL}, "required": ["stage"], "kn": [["k", "n"]]}}}, "required": ["label", "points"]}},
-            "percent": "boolean", "unit": "text",
+            "series": {"list": {"fields": {"label": "text", "arm": "arm-ref", "points": {"list": {"fields": {"stage": "text", "k": "count", "n": "count", "cases": "count", "value": NUMBER_OR_NULL, "lo": NUMBER_OR_NULL, "hi": NUMBER_OR_NULL}, "required": ["stage"], "kn": [["k", "n"]]}}}, "required": ["label", "points"]}},
+            "percent": "boolean", "unit": "text", "independent": "boolean",
         },
         "required": ["stages", "series"],
     },
@@ -205,20 +215,34 @@ BLOCKS = {
         "required": ["criteria"],
     },
     "observations": {"comparison": "without-data", "fields": {**FRAME, "data": "any", "alternatives": ALTERNATIVES, "cases": {"list": "comparison-case"}, "metrics": {"list": "metric"}, "metric": "metric", "groups": {"list": "text"}}},
+    "decisions": {"collection": "always", "fields": SUBSET},
+    "reports": {"collection": "always", "fields": {**SUBSET, "layouts": {"list": {"enum": ["cards", "list", "table", "matrix"], "warn": True}}}},
+    "shifts": {"collection": "always", "fields": SUBSET},
+    "cost-gain": {"collection": "always", "fields": SUBSET},
+    "timeline": {"collection": "always", "fields": SUBSET},
+    "matchups": {"collection": "always", "fields": {**SUBSET, "pairs": {"list": PAIR}}},
+    "report-compare": {"collection": "always", "fields": {**FRAME, "a": "member", "b": "member"}, "required": ["a", "b"]},
 }
 BLOCK_TYPES = sorted(BLOCKS)
 
-SECTION = {"id": "section-id", "title": "text", "label": "text", "lead": "prose", "blocks": {"list": "block"}}
+SECTION = {"id": "section-id", "title": "text", "label": "text", "lead": "prose", "reading": "prose", "blocks": {"list": "block"}}
 SPEC = {
     "fields": {
         "title": "string", "kicker": "text", "summary": "prose",
         "meta": {"list": {"fields": {"label": "text", "value": "text"}, "required": ["label", "value"]}},
         "arms": {"list": {"fields": {"id": "arm-ref", "label": "text", "note": "text"}, "required": ["id"]}},
         "sections": {"list": {"fields": SECTION, "required": ["title", "blocks"]}},
-        "footer": "text", "trial": "any", "cases": {"record": "text", "keys": "case-ref"}, "problems": "any", "comparison": "any",
+        "footer": "text", "trial": "any", "cases": {"record": "text", "keys": "case-ref"}, "problems": "any", "comparison": "any", "collection": "any", "story": "any",
     },
     "required": ["title", "sections"],
 }
+# A collection of reports (collection.ts).
+MEMBER = {"fields": {"id": "member-id", "theme": "theme", "title": "text", "label": "text", "note": "text", "date": "text", "follows": "member", "models": {"list": "text"}, "trial": "any", "comparison": "any", "spec": "any", "narrative": "any"}, "required": ["id"]}
+COLLECTION = {
+    "fields": {"title": "text", "kicker": "text", "summary": "prose", "footer": "text", "story": "any", "readings": {"record": "prose"}, "themes": {"list": {"fields": {"id": "theme-id", "label": "text", "summary": "prose"}, "required": ["id"]}}, "members": {"list": MEMBER}, "pairs": {"list": PAIR}},
+    "required": ["members"],
+}
+MEMBER_ID = re.compile(r"[A-Za-z][\w.-]*", re.ASCII)
 # Section ids of the trial composition (compose.ts SECTION_IDS), and earlier ids
 # it still accepts, for include, exclude, after and append.
 DEFAULT_SECTIONS = ["verdict", "setup", "arms", "cases", "grid", "failures", "checks", "pairwise", "cost", "invalid", "runs"]
@@ -246,7 +270,7 @@ NARRATIVE = {
         "include": {"list": "text"}, "exclude": {"list": "text"},
         "sections": {"list": {"fields": {**SECTION, "after": "text"}, "required": ["title", "blocks"]}},
         "append": {"record": {"list": "block"}},
-        "footer": "text",
+        "footer": "text", "story": "any", "readings": {"record": "prose"},
     },
 }
 MEASURES = ["output_tokens", "input_tokens", "seconds", "commands", "total_cost_usd"]
@@ -257,9 +281,9 @@ GROUP_PATH = {"oneOf": ["text", {"list": "text"}]}
 COMPARISON = {
     "fields": {
         "title": "text", "question": "text", "summary": "prose",
-        "alternatives": {"list": {"fields": {"id": "string", "label": "text", "description": "text", "group": GROUP_PATH, "attributes": {"record": {"oneOf": ["text", "boolean", "null"]}}, "content": "text", "note": "text"}, "required": ["id"]}},
-        "cases": {"list": {"fields": {"id": "string", "label": "text", "description": "text", "group": GROUP_PATH}, "required": ["id"]}},
-        "metrics": {"list": {"fields": {"id": "string", "label": "text", "kind": {"enum": METRIC_KINDS}, "better": {"enum": ["higher", "lower", "none"]}, "unit": "text", "levels": {"list": "text"}, "primary": "boolean", "description": "text", "threshold": "number"}, "required": ["id", "kind"]}},
+        "alternatives": {"list": {"fields": {"id": "alternative-id", "label": "text", "description": "text", "group": GROUP_PATH, "attributes": {"record": {"oneOf": ["text", "boolean", "null"]}}, "content": "text", "note": "text"}, "required": ["id"]}},
+        "cases": {"list": {"fields": {"id": "case-id", "label": "text", "description": "text", "group": GROUP_PATH}, "required": ["id"]}},
+        "metrics": {"list": {"fields": {"id": "metric-id", "label": "text", "kind": {"enum": METRIC_KINDS}, "better": {"enum": ["higher", "lower", "none"]}, "unit": "text", "levels": {"list": "text"}, "primary": "boolean", "description": "text", "threshold": "number"}, "required": ["id", "kind"]}},
         "observations": {"list": {"fields": {"alternative": "alternative", "metric": "metric", "case": "comparison-case", "value": {"oneOf": ["boolean", "text", "null"]}, "n": "count", "unit": "text", "valid": "boolean", "invalid_reason": "text", "note": "text", "excerpt": "text", "source": "text", "id": "text"}, "required": ["alternative", "metric"]}},
         "aggregates": {"list": {"fields": {"alternative": "alternative", "metric": "metric", "case": "comparison-case", "k": "count", "n": "count", "mean": "number", "sd": "number", "median": "number", "lo": "number", "hi": "number", "counts": {"record": "count"}, "source": "text", "note": "text"}, "required": ["alternative", "metric"]}},
         "preferences": {"list": {"fields": {"a": "alternative", "b": "alternative", "winner": {"oneOf": ["text", "null"]}, "case": "comparison-case", "metric": "metric", "judge": "text", "note": "text"}, "required": ["a", "b"]}},
@@ -288,7 +312,7 @@ COMPARISON_NARRATIVE = {
         "include": {"list": "text"}, "exclude": {"list": "text"},
         "sections": {"list": {"fields": {**SECTION, "after": "text"}, "required": ["title", "blocks"]}},
         "append": {"record": {"list": "block"}},
-        "footer": "text",
+        "footer": "text", "story": "any", "readings": {"record": "prose"},
     },
 }
 
@@ -301,7 +325,11 @@ DESCRIPTIONS = {
     "rate": "a number from 0 to 1", "boolean": "true or false", "null": "null", "any": "any value", "block": "a block object",
     "arm": "an arm id", "arm-ref": "an arm id", "arm-label": "an arm id", "case": "a case id", "case-ref": "a case id", "check": "a check name", "pair": "a pairwise key",
     "measure": "a measure id", "section-id": "a section id", "alternative": "an alternative id", "alternative-ref": "an alternative id", "metric": "a metric id", "comparison-case": "a case id",
+    "member": "a report id", "member-id": "a report id", "theme": "a theme id", "theme-id": "a theme id",
+    "alternative-id": "an alternative id", "case-id": "a case id", "metric-id": "a metric id",
 }
+# Field kinds that hold an identifier in data or name one the data defines: each is held to the identifier rule (is_id).
+ID_KINDS = ("arm", "case", "check", "pair", "alternative", "alternative-ref", "metric", "comparison-case", "member", "member-id", "theme", "theme-id", "alternative-id", "case-id", "metric-id")
 IDS = {
     "arm": ("arms", "an arm in this trial", "arms in this trial", "error", ""),
     "arm-ref": ("arms", "an arm in this trial", "arms in this trial", "warning", "; it gets an identity color of its own"),
@@ -315,11 +343,19 @@ IDS = {
     "alternative-ref": ("alternatives", "an alternative in this comparison", "alternatives in this comparison", "warning", ", so this entry is not used"),
     "metric": ("metrics", "a metric in this comparison", "metrics in this comparison", "error", ""),
     "comparison-case": ("ccases", "a case defined in this comparison", "cases in this comparison", "warning", "; it is shown by its id"),
+    "member": ("members", "a report in this collection", "reports in this collection", "error", ""),
+    "theme": ("themes", "a theme in this collection", "themes in this collection", "warning", ""),
 }
 FROM_COMPARISON = ("alternatives", "metrics", "ccases")
+FROM_COLLECTION = ("members", "themes")
 SECTION_ID = re.compile(r"[A-Za-z][\w:.-]*", re.ASCII)
 PLAIN_KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*")
-NUMERIC_TEXT = re.compile(r"\s*-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*", re.ASCII)
+# Whitespace, one explicit set for both checkers (src/core.ts WHITESPACE): ASCII space and tab, line breaks, and all
+# Unicode whitespace (no-break and em spaces, the byte-order mark, next-line and the information separators among them).
+WHITESPACE = "\t\n\u000b\f\r \u001c\u001d\u001e\u001f\u0085\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff"
+# A number written as text, padded with any WHITESPACE (src/core.ts NUMERIC_TEXT): ASCII digits, the shared padding set.
+_PAD = "[" + "".join(f"\\u{ord(ch):04x}" for ch in WHITESPACE) + "]*"
+NUMERIC_TEXT = re.compile(_PAD + r"-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?" + _PAD, re.ASCII)
 
 
 def is_number(v) -> bool:
@@ -334,8 +370,15 @@ def is_whole(v) -> bool:
     return is_number(v) and float(v).is_integer()
 
 
+def entries_of(m) -> list:
+    """The entries of a keyed map in data, in its own order, as every check lists them and every view of the page does
+    (src/core.ts entriesOf): a key starting with "$" is a note, not an entry."""
+    return [(k, v) for k, v in m.items() if not (isinstance(k, str) and k.startswith("$"))] if isinstance(m, dict) else []
+
+
 def keys_of(v: dict) -> list[str]:
-    return sorted(k for k in v if not k.startswith("$"))
+    """A map's keys as entries_of lists them, sorted so both checkers list problems in one order."""
+    return sorted(k for k, _ in entries_of(v))
 
 
 def clip(value: str, limit: int = 60) -> str:
@@ -470,8 +513,18 @@ def is_comparison(v) -> bool:
     return isinstance(v, dict) and isinstance(v.get("alternatives"), list)
 
 
-def known_from(trial, comparison=None) -> dict:
-    known = {"trial": False, "arms": [], "cases": [], "checks": [], "pairs": [], "settings": {}, "comparison": False, "alternatives": [], "metrics": [], "ccases": []}
+def is_collection(v) -> bool:
+    return isinstance(v, dict) and isinstance(v.get("members"), list)
+
+
+def known_from(trial, comparison=None, collection=None) -> dict:
+    known = {"trial": False, "arms": [], "cases": [], "checks": [], "pairs": [], "settings": {}, "comparison": False, "alternatives": [], "metrics": [], "ccases": [], "collection": False, "members": [], "themes": [], "ran_arms": [], "ran_cases": []}
+    if is_collection(collection):
+        known["collection"] = True
+        for name in ("members", "themes"):
+            for x in collection.get(name) if isinstance(collection.get(name), list) else []:
+                if isinstance(x, dict) and isinstance(x.get("id"), str) and x["id"] not in known[name]:
+                    known[name].append(x["id"])
     if is_comparison(comparison):
         known["comparison"] = True
         for name, key in (("alternatives", "alternatives"), ("metrics", "metrics"), ("ccases", "cases")):
@@ -488,7 +541,7 @@ def known_from(trial, comparison=None) -> dict:
 
     plan = trial.get("plan") if isinstance(trial.get("plan"), dict) else {}
     if isinstance(plan.get("arms"), dict):
-        for arm, entry in plan["arms"].items():
+        for arm, entry in entries_of(plan["arms"]):
             add("arms", arm)
             if isinstance(entry, dict):
                 known["settings"][arm] = entry
@@ -501,12 +554,14 @@ def known_from(trial, comparison=None) -> dict:
             continue
         add("arms", run.get("arm"))
         add("cases", run.get("scenario"))
+        add("ran_arms", run.get("arm"))
+        add("ran_cases", run.get("scenario"))
         if isinstance(run.get("passed"), bool) and isinstance(run.get("checks"), dict):
-            for key, value in run["checks"].items():
+            for key, value in entries_of(run["checks"]):
                 if isinstance(value, bool):
                     add("checks", key)
     if isinstance(trial.get("pairwise"), dict):
-        for key in trial["pairwise"]:
+        for key, _ in entries_of(trial["pairwise"]):
             add("pairs", key)
     return known
 
@@ -573,8 +628,15 @@ class Checker:
             for i, x in enumerate(v):
                 if not is_text(x):
                     self.type(x, "text", self.join(where, i))
+        if kind == "member-id" and not MEMBER_ID.fullmatch(v):
+            self.add("error", where, f'"{clip(v)}" cannot be a report id, since links name reports by id', "start with a letter and use only letters, digits, _ . or -")
+        if kind == "theme-id" and blank(v):
+            self.add("error", where, "a theme id cannot be blank, since reports join their theme by its id", "name the theme")
         if kind == "section-id" and not SECTION_ID.fullmatch(v):
             self.add("warning", where, f'"{clip(v)}" cannot be used as a section id, so the section gets a generated one', "start with a letter and use only letters, digits, _ : . or -")
+        # An id that is not blank but breaks the identifier rule is refused here; a blank one is told by its kind's own check.
+        if kind in ID_KINDS and not blank(v) and not is_id(v):
+            return self.add("error", where, f'"{clip(v)}" cannot be an id: an id starts with no "$" (kept for notes) and has no whitespace at either end', "write the id without them")
         if kind in IDS:
             self.id(v, kind, where)
         return None
@@ -593,15 +655,20 @@ class Checker:
         spec = IDS.get(kind)
         if not spec:
             return
+        # A blank case names no case: every view reads that evidence as evidence naming no case.
+        if kind == "comparison-case" and blank(value):
+            if self.known["comparison"]:
+                self.add("warning", where, "an empty or blank case names no case: it stands for the evidence naming no case", 'name a case, or leave "case" out where the evidence names none')
+            return
         source, noun, many, level, tail = spec
-        of_comparison = source in FROM_COMPARISON
-        if source and not ((self.known["comparison"] and (source != "ccases" or self.known["ccases"])) if of_comparison else self.known["trial"]):
+        of_comparison, of_collection = source in FROM_COMPARISON, source in FROM_COLLECTION
+        if source and not (self.known["collection"] if of_collection else (self.known["comparison"] and (source != "ccases" or self.known["ccases"])) if of_comparison else self.known["trial"]):
             return
         options = self.known[source] if source else MEASURES
         if value in options:
             return
         s = suggest(value, options)
-        hint = f'did you mean "{s}"?' if s else f"{many}: {list_of(options)}" if options else f"this {'comparison' if of_comparison else 'trial'} has no {re.sub(r' in this (trial|comparison)$', '', many)}"
+        hint = f'did you mean "{s}"?' if s else f"{many}: {list_of(options)}" if options else f"this {'collection' if of_collection else 'comparison' if of_comparison else 'trial'} has no {re.sub(r' in this (trial|comparison|collection)$', '', many)}"
         self.add(level, where, f'"{clip(value)}" is not {noun}{tail}', hint)
 
     def shape(self, v, f: dict, where: str, hooks: dict | None = None, skip: tuple = ()) -> None:
@@ -613,7 +680,7 @@ class Checker:
             x = v.get(name)
             if x is None:
                 self.add("error", where, f'missing required field "{name}"', f"required here: {', '.join(required)}")
-            elif isinstance(x, str) and not x.strip() and f["fields"].get(name) in ("text", "string", "prose"):
+            elif isinstance(x, str) and blank(x) and f["fields"].get(name) in ("text", "string", "prose", "alternative-id", "case-id", "metric-id"):
                 self.add("error", self.join(where, name), f'"{name}" is empty', f.get("empty", {}).get(name) or "write the text the report should show, or remove the entry")
         for name, field in f["fields"].items():
             x = v.get(name)
@@ -662,14 +729,13 @@ class Checker:
         own = needs[len("without-"):] if needs and needs.startswith("without-") else None
         if not self.known["trial"] and (needs == "always" or (own is not None and v.get(own) is None)):
             self.add("error", at, f"the {kind} block needs trial data{f' or its own {chr(34)}{own}{chr(34)}' if own is not None else ''}", "pass --trial to report.py, or set the specification's \"trial\" field")
+        if schema.get("collection") and not self.known["collection"]:
+            self.add("error", at, f"the {kind} block needs a collection", "pass --collection to report.py, or set the specification's \"collection\" field")
         if schema.get("comparison") and not self.known["comparison"] and v.get("data") is None:
             self.add("error", at, f'the {kind} block needs comparison data or its own "data"', "pass --data or --csv to report.py, or set the specification's \"comparison\" field")
 
-        def data(value, where: str) -> None:
-            if not is_comparison(value):
-                self.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md')
-
-        self.shape(v, schema, at, {"data": data}, skip=("type",))
+        # A view's own data is checked once, as comparison data, by check_comparison_data (view_data).
+        self.shape(v, schema, at, {}, skip=("type",))
         self.block_rules(kind, v, at)
         return None
 
@@ -725,6 +791,759 @@ class Checker:
             self.add("error", f"{at}.domain", "the domain is not two increasing numbers", "write [low, high], such as [0, 1]")
 
 
+# --------------------------------------------------------------------------- the story a newcomer needs
+#
+# What a reader who has never heard of the work needs before the results, as src/validate.ts checks it.
+
+STORY = {
+    "fields": {
+        "background": "prose", "intent": "prose", "questions": {"list": "text"}, "rule": "prose", "covers": "prose", "notCovered": "prose",
+        "alternatives": {"record": "prose"}, "cases": {"record": "prose"},
+        "glossary": {"list": {"fields": {"term": "text", "meaning": "prose"}, "required": ["term", "meaning"]}},
+    },
+    "required": ["background", "intent", "questions", "covers", "notCovered"],
+}
+STORY_HINT = 'add "story": background, intent, questions, rule, covers and notCovered, with every alternative and case described in plain words; see catalog.md#the-story'
+# A sentence that sends the reader to a file for what the report should say itself: a referral phrase followed by a
+# path or a document's file name; naming a file as the subject is not one (as src/validate.ts FILE_REF).
+FILE_REF = re.compile(r"""(?:\b(?:see(?:\s+also)?|refer(?:red)?\s+to|per|according\s+to|consult|as\s+(?:[a-z]+\s+)?in|(?:described|listed|documented|defined|explained|given|written|set\s+out|spelled\s+out|recorded|kept|stated|specified|detailed|available|covered)\s+in|details?\s+(?:are\s+|is\s+)?in)|(?:^|[.!?;:]\s+|\(\s*)(?:read|open|check))\s+(?:the\s+)?[`"'“‘]?((?:\.{1,2}/|~/|/)?(?:[\w.-]+/)+[\w.-]*\w\.[A-Za-z][A-Za-z0-9]{0,4}|(?:\.{1,2}/|~/|/)[\w.-]*\w\.[A-Za-z][A-Za-z0-9]{0,4}|[\w-][\w.-]*\.(?:md|markdown|txt|rst|adoc|pdf|docx?|html?|json|jsonl|ya?ml|toml|csv|tsv|ipynb|xlsx?|log))(?![\w/])""", re.ASCII | re.IGNORECASE)
+
+
+def file_pointer(text: str):
+    m = FILE_REF.search(text)
+    return m.group(1) if m else None
+PROSE_BLOCKS = ("text", "callout", "list", "facts", "verdict")
+COLLECTION_SECTIONS = ["glance", "reports", "shifts", "cost-gain", "timeline", "matchups"]
+
+
+def said(v) -> bool:
+    return (isinstance(v, str) and not blank(v)) or (isinstance(v, list) and any(isinstance(x, str) and not blank(x) for x in v))
+
+
+def texts_of(v) -> list[str]:
+    return [v] if isinstance(v, str) else [x for x in v if isinstance(x, str)] if isinstance(v, list) else []
+
+
+def file_refs(c, value, where: str) -> None:
+    for t in texts_of(value):
+        m = file_pointer(t)
+        if m:
+            c.add("error", where, f'points the reader at "{clip(m)}", which this report does not include', "say here, in plain words, what the reader needs from it")
+            return
+
+
+def pointed_rule(c, narrative: dict, recorded, whose: str) -> None:
+    """A recorded decision rule that only points at a file: the narrative states the rule, and the verdict shows that."""
+    file = file_pointer(recorded) if isinstance(recorded, str) else None
+    if not file or not isinstance(narrative.get("story"), dict) or said(narrative["story"].get("rule")):
+        return
+    c.add("error", "narrative.story.rule", f'{whose} decision rule points the reader at "{clip(file)}", which this report does not include, so the narrative states the rule', "write the rule in story.rule, in plain words; the verdict shows it in place of the recorded pointer")
+
+
+# Only ids a block brings itself: a filter ("arm", "case") selects among the trial's own, which are already required.
+ARM_FIELDS, CASE_FIELDS = ("arm-ref",), ("case-ref",)
+
+
+def named_ids(value, field, out: dict) -> None:
+    """The ids a value names where its field holds an arm or a case, and an object flagged as an arm (a matrix column
+    with arm: true) by its id, as src/validate.ts namedIds finds them."""
+    if field is None or value is None:
+        return
+
+    def take(names: list, v) -> None:
+        if isinstance(v, str) and v and v not in names:
+            names.append(v)
+
+    if isinstance(field, str):
+        if field in ARM_FIELDS:
+            take(out["arms"], value)
+        elif field in CASE_FIELDS:
+            take(out["cases"], value)
+        return
+    if "list" in field:
+        for v in value if isinstance(value, list) else []:
+            named_ids(v, field["list"], out)
+        return
+    if "record" in field:
+        if not isinstance(value, dict):
+            return
+        for k in keys_of(value):
+            if field.get("keys") in ARM_FIELDS:
+                take(out["arms"], k)
+            elif field.get("keys") in CASE_FIELDS:
+                take(out["cases"], k)
+            named_ids(value[k], field["record"], out)
+        return
+    if "oneOf" in field:
+        for f in field["oneOf"]:
+            named_ids(value, f, out)
+        return
+    if "fields" in field:
+        if not isinstance(value, dict):
+            return
+        if field["fields"].get("arm") == "boolean" and value.get("arm") is True:
+            take(out["arms"], value.get("id"))
+        for k, f in field["fields"].items():
+            named_ids(value.get(k), f, out)
+
+
+
+
+
+def blank(v: str) -> bool:
+    """Whether text says nothing: whitespace alone (WHITESPACE), or nothing. The one blank test of this checker, as
+    src/core.ts blank is of the page's checker and every view."""
+    return all(ch in WHITESPACE for ch in v)
+
+
+def strip_ws(v: str) -> str:
+    """Text with WHITESPACE removed from both ends (src/core.ts stripText)."""
+    return v.strip(WHITESPACE)
+
+
+def is_id(v) -> bool:
+    """An identifier (src/core.ts isId): text with something in it that starts with no "$" (kept for notes) and has no
+    whitespace at either end."""
+    return isinstance(v, str) and v != "" and not v.startswith("$") and v[0] not in WHITESPACE and v[-1] not in WHITESPACE
+
+
+ID_HINT = 'an id is text that starts with no "$" (kept for notes) and has no whitespace at either end, as trial.py report RUN_DIR --out FILE writes it'
+
+
+def check_trial_data(c, trial, where: str) -> bool:
+    """The one check of trial data, however it enters (as src/validate.ts checkTrial): it must be trial report data, and
+    every identifier the views group or label by must be text (each run's arm, scenario and given job, each plan
+    scenario's name, each pairwise judgment's arms). False when it is not trial data. Where two entries check one trial,
+    ordered() lists each problem once; every later check reads well_formed_trial."""
+    if not isinstance(trial, dict) or not isinstance(trial.get("runs"), list):
+        c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE")
+        return False
+    for i, r in enumerate(trial["runs"]):
+        if not isinstance(r, dict):
+            continue
+        if not is_id(r.get("arm")):
+            c.add("error", f"{where}.runs[{i}].arm", "a trial run must name its arm", ID_HINT)
+        if not is_id(r.get("scenario")):
+            c.add("error", f"{where}.runs[{i}].scenario", "a trial run must name its scenario", ID_HINT)
+        if r.get("job") is not None and not is_id(r.get("job")):
+            c.add("error", f"{where}.runs[{i}].job", "a trial run's job, when given, must name its record", ID_HINT)
+        if not is_verdict(r, "passed"):
+            c.add("error", f"{where}.runs[{i}].passed", "a trial run must say whether it passed: true, false, or null for no verdict", "write the trial with trial.py report RUN_DIR --out FILE, which writes each run's verdict")
+    plan = trial.get("plan")
+    if isinstance(plan, dict) and isinstance(plan.get("scenarios"), list):
+        for i, sc in enumerate(plan["scenarios"]):
+            if isinstance(sc, dict) and not is_id(sc.get("name")):
+                c.add("error", f"{where}.plan.scenarios[{i}].name", "a plan scenario must have a name", ID_HINT)
+    # A plan's arms are keyed by their ids.
+    if isinstance(plan, dict):
+        for k, _ in entries_of(plan.get("arms")):
+            if not is_id(k):
+                c.add("error", c.join(c.join(c.join(where, "plan"), "arms"), k), f'"{clip(k)}" cannot be an arm id', ID_HINT)
+    # A pairwise judgment names exactly two different arms this trial knows, with its overall counts and its counts by case.
+    if isinstance(trial.get("pairwise"), dict):
+        known = trial_arms(trial)
+        for k in keys_of(trial["pairwise"]):
+            p, at = trial["pairwise"][k], c.join(c.join(where, "pairwise"), k)
+            if not is_id(k):
+                c.add("error", at, f'"{clip(k)}" cannot be a pairwise judgment\'s id', ID_HINT)
+            if not isinstance(p, dict):
+                c.add("error", at, "a pairwise judgment must be an object with its arms and counts", ID_HINT)
+                continue
+            for sk, _ in entries_of(p.get("scenarios")):
+                if not is_id(sk):
+                    c.add("error", c.join(c.join(at, "scenarios"), sk), f'"{clip(sk)}" cannot be a case id', ID_HINT)
+            arms = p.get("arms")
+            if not isinstance(arms, list) or len(arms) != 2:
+                c.add("error", c.join(at, "arms"), "a pairwise judgment must name its two arms", ID_HINT)
+            else:
+                for i, a in enumerate(arms):
+                    if not is_id(a):
+                        c.add("error", f"{c.join(at, 'arms')}[{i}]", "a pairwise judgment must name its arms", ID_HINT)
+                    elif a not in known:
+                        c.add("error", f"{c.join(at, 'arms')}[{i}]", f'"{clip(a)}" is not an arm of this trial', f"arms of this trial: {list_of(known)}" if known else "this trial has no arms")
+                if is_id(arms[0]) and arms[0] == arms[1]:
+                    c.add("error", c.join(at, "arms"), "a pairwise judgment must name two different arms", ID_HINT)
+            if not isinstance(p.get("overall"), dict):
+                c.add("error", c.join(at, "overall"), "a pairwise judgment needs its overall counts", "write the trial with trial.py report RUN_DIR --out FILE, which writes them")
+            if not isinstance(p.get("scenarios"), dict):
+                c.add("error", c.join(at, "scenarios"), "a pairwise judgment needs its counts by case", "write the trial with trial.py report RUN_DIR --out FILE, which writes them")
+    return True
+
+
+def is_verdict(r: dict, key: str) -> bool:
+    """A run's verdict: passed, failed, or null for none (an invalid run); the field must be there."""
+    return key in r and (r[key] is True or r[key] is False or r[key] is None)
+
+
+def trial_arms(trial: dict) -> list:
+    """The arms a trial knows: those its well-formed runs ran and those its plan lists (as src/validate.ts trialArms)."""
+    out: list = []
+    for r in trial.get("runs") if isinstance(trial.get("runs"), list) else []:
+        if isinstance(r, dict) and is_id(r.get("arm")) and is_id(r.get("scenario")) and r["arm"] not in out:
+            out.append(r["arm"])
+    plan = trial.get("plan")
+    if isinstance(plan, dict) and isinstance(plan.get("arms"), dict):
+        for a, _ in entries_of(plan["arms"]):
+            if is_id(a) and a not in out:
+                out.append(a)
+    return out
+
+
+def well_formed_pair(p, known: list) -> bool:
+    """A pairwise judgment every view can read (as src/validate.ts wellFormedPair)."""
+    return (isinstance(p, dict) and isinstance(p.get("arms"), list) and len(p["arms"]) == 2 and all(is_id(a) and a in known for a in p["arms"])
+            and p["arms"][0] != p["arms"][1] and isinstance(p.get("overall"), dict) and isinstance(p.get("scenarios"), dict) and all(is_id(k) for k, _ in entries_of(p["scenarios"])))
+
+
+def well_formed_trial(trial):
+    """The trial every check after check_trial_data reads: only the runs, plan scenarios and pairwise judgments whose
+    identifiers are well formed, so no check descends into a record whose identifiers are malformed (as src/validate.ts wellFormedTrial)."""
+    if not isinstance(trial, dict) or not isinstance(trial.get("runs"), list):
+        return trial
+    out = {**trial, "runs": [r for r in trial["runs"] if not isinstance(r, dict) or (is_id(r.get("arm")) and is_id(r.get("scenario")) and (r.get("job") is None or is_id(r.get("job"))) and is_verdict(r, "passed"))]}
+    plan = trial.get("plan")
+    if isinstance(plan, dict) and isinstance(plan.get("scenarios"), list):
+        out["plan"] = {**plan, "scenarios": [sc for sc in plan["scenarios"] if not isinstance(sc, dict) or is_id(sc.get("name"))]}
+    if isinstance(trial.get("pairwise"), dict):
+        known = trial_arms(trial)
+        out["pairwise"] = {k: p for k, p in entries_of(trial["pairwise"]) if is_id(k) and well_formed_pair(p, known)}
+    return out
+
+
+def placed(problems: list, frm: str, at: str) -> list:
+    """A check's problems, moved from the place it names its input (`frm`, such as "comparison") to where the input
+    entered (`at`), as src/validate.ts placed."""
+    out = []
+    for p in problems:
+        w = p["where"]
+        moved = at if w == frm else at + w[len(frm):] if w.startswith(frm + ".") or w.startswith(frm + "[") else f"{at}.{w}"
+        out.append({**p, "where": moved})
+    return out
+
+
+def check_comparison_data(c, data, where: str) -> bool:
+    """The one check of comparison data, however it enters (as src/validate.ts checkComparison). False when it is not comparison data."""
+    if not is_comparison(data):
+        c.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md')
+        return False
+    c.problems.extend(placed(validate_comparison(data), "comparison", where))
+    return True
+
+
+def check_collection_data(c, data, where: str) -> None:
+    """The one check of a collection, however it enters (as src/validate.ts checkCollection)."""
+    c.problems.extend(placed(validate_collection(data), "collection", where))
+
+
+def view_data(c, owner: dict, at: str) -> None:
+    """Comparison data each view of a specification or a narrative carries as its own, checked where it sits (as src/validate.ts viewData)."""
+    def each(b, where: str) -> None:
+        if not isinstance(b, dict) or not isinstance(b.get("type"), str) or b.get("data") is None:
+            return
+        schema = BLOCKS.get(b["type"])
+        # Placed as every problem of a view is, under the view's place and type.
+        if schema and "data" in schema.get("fields", {}):
+            check_comparison_data(c, b["data"], c.join(f"{where} ({b['type']})", "data"))
+    for i, sec in enumerate(owner.get("sections") if isinstance(owner.get("sections"), list) else []):
+        if isinstance(sec, dict) and isinstance(sec.get("blocks"), list):
+            for j, b in enumerate(sec["blocks"]):
+                each(b, f"{c.join(c.join(at, 'sections'), i)}.blocks[{j}]")
+    if isinstance(owner.get("append"), dict):
+        for k in keys_of(owner["append"]):
+            if isinstance(owner["append"][k], list):
+                for j, b in enumerate(owner["append"][k]):
+                    each(b, c.join(c.join(c.join(at, "append"), k), j))
+
+
+def comparison_cases(data: dict) -> list:
+    """A comparison's cases as the composition finds them: those it declares, then every case its data name."""
+    out: list = []
+    # Evidence naming no case (a case missing, null, empty or only spaces) names none, as every view reads it.
+    def named(v) -> bool:
+        return isinstance(v, str) and not blank(v) and v not in out
+    for x in data.get("cases") if isinstance(data.get("cases"), list) else []:
+        if isinstance(x, dict) and named(x.get("id")):
+            out.append(x["id"])
+    for key in ("observations", "aggregates", "preferences", "rankings"):
+        for x in data.get(key) if isinstance(data.get(key), list) else []:
+            if isinstance(x, dict) and named(x.get("case")):
+                out.append(x["case"])
+    return out
+
+
+def story_obligations(known: dict, trial, comparison, blocks: list, own: dict, rule: bool) -> dict:
+    """Every alternative and case a report draws, from every source of data it uses, as src/validate.ts
+    storyObligations finds them: the one place a story's descriptions are required from."""
+    alternatives: dict = {}
+    cases: list = []
+    found = False
+
+    def alt(ident, noun: str) -> None:
+        if isinstance(ident, str) and ident and ident not in alternatives:
+            alternatives[ident] = noun
+
+    def kase(ident) -> None:
+        if isinstance(ident, str) and ident and ident not in cases:
+            cases.append(ident)
+
+    def from_comparison(data: dict) -> None:
+        nonlocal found
+        found = True
+        for a in data["alternatives"]:
+            if isinstance(a, dict):
+                alt(a.get("id"), "alternative")
+        for x in comparison_cases(data):
+            kase(x)
+
+    if known["trial"]:
+        found = True
+        for a in known["ran_arms"]:
+            alt(a, "arm")
+        for x in known["ran_cases"]:
+            kase(x)
+        # The pairwise view reads its own arms and cases, whatever the runs name.
+        pairwise = trial["pairwise"] if isinstance(trial, dict) and isinstance(trial.get("pairwise"), dict) else {}
+        for _, p in entries_of(pairwise):
+            if not isinstance(p, dict):
+                continue
+            for a in p["arms"][:2] if isinstance(p.get("arms"), list) else []:
+                alt(a, "arm")
+            for x, _ in entries_of(p.get("scenarios")):
+                kase(x)
+    if is_comparison(comparison):
+        from_comparison(comparison)
+    for a in own.get("arms") if isinstance(own.get("arms"), list) else []:
+        if isinstance(a, dict):
+            found = True
+            alt(a.get("id"), "alternative")
+    for k in keys_of(own["cases"]) if isinstance(own.get("cases"), dict) else []:
+        found = True
+        kase(k)
+    for b in blocks:
+        if not isinstance(b, dict) or not isinstance(b.get("type"), str):
+            continue
+        if is_comparison(b.get("data")):
+            from_comparison(b["data"])
+        named = {"arms": [], "cases": []}
+        if b["type"] in BLOCKS:
+            named_ids(b, BLOCKS[b["type"]], named)
+        if named["arms"] or named["cases"]:
+            found = True
+        for a in named["arms"]:
+            alt(a, "arm" if isinstance(trial, dict) and a in known["ran_arms"] else "alternative")
+        for x in named["cases"]:
+            kase(x)
+        # A decision matrix draws its own alternatives: those it lists, else its comparison's, else those its cells name.
+        if b["type"] == "decision-matrix":
+            source = b["data"] if b.get("data") is not None else comparison
+
+            def ids(items, key: str) -> list:
+                out = [x.get(key) if isinstance(x, dict) else x if key == "id" else None for x in (items if isinstance(items, list) else [])]
+                return [x for x in out if isinstance(x, str) and x != ""]
+
+            drawn = ids(b["alternatives"], "id") if isinstance(b.get("alternatives"), list) else ids(source["alternatives"], "id") if is_comparison(source) else []
+            if not drawn:
+                drawn = ids(b.get("cells"), "alternative")
+            if drawn:
+                found = True
+            for a in drawn:
+                alt(a, "arm" if isinstance(trial, dict) and a in known["ran_arms"] else "alternative")
+    if not found:
+        return {"rule": rule, "alternatives": None, "cases": None}
+    return {"rule": rule, "alternatives": alternatives, "cases": cases if known["trial"] or cases else None}
+
+
+def blocks_of(owner: dict) -> list:
+    """Every block of a specification's or a narrative's own sections, and of its appended blocks."""
+    out: list = []
+    for sec in owner.get("sections") if isinstance(owner.get("sections"), list) else []:
+        if isinstance(sec, dict) and isinstance(sec.get("blocks"), list):
+            out.extend(sec["blocks"])
+    if isinstance(owner.get("append"), dict):
+        for k in keys_of(owner["append"]):
+            if isinstance(owner["append"][k], list):
+                out.extend(owner["append"][k])
+    return out
+
+
+def story_checks(c, owner: dict, at: str, needs: dict) -> None:
+    story, where = owner.get("story"), c.join(at, "story")
+    if story is None:
+        c.add("error", at, 'missing "story", which tells a reader new to this work what it is about', STORY_HINT)
+        return
+    c.shape(story, STORY, where)
+    if not isinstance(story, dict):
+        return
+    if needs["rule"] and not said(story.get("rule")):
+        c.add("error", where, 'missing "rule": how the decision was to be made, in plain words', "say what result would decide it, so the reader can hold the views below against it")
+    if isinstance(story.get("questions"), list) and not story["questions"]:
+        c.add("error", c.join(where, "questions"), "lists no question", "write each question or theory the work set out to test, in plain words")
+    # A part given but saying nothing (empty, blank, or not words at all, such as a number) tells the reader as little
+    # as one left out. A rule the report does not require is checked the same way when given.
+    for k in ("background", "intent", "questions", "covers", "notCovered", *(() if needs["rule"] else ("rule",))):
+        v = story.get(k)
+        # A missing or blank required part is already reported by the shape check.
+        if v is None or (k != "rule" and isinstance(v, str) and blank(v)):
+            continue
+        if k == "questions":
+            for i, q in enumerate(v if isinstance(v, list) else []):
+                if not isinstance(q, str) or blank(q):
+                    c.add("error", c.join(c.join(where, k), i), "is blank", "write the question in plain words, or remove it")
+        elif not said(v):
+            c.add("error", c.join(where, k), "says nothing", "write it in plain words for a reader new to this work")
+
+    def described(key: str, needed) -> None:
+        if needed is None:
+            return
+        ids = list(needed)
+        given = story[key] if isinstance(story.get(key), dict) else {}
+        # The descriptions the story view draws (entries_of: a "$" key is a note), so a note never counts as one.
+        drawn = dict(entries_of(given))
+        for ident, noun in needed.items():
+            if not said(drawn.get(ident)):
+                c.add("error", c.join(where, key), f'does not describe {noun} "{clip(ident)}"', "say in plain words what each one is and how it differs from the others" if key == "alternatives" else "say in plain words why each case exists and what it checks for")
+        article = "a case" if key == "cases" else "an arm" if ids and all(n == "arm" for n in needed.values()) else "an alternative"
+        for k in keys_of(given):
+            if k not in ids:
+                s = suggest(k, ids)
+                c.add("warning", c.join(c.join(where, key), k), f'"{clip(k)}" is not {article} in this report, so this description is not used', f'did you mean "{s}"?' if s else f"ids here: {list_of(ids)}" if ids else "this report has none")
+
+    described("alternatives", needs["alternatives"])
+    described("cases", None if needs["cases"] is None else {ident: "case" for ident in needs["cases"]})
+    for k in ("background", "intent", "questions", "rule", "covers", "notCovered"):
+        file_refs(c, story.get(k), c.join(where, k))
+    for key in ("alternatives", "cases"):
+        if isinstance(story.get(key), dict):
+            for k in keys_of(story[key]):
+                file_refs(c, story[key][k], c.join(c.join(where, key), k))
+    if isinstance(story.get("glossary"), list):
+        for i, g in enumerate(story["glossary"]):
+            if isinstance(g, dict):
+                file_refs(c, g.get("meaning"), c.join(c.join(c.join(where, "glossary"), i), "meaning"))
+
+
+def resolve_sections(record, section) -> tuple[dict, list]:
+    """A record keyed by section names, resolved as src/sections.ts resolveSections does: each section's value is that of
+    the first key naming it, in the record's order (entries_of), and each later key naming the same section is a clash,
+    kept with both keys."""
+    values, keys, clashes = {}, {}, []
+    for k, v in entries_of(record):
+        s = section(k)
+        if s in keys:
+            clashes.append((s, keys[s], k))
+        else:
+            keys[s], values[s] = k, v
+    return values, clashes
+
+
+def readings_checks(c, owner: dict, at: str, required: list[str], names: list[str], key) -> None:
+    where = c.join(at, "readings")
+    given = owner["readings"] if isinstance(owner.get("readings"), dict) else {}
+    # The readings exactly as the composition shows them (resolve_sections); two keys for one section are refused, naming both.
+    values, clashes = resolve_sections(given, key)
+    for section, first, again in clashes:
+        c.add("error", c.join(where, again), f'"{clip(again)}" names the "{section}" section, as "{clip(first)}" does, so only "{clip(first)}" is shown', f'give the "{section}" reading once')
+    covered = [s for s, v in values.items() if said(v)]
+    for ident in required:
+        if ident not in covered:
+            c.add("error", where, f'no reading for the "{ident}" section', f"add readings.{ident}: what a newcomer should take from that section's views for this data, in plain words, with the numbers that matter")
+    for k in keys_of(given):
+        if k not in names:
+            s = suggest(k, names)
+            c.add("warning", c.join(where, k), f'"{clip(k)}" is not a section of this report, so this reading is not used', f'did you mean "{s}"?' if s else f"sections: {list_of(names, 20)}")
+        file_refs(c, given[k], c.join(where, k))
+
+
+def trial_sections_shown(trial, narrative: dict, kept: list[str]) -> list[str]:
+    shown = ["setup", "cases", "runs"]
+    if isinstance(trial, dict) and isinstance(trial.get("runs"), list):
+        runs = [r for r in trial["runs"] if isinstance(r, dict)]
+        valid = [r for r in runs if r.get("passed") is True or r.get("passed") is False]
+        # The arms section holds the arm views, or with one arm the variants against their base cases.
+        if valid and (len({r["arm"] for r in runs if isinstance(r.get("arm"), str)}) > 1 or variant_pairs(trial, runs, narrative)):
+            shown.append("arms")
+        if any(r.get("passed") is False for r in valid):
+            shown.append("failures")
+        if entries_of(trial.get("pairwise")):
+            shown.append("pairwise")
+
+        def positive(v) -> bool:
+            return is_number(v) and v > 0
+
+        if any(positive(r.get("seconds")) or positive(r.get("commands")) or (isinstance(r.get("usage"), dict) and any(positive(r["usage"].get(k)) for k in ("output_tokens", "input_tokens", "cost_usd", "total_cost_usd"))) for r in valid):
+            shown.append("cost")
+        if any(r.get("passed") is not True and r.get("passed") is not False for r in runs):
+            shown.append("invalid")
+        if valid:
+            shown.append("grid")
+        if valid and checks_shown(trial, runs):
+            shown.append("checks")
+    return [s for s in DEFAULT_SECTIONS if s in shown and s in kept]
+
+
+def variant_pairs(trial: dict, runs: list[dict], narrative: dict) -> bool:
+    """Whether the composition pairs any case with a variant of it: the narrative's own pairs where it lists them, else
+    those the plan's scenarios form (as src/validate.ts variantPairs decides it)."""
+    ran = {r.get("scenario") for r in runs if isinstance(r.get("scenario"), str)}
+    if isinstance(narrative.get("pairs"), list):
+        for p in narrative["pairs"]:
+            base, variant = (p[0] if len(p) > 0 else None, p[1] if len(p) > 1 else None) if isinstance(p, list) else (p.get("base"), p.get("variant")) if isinstance(p, dict) else (None, None)
+            if isinstance(base, str) and isinstance(variant, str) and base != variant and base in ran and variant in ran:
+                return True
+        return False
+    plan = trial.get("plan") if isinstance(trial.get("plan"), dict) else {}
+    scenarios = [x for x in plan.get("scenarios") if isinstance(x, dict)] if isinstance(plan.get("scenarios"), list) else []
+    return bool(case_pairs(scenarios, runs))
+
+
+def case_pairs(scenarios: list[dict], runs: list[dict]) -> list[tuple]:
+    """Case variants found in the plan by content, as src/trial-model.ts casePairs finds them: scenarios that ran and share
+    prompt, judge, judge role, required checks and artifact, where the variant repeats its base's follow-up turns and adds
+    more. The closest base wins; a tie means no single base."""
+    ran = {r.get("scenario") for r in runs}
+    ran_scenarios = [x for x in scenarios if isinstance(x.get("name"), str) and x["name"] in ran and isinstance(x.get("prompt"), str) and x["prompt"]]
+
+    def turns(x: dict) -> list:
+        return [js_text(t) for t in x["followups"]] if isinstance(x.get("followups"), list) else []
+
+    def same(a, b) -> bool:
+        return js_json(a) == js_json(b)
+
+    pairs, used = [], set()
+    for variant in ran_scenarios:
+        if variant["name"] in used:
+            continue
+        vt = turns(variant)
+        bases = [b for b in ran_scenarios if b is not variant and b["name"] not in used and b["prompt"] == variant["prompt"]
+                 and all(same(b.get(k), variant.get(k)) for k in ("judge", "judge_role", "required", "artifact"))
+                 and len(turns(b)) < len(vt) and turns(b) == vt[:len(turns(b))]]
+        most = max([-1, *(len(turns(b)) for b in bases)])
+        closest = [b for b in bases if len(turns(b)) == most]
+        if len(closest) != 1:
+            continue
+        pairs.append((closest[0]["name"], variant["name"]))
+        used.add(variant["name"])
+    return pairs
+
+
+def checks_shown(trial: dict, runs: list[dict]) -> bool:
+    """Whether the composition draws its checks section, as src/validate.ts checksShown decides it."""
+    arms = {canon(r.get("arm")) for r in runs}
+    recorded = [r for r in runs if r.get("passed", MISSING) is not None]
+    checks_of = lambda r: r["checks"] if isinstance(r.get("checks"), dict) else {}
+    if len(arms) > 1:
+        names: dict[str, bool] = {}
+        for r in recorded:
+            for k, v in entries_of(checks_of(r)):
+                names[k] = names.get(k, True) if isinstance(v, bool) else False
+        return any(names.values()) or any(isinstance(r.get("judge"), dict) and r["judge"].get("verdict") in ("pass", "fail") for r in runs)
+    plan = trial.get("plan") if isinstance(trial.get("plan"), dict) else {}
+    scenarios = [x for x in plan.get("scenarios") or [] if isinstance(x, dict)] if isinstance(plan.get("scenarios"), list) else []
+    seen = []
+    for r in runs:
+        if canon(r.get("scenario")) not in [canon(x) for x in seen]:
+            seen.append(r.get("scenario"))
+    for cs in seen:
+        sc = next((x for x in scenarios if js_same(x.get("name"), cs)), None)
+        required = [x for x in sc["required"] if isinstance(x, str)] if sc and isinstance(sc.get("required"), list) else []
+        kinds: dict[str, str] = {}
+        for r in recorded:
+            if not js_same(r.get("scenario"), cs):
+                continue
+            for k, v in entries_of(checks_of(r)):
+                if k in required:
+                    continue
+                t = "boolean" if isinstance(v, bool) else "number" if is_number(v) else "other"
+                kinds[k] = t if k not in kinds or kinds[k] == t else "other"
+        if any(t != "other" for t in kinds.values()):
+            return True
+    return False
+
+
+def comparison_sections_shown(data: dict, narrative: dict, kept: list[str]) -> list[str]:
+    """The sections the comparison composition draws, under its own conditions (src/comparison-compose.ts)."""
+    def objects(v):
+        return [x for x in v if isinstance(x, dict)] if isinstance(v, list) else []
+
+    ids: list = []
+    for a in objects(data.get("alternatives")):
+        if isinstance(a.get("id"), str) and a["id"] not in ids:
+            ids.append(a["id"])
+    metrics = [m for m in objects(data.get("metrics")) if isinstance(m.get("id"), str) and m.get("kind") in METRIC_KINDS]
+    baseline = any(isinstance(b, str) and b in ids for b in (narrative.get("baseline"), data.get("baseline")))
+    groups = narrative["identical"] if isinstance(narrative.get("identical"), list) else data["identical"] if isinstance(data.get("identical"), list) else []
+    identical = any(len({a for a in (g if isinstance(g, list) else []) if isinstance(a, str) and a in ids}) > 1 for g in groups)
+    shown = []
+    if ids:
+        shown.append("compared")
+    if metrics:
+        shown.append("results")
+    if metrics and len(ids) > 1 and (baseline or identical or len(ids) == 2):
+        shown.append("differences")
+    if any(isinstance(a.get("id"), str) and (len(a["group"]) > 0 if isinstance(a.get("group"), list) else isinstance(a.get("group"), str) and a["group"] != "") for a in objects(data.get("alternatives"))):
+        shown.append("groups")
+    if len(comparison_cases(data)) > 1 and metrics:
+        shown.append("cases")
+    if objects(data.get("preferences")) or any(isinstance(r.get("order"), list) for r in objects(data.get("rankings"))):
+        shown.append("judgments")
+    if objects(narrative.get("criteria")):
+        shown.append("decision")
+    if objects(data.get("observations")) or objects(data.get("aggregates")):
+        shown.append("observations")
+    return [x for x in COMPARISON_SECTIONS if x in shown and x in kept]
+
+
+def collection_sections_shown(collection: dict) -> list[str]:
+    members = [m for m in collection.get("members") if isinstance(m, dict)] if isinstance(collection.get("members"), list) else []
+    shown = ["glance", "reports"]
+    # A member's data, its own or its specification's, as the composition reads it (src/validate.ts collectionSectionsShown).
+    def measured(c) -> bool:
+        return isinstance(c, dict) and isinstance(c.get("metrics"), list) and len(c["metrics"]) > 0
+
+    if any(isinstance(m.get("trial"), dict) or (isinstance(m.get("spec"), dict) and (isinstance(m["spec"].get("trial"), dict) or measured(m["spec"].get("comparison")))) or measured(m.get("comparison")) for m in members):
+        shown.append("shifts")
+    if any(isinstance(m.get("trial"), dict) or isinstance(m.get("spec"), dict) for m in members) and any(cost_shown(m) for m in members):
+        shown.append("cost-gain")
+    if len([m for m in members if dated(m)]) > 1 or any(isinstance(m.get("follows"), str) for m in members):
+        shown.append("timeline")
+    if (isinstance(collection.get("pairs"), list) and collection["pairs"]) or any(isinstance(m.get("follows"), str) for m in members):
+        shown.append("matchups")
+    return [s for s in COLLECTION_SECTIONS if s in shown]
+
+
+def member_trial(m: dict):
+    if isinstance(m.get("spec"), dict):
+        t = m["spec"].get("trial")
+        return t if isinstance(t, dict) and isinstance(t.get("runs"), list) else None
+    t = m.get("trial")
+    return t if isinstance(t, dict) and isinstance(t.get("runs"), list) else None
+
+
+def trimmed(v) -> str:
+    return strip_ws(v) if isinstance(v, str) else number_text(v) if is_number(v) else ""
+
+
+DATE_TEXT = re.compile(r"(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2})(?::(\d{2})(\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?", re.ASCII)
+
+
+def read_date(v):
+    """The day a date names (src/core.ts readDate): WHITESPACE padding aside, a real calendar day written YYYY-MM-DD,
+    alone, or followed by "T" or a space and a real time: HH:MM, then optionally :SS and a fraction, then optionally Z
+    or an offset +HH:MM or -HH:MM (no zone is UTC). A day with a time is the instant it names, so its day is that
+    instant's day in UTC, which must fall within 0001-01-01 and 9999-12-31. Anything else is None."""
+    m = DATE_TEXT.fullmatch(strip_ws(v)) if isinstance(v, str) else None
+    if not m:
+        return None
+    try:
+        day = datetime.date(int(m[1]), int(m[2]), int(m[3]))
+    except ValueError:
+        return None
+    if m[4] is None:
+        return day.isoformat()
+    h, mi, s = int(m[4]), int(m[5]), int(m[6] or 0)
+    zone = m[8] if m[8] and m[8] != "Z" else ""
+    zh, zm = (int(zone[1:3]), int(zone[4:])) if zone else (0, 0)
+    if h > 23 or mi > 59 or s > 59 or zh > 23 or zm > 59:
+        return None
+    offset = (-1 if zone.startswith("-") else 1) * (zh * 60 + zm)
+    try:
+        at = datetime.datetime(day.year, day.month, day.day, h, mi, s) - datetime.timedelta(minutes=offset)
+    except OverflowError:
+        return None
+    return at.date().isoformat()
+
+
+def dated(m: dict) -> bool:
+    """A member the timeline places by day: its own date, or the day its trial's runs began, by the one date rule."""
+    if read_date(m.get("date")):
+        return True
+    t = member_trial(m)
+    if not t:
+        return False
+    ran = t["ran"] if isinstance(t.get("ran"), dict) else {}
+    return read_date(trimmed(ran.get("first")) or trimmed(t.get("generated_at"))) is not None
+
+
+def cost_shown(m: dict) -> bool:
+    """Whether a member draws a point on the cost-against-gain view, as src/validate.ts costShown decides it."""
+    t = member_trial(m)
+    if not t:
+        return False
+    runs = [r for r in t["runs"] if isinstance(r, dict)]
+    ran = []
+    for r in runs:
+        if isinstance(r.get("arm"), str) and r["arm"] not in ran:
+            ran.append(r["arm"])
+    narrative = m["narrative"] if not isinstance(m.get("spec"), dict) and isinstance(m.get("narrative"), dict) else {}
+    wanted = trimmed(t.get("baseline")) if isinstance(m.get("spec"), dict) else trimmed(narrative.get("baseline")) or trimmed(t.get("baseline"))
+    if wanted not in ran or t.get("baseline") != wanted:
+        return False
+    arms = t["plan"]["arms"] if isinstance(t.get("plan"), dict) and isinstance(t["plan"].get("arms"), dict) else {}
+    lane = lambda ident: arms[ident]["model"] if isinstance(arms.get(ident), dict) and isinstance(arms[ident].get("model"), str) else ""
+    valid = lambda ident: any(r.get("arm") == ident and (r.get("passed") is True or r.get("passed") is False) for r in runs)
+    pct = t["pct_vs_baseline"] if isinstance(t.get("pct_vs_baseline"), dict) else {}
+
+    def change(ident) -> bool:
+        e = pct[ident] if isinstance(pct.get(ident), dict) else {}
+        cost = e.get("cost_usd")
+        v = cost["median"] if isinstance(cost, dict) and cost.get("median") is not None else e["total_cost_usd"].get("median") if isinstance(e.get("total_cost_usd"), dict) else None
+        return is_number(v)
+
+    return valid(wanted) and any(ident != wanted and lane(ident) == lane(wanted) and valid(ident) and change(ident) for ident in ran)
+
+
+def section_readings(c, sections, at0: str) -> None:
+    if not isinstance(sections, list):
+        return
+    for i, s in enumerate(sections):
+        if not isinstance(s, dict) or not isinstance(s.get("blocks"), list):
+            continue
+        at = f"{c.join(at0, 'sections')}[{i}]"
+        file_refs(c, s.get("reading"), f"{at}.reading")
+        for j, b in enumerate(s["blocks"]):
+            if not isinstance(b, dict):
+                continue
+            if isinstance(b.get("read"), dict):
+                for k in ("shows", "how", "says"):
+                    file_refs(c, b["read"].get(k), f"{at}.blocks[{j}].read.{k}")
+            if b.get("type") == "verdict":
+                for k in ("headline", "detail", "rule", "conditions", "limits", "changes"):
+                    file_refs(c, b.get(k), f"{at}.blocks[{j}].{k}")
+        views = [(b, j) for j, b in enumerate(s["blocks"]) if isinstance(b, dict) and isinstance(b.get("type"), str) and b["type"] not in PROSE_BLOCKS]
+        says = lambda b: isinstance(b.get("read"), dict) and said(b["read"].get("says"))
+        if len(views) == 1:
+            if not said(s.get("reading")) and not says(views[0][0]):
+                c.add("error", at, "says nothing about what its views show for this data", 'add "reading" to the section, or "read": {"says": …} to the view: what a newcomer should take from it, with the numbers that matter')
+            continue
+        # With several views, a reading belongs to its view: one paragraph for the section cannot stand for views it does not describe.
+        for b, j in views:
+            if not says(b):
+                c.add("error", f"{at}.blocks[{j}]", "says nothing about what this view shows for this data", 'in a section of several views, give each one its own "read": {"says": …}: what a newcomer should take from it, with the numbers that matter')
+
+
+def append_readings(c, append, at: str) -> None:
+    """Views a narrative appends to the composed sections: each says what it shows."""
+    if not isinstance(append, dict):
+        return
+    for k in keys_of(append):
+        blocks = append[k]
+        if not isinstance(blocks, list):
+            continue
+        for j, b in enumerate(blocks):
+            if not isinstance(b, dict) or not isinstance(b.get("type"), str):
+                continue
+            where = f"{c.join(c.join(at, 'append'), k)}[{j}]"
+            if isinstance(b.get("read"), dict):
+                for f in ("shows", "how", "says"):
+                    file_refs(c, b["read"].get(f), f"{where}.read.{f}")
+            if b["type"] not in PROSE_BLOCKS and not (isinstance(b.get("read"), dict) and said(b["read"].get("says"))):
+                c.add("error", where, "says nothing about what this view shows for this data", 'add "read": {"says": …}: what a newcomer should take from it, with the numbers that matter')
+
+
+def has_verdict(spec: dict) -> bool:
+    return isinstance(spec.get("sections"), list) and any(isinstance(s, dict) and isinstance(s.get("blocks"), list) and any(isinstance(b, dict) and b.get("type") == "verdict" for b in s["blocks"]) for s in spec["sections"])
+
+
 def ordered(problems: list[dict]) -> list[dict]:
     seen, unique = set(), []
     for p in problems:
@@ -735,32 +1554,23 @@ def ordered(problems: list[dict]) -> list[dict]:
     return [p for p in unique if p["level"] == "error"] + [p for p in unique if p["level"] != "error"]
 
 
-def validate_spec(spec, trial=None, comparison=None) -> list[dict]:
+def validate_spec(spec, trial=None, comparison=None, collection=None) -> list[dict]:
     """Problems in a report specification, as src/validate.ts validateSpec finds them."""
     if not isinstance(spec, dict):
         return [{"level": "error", "where": "spec", "message": f'expected an object with "title" and "sections", found {found(spec)}', "hint": 'a specification is {"title": "…", "sections": [ … ]}'}]
-    if isinstance(spec.get("problems"), list):
-        carried = []
-        for p in spec["problems"]:
-            if isinstance(p, dict) and isinstance(p.get("where"), str) and isinstance(p.get("message"), str):
-                item = {"level": "error" if p.get("level") == "error" else "warning", "where": p["where"], "message": p["message"]}
-                if isinstance(p.get("hint"), str) and p["hint"]:
-                    item["hint"] = p["hint"]
-                carried.append(item)
-        return ordered(carried)
+    # A specification read from a file is checked as written: a "problems" field of its own proves nothing.
     # As in the browser: a specification without trial data of its own borrows the trial supplied beside it.
-    own = spec.get("comparison")
-    c = Checker(known_from(spec.get("trial") or trial, own if own not in (None, False, 0, "") else comparison), "spec")
+    own, gathered = spec.get("comparison"), spec.get("collection")
+    beside = {"trial": trial, "comparison": comparison, "collection": collection}
+    # Every check after the trial's own reads only its well-formed records.
+    trial, comparison = well_formed_trial(spec.get("trial") or trial), own if own not in (None, False, 0, "") else comparison
+    c = Checker(known_from(trial, comparison, gathered if gathered not in (None, False, 0, "") else collection), "spec")
 
     def check_trial(value, where: str) -> None:
-        if not isinstance(value, dict) or not isinstance(value.get("runs"), list):
-            c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE")
+        check_trial_data(c, value, where)
 
     def check_comparison(value, where: str) -> None:
-        if not is_comparison(value):
-            c.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md')
-        else:
-            c.problems.extend(validate_comparison(value))
+        check_comparison_data(c, value, where)
 
     def check_sections(value, where: str) -> None:
         if not isinstance(value, list):
@@ -773,8 +1583,118 @@ def validate_spec(spec, trial=None, comparison=None) -> list[dict]:
                 c.add("warning", f"sections[{i}].id", f'section id "{clip(s["id"])}" is already used by an earlier section', "give each section its own id, so links reach the section meant")
             ids.append(s["id"])
 
-    c.shape(spec, SPEC, "", {"trial": check_trial, "comparison": check_comparison, "sections": check_sections})
+    def check_collection(value, where: str) -> None:
+        check_collection_data(c, value, where)
+
+    c.shape(spec, SPEC, "", {"trial": check_trial, "comparison": check_comparison, "collection": check_collection, "sections": check_sections})
+    # Data supplied beside the specification is what its views read: checked as its own would be, by the same check.
+    if spec.get("trial") in (None, False, 0, "") and beside["trial"] is not None:
+        check_trial_data(c, beside["trial"], "trial")
+    if spec.get("comparison") in (None, False, 0, "") and beside["comparison"] is not None:
+        check_comparison_data(c, beside["comparison"], "comparison")
+    if spec.get("collection") in (None, False, 0, "") and beside["collection"] is not None:
+        check_collection_data(c, beside["collection"], "collection")
+    view_data(c, spec, "")
+    story_checks(c, spec, "", story_obligations(c.known, trial, comparison, blocks_of(spec), spec, has_verdict(spec)))
+    section_readings(c, spec.get("sections"), "")
     return ordered(c.problems)
+
+
+def validate_collection(collection) -> list[dict]:
+    """Problems in a collection of reports, as src/validate.ts validateCollection finds them."""
+    if not is_collection(collection):
+        return [{"level": "error", "where": "collection", "message": f'expected an object with a "members" list, found {found(collection)}', "hint": 'a collection is {"members": [{"id": "…", "trial": { … }, "narrative": { … }}, …]}; see catalog.md'}]
+    c = Checker(known_from(None, None, collection), "collection")
+    c.shape(collection, COLLECTION, "collection")
+    themes: list[str] = []
+    for i, t in enumerate(collection.get("themes") if isinstance(collection.get("themes"), list) else []):
+        if not isinstance(t, dict) or not isinstance(t.get("id"), str):
+            continue
+        if t["id"] in themes:
+            c.add("warning", f"collection.themes[{i}].id", f'theme id "{clip(t["id"])}" is already used by an earlier theme', "give each theme its own id; reports join the first")
+        themes.append(t["id"])
+        if not said(t.get("summary")):
+            c.add("error", f"collection.themes[{i}]", f'theme "{clip(t["id"])}" has no summary', "say what its reports set out to decide and how they relate to one another")
+        else:
+            file_refs(c, t["summary"], f"collection.themes[{i}].summary")
+    story_checks(c, collection, "collection", {"rule": False, "alternatives": None, "cases": None})
+    readings_checks(c, collection, "collection", collection_sections_shown(collection), COLLECTION_SECTIONS, lambda x: x)
+    ids: list[str] = []
+    for i, m in enumerate(collection["members"]):
+        if not isinstance(m, dict):
+            continue
+        at = f"collection.members[{i}]"
+        if isinstance(m.get("id"), str):
+            if m["id"] in ids:
+                c.add("error", f"{at}.id", f'report id "{clip(m["id"])}" is already used by an earlier report', "give each report its own id; links and pairs name reports by id")
+            ids.append(m["id"])
+            if m.get("follows") == m["id"]:
+                c.add("error", f"{at}.follows", "a report cannot follow itself", "name the earlier report this one follows up, or remove the field")
+        has_trial, has_comparison, has_spec = m.get("trial") is not None, m.get("comparison") is not None, m.get("spec") is not None
+        sources = sum((has_trial, has_comparison, has_spec))
+        if sources > 1:
+            c.add("error", at, 'has more than one of "trial", "comparison" and "spec"', "a report draws one trial, one comparison or one specification; make them separate reports")
+        elif not sources:
+            c.add("error", at, 'missing "trial", "comparison" or "spec"', "give the report its trial data (trial.py report), its comparison data, or a specification of its own")
+        if isinstance(m.get("date"), str) and not read_date(m["date"]):
+            c.add("warning", f"{at}.date", f'"{clip(m["date"])}" is not a calendar day written YYYY-MM-DD, alone or with a time such as T09:30:00Z, so it is not used', "write the day the runs began, such as 2026-10-15")
+        narrated = m.get("narrative") is not None
+        found_problems: list[dict] = []
+        if has_spec and sources == 1:
+            spec = m["spec"]
+            if not isinstance(spec, dict) or not isinstance(spec.get("title"), str) or not isinstance(spec.get("sections"), list):
+                c.add("error", f"{at}.spec", "is not a report specification", 'a specification is {"title": "…", "sections": [ … ]}; see catalog.md')
+            else:
+                for problem in validate_spec(spec):
+                    c.problems.append({**problem, "where": f"{at}.spec" if problem["where"] == "spec" else f"{at}.spec.{problem['where']}"})
+            if narrated:
+                c.add("warning", f"{at}.narrative", "a specification replaces the composition a narrative shapes, so this narrative is not used", "put the decision and labels in the specification itself, or remove the narrative")
+        if has_trial and sources == 1:
+            # Without a narrative the member's report is composed from none, and checked as such.
+            if check_trial_data(c, m["trial"], f"{at}.trial"):
+                found_problems = validate_narrative(m["narrative"] if narrated else {}, m["trial"])
+        if has_comparison and sources == 1:
+            if check_comparison_data(c, m["comparison"], f"{at}.comparison"):
+                found_problems = validate_comparison(m["comparison"], m["narrative"] if narrated else {})
+        for problem in found_problems:
+            c.problems.append({**problem, "where": f"{at}.{problem['where']}"})
+    for i, pair in enumerate(collection.get("pairs") if isinstance(collection.get("pairs"), list) else []):
+        if isinstance(pair, dict) and isinstance(pair.get("a"), str) and pair.get("a") == pair.get("b"):
+            c.add("error", f"collection.pairs[{i}]", "pairs a report with itself", "name two different reports")
+    return ordered(c.problems)
+
+
+MEMBER_FILES = ("trial", "comparison", "spec", "narrative")
+
+
+def member_file(base: Path, name: str, label: str) -> Path:
+    """A member's file, named relative to the collection's directory and kept inside it (symlinks resolved), since
+    its whole content is embedded in the page."""
+    if Path(name).is_absolute():
+        raise InputError(f"{label}: {name} is an absolute path", "name the file relative to the collection file, inside its directory")
+    root = base.resolve()
+    target = (root / name).resolve()
+    if target != root and root not in target.parents:
+        raise InputError(f"{label}: {name} is outside the collection's directory", "keep every member's files beside the collection file or in folders under it; the page embeds them whole")
+    return target
+
+
+def load_collection(path: Path, strict: bool) -> dict:
+    """A collection with each member's files read in: a member's "trial", "comparison", "spec" or "narrative" given
+    as a string is a JSON file named relative to the collection file and inside its directory."""
+    collection = load(path, "--collection", strict=strict)
+    if not isinstance(collection, dict) or not isinstance(collection.get("members"), list):
+        raise assemble.PackagingError(f"{path} needs a \"members\" list; see catalog.md")
+    members = []
+    for i, member in enumerate(collection["members"]):
+        if isinstance(member, dict):
+            member = dict(member)
+            for key in MEMBER_FILES:
+                if isinstance(member.get(key), str):
+                    label = f"collection.members[{i}].{key}"
+                    member[key] = load(member_file(path.parent, member[key], label), label, strict=strict)
+        members.append(member)
+    return {**collection, "members": members}
 
 
 def level_of(levels: list[str], value) -> int:
@@ -960,11 +1880,11 @@ def validate_comparison(data, narrative=MISSING) -> list[dict]:
     if loose and len(prefs) > 1 and not any(m.get("primary") is True for m in prefs):
         c.add("warning", "comparison.preferences", f"{plural(loose, 'judgment')} name no metric, and {len(prefs)} preference metrics could own them", 'name the metric on each judgment, or mark one preference metric "primary"; until then they count only toward the overall preference')
     if narrative is not MISSING:
-        c.problems.extend(comparison_narrative(narrative, c.known))
+        c.problems.extend(comparison_narrative(narrative, c.known, data))
     return ordered(c.problems)
 
 
-def comparison_narrative(narrative, known: dict) -> list[dict]:
+def comparison_narrative(narrative, known: dict, data: dict) -> list[dict]:
     """Problems in a narrative for the comparison composition."""
     if not isinstance(narrative, dict):
         return [{"level": "error", "where": "narrative", "message": f"expected an object, found {found(narrative)}", "hint": 'a narrative is an object such as {"title": "…", "decision": { … }}'}]
@@ -1055,14 +1975,28 @@ def comparison_narrative(narrative, known: dict) -> list[dict]:
     c.shape(narrative, COMPARISON_NARRATIVE, "narrative", {
         "decision": decision, "alternatives": alternatives, "identical": identical, "criteria": criteria, "include": section_ids, "exclude": section_ids, "sections": sections, "append": append,
     })
+    view_data(c, narrative, "narrative")
+    story_checks(c, narrative, "narrative", story_obligations(known, None, data, blocks_of(narrative), {}, True))
+    pointed_rule(c, narrative, data.get("decision_rule"), "the comparison's")
+    readings_checks(c, narrative, "narrative", comparison_sections_shown(data, narrative, kept), COMPARISON_NAMES, comparison_key)
+    section_readings(c, narrative.get("sections"), "narrative")
+    append_readings(c, narrative.get("append"), "narrative")
+    if isinstance(narrative.get("decision"), dict):
+        for k in ("headline", "detail", "conditions", "limits", "changes"):
+            file_refs(c, narrative["decision"].get(k), f"narrative.decision.{k}")
     return c.problems
 
 
 def validate_narrative(narrative, trial=None) -> list[dict]:
     """Problems in a narrative, as src/validate.ts validateNarrative finds them."""
+    # Every check after the trial's own reads only its well-formed records.
+    given, trial = trial, well_formed_trial(trial)
     c = Checker(known_from(trial), "narrative")
     if not isinstance(narrative, dict):
         return [{"level": "error", "where": "narrative", "message": f"expected an object, found {found(narrative)}", "hint": 'a narrative is an object such as {"title": "…", "decision": { … }}'}]
+    # The trial the narrative is told against: a narrative needs trial data to be read against.
+    if given is not None and not check_trial_data(c, given, "trial"):
+        return ordered(c.problems)
 
     def strings(v):
         return [x for x in v if isinstance(x, str)] if isinstance(v, list) else None
@@ -1121,7 +2055,9 @@ def validate_narrative(narrative, trial=None) -> list[dict]:
                 other = settings.get(arm) if isinstance(arm, str) else None
                 if arm == first or other is None:
                     continue
-                differ = sorted(k for k in {*base, *other} if k not in MATERIAL_TEXT and (canon(base[k]) if k in base else "") != (canon(other[k]) if k in other else ""))
+                # Settings listed as the setup view lists them (entries_of: a "$" key is a note).
+                b, o = dict(entries_of(base)), dict(entries_of(other))
+                differ = sorted(k for k in {*b, *o} if k not in MATERIAL_TEXT and (canon(b[k]) if k in b else "") != (canon(o[k]) if k in o else ""))
                 if differ:
                     c.add("error", c.join(c.join(where, i), j), f'"{clip(arm)}" differs from "{clip(first)}" in {list_of(differ)}, so the gap between them is not chance alone', "identical is for copies whose every recorded setting matches; leave these arms out of it")
 
@@ -1175,6 +2111,15 @@ def validate_narrative(narrative, trial=None) -> list[dict]:
     c.shape(narrative, NARRATIVE, "narrative", {
         "decision": decision, "arms": arms, "identical": identical, "pairs": pairs, "threshold": threshold, "include": section_ids, "exclude": section_ids, "sections": sections, "append": append,
     })
+    view_data(c, narrative, "narrative")
+    story_checks(c, narrative, "narrative", story_obligations(c.known, trial, None, blocks_of(narrative), {}, True))
+    pointed_rule(c, narrative, trial["plan"].get("decision_rule") if isinstance(trial, dict) and isinstance(trial.get("plan"), dict) else None, "the plan's")
+    readings_checks(c, narrative, "narrative", trial_sections_shown(trial, narrative, kept), SECTION_NAMES, section_key)
+    section_readings(c, narrative.get("sections"), "narrative")
+    append_readings(c, narrative.get("append"), "narrative")
+    if isinstance(narrative.get("decision"), dict):
+        for k in ("headline", "detail", "conditions", "limits", "changes"):
+            file_refs(c, narrative["decision"].get(k), f"narrative.decision.{k}")
     return ordered(c.problems)
 
 
@@ -1203,10 +2148,11 @@ def skeleton(trial: dict, trial_label: str) -> dict:
     ran_arms = list(dict.fromkeys(r["arm"] for r in runs if isinstance(r.get("arm"), str)))
     ran_cases = list(dict.fromkeys(r["scenario"] for r in runs if isinstance(r.get("scenario"), str)))
     planned = plan.get("arms") if isinstance(plan.get("arms"), dict) else {}
+    planned = dict(entries_of(planned))
     arms = [a for a in planned if a in ran_arms] + [a for a in ran_arms if a not in planned]
     scenarios = [s["name"] for s in plan.get("scenarios") or [] if isinstance(s, dict) and isinstance(s.get("name"), str)]
     cases = [c for c in dict.fromkeys(scenarios) if c in ran_cases] + [c for c in ran_cases if c not in scenarios]
-    settings = {a: {k: v for k, v in planned[a].items() if k not in MATERIAL_TEXT} for a in arms if isinstance(planned.get(a), dict) and planned[a]}
+    settings = {a: {k: v for k, v in entries_of(planned[a]) if k not in MATERIAL_TEXT} for a in arms if isinstance(planned.get(a), dict) and planned[a]}
 
     by_identity: dict[str, list[str]] = {}
     for arm in arms:
@@ -1237,7 +2183,7 @@ def skeleton(trial: dict, trial_label: str) -> dict:
         ),
     }
     rule = plan.get("decision_rule")
-    if isinstance(rule, str) and rule.strip():
+    if isinstance(rule, str) and not blank(rule):
         out["$rule"] = rule
     out["title"] = ""
     out["question"] = ""
@@ -1258,6 +2204,10 @@ def skeleton(trial: dict, trial_label: str) -> dict:
     baseline = trial.get("baseline")
     if isinstance(baseline, str) and baseline in arms:
         out["baseline"] = baseline
+    out["$story"] = "Write for a reader who has never heard of this work: what it is about, what the decider wanted, what was tested, each alternative and case in plain words, and what the report covers and does not. Then say, for each section, what its views show for this data. See catalog.md#the-story."
+    ran = known_from(trial)
+    out["story"] = {"background": "", "intent": "", "questions": [], "rule": "", "covers": "", "notCovered": "", "alternatives": {a: "" for a in ran["ran_arms"]}, "cases": {c: "" for c in ran["ran_cases"]}}
+    out["readings"] = {section: "" for section in trial_sections_shown(trial, {}, [x for x in DEFAULT_SECTIONS if x not in OPT_IN_SECTIONS])}
     return out
 
 
@@ -1309,13 +2259,194 @@ def load_comparison(path: Path, strict: bool) -> dict:
 def csv_number(text: str):
     if not NUMERIC_TEXT.fullmatch(text):
         return None
-    value = float(text)
+    value = float(strip_ws(text))
     return int(value) if value.is_integer() and abs(value) < 2 ** 53 else value
 
 
 def csv_flag(text: str):
-    word = text.strip().lower()
+    word = strip_ws(text).lower()
     return True if word in TRUE_WORDS or word == "1" else False if word in FALSE_WORDS or word == "0" else None
+
+
+FROM_TRIAL_MATERIAL = {"instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"}
+FROM_TRIAL_UNITS = {"tokens": "tokens", "seconds": "seconds", "usd": "USD", "count": ""}
+
+
+def js_json(v) -> str:
+    """JSON.stringify's compact text for a JSON value (a whole number written 1.0 is 1 there)."""
+    def js(x):
+        if isinstance(x, float) and x.is_integer() and abs(x) < 1e21:
+            return int(x)
+        if isinstance(x, list):
+            return [js(y) for y in x]
+        if isinstance(x, dict):
+            return {k: js(y) for k, y in x.items()}
+        return x
+    return json.dumps(js(v), ensure_ascii=False, separators=(",", ":"))
+
+
+def js_listed(names: list[str]) -> str:
+    return "".join(names) if len(names) <= 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def trial_axes(trial: dict) -> tuple[list, list]:
+    """The arms and cases that ran, in plan order then run order, as src/trial-model.ts trialAxes orders them."""
+    plan = trial.get("plan") if isinstance(trial.get("plan"), dict) else {}
+    runs = [r for r in trial.get("runs") or [] if isinstance(r, dict)]
+    arms, cases = [], []
+    for a in (plan.get("arms") if isinstance(plan.get("arms"), dict) else {}):
+        arms.append(a)
+    for sc in plan.get("scenarios") or []:
+        if isinstance(sc, dict) and sc.get("name") and sc["name"] not in cases:
+            cases.append(sc["name"])
+    for r in runs:
+        if r.get("arm") not in arms:
+            arms.append(r.get("arm"))
+        if r.get("scenario") not in cases:
+            cases.append(r.get("scenario"))
+    ran, ran_cases = {r.get("arm") for r in runs}, {r.get("scenario") for r in runs}
+    return [a for a in arms if a in ran], [c for c in cases if c in ran_cases]
+
+
+def usage_value(run: dict, field: str):
+    usage = run.get("usage") if isinstance(run.get("usage"), dict) else {}
+    v = usage.get(field)
+    return v if is_number(v) else None
+
+
+def cost_measures(trial: dict) -> list[dict]:
+    """The numeric measures a trial's valid runs recorded, as src/trial-model.ts costMeasures finds them."""
+    runs = [r for r in trial.get("runs") or [] if isinstance(r, dict) and r.get("passed") is not None]
+
+    def input_tokens(r):
+        base = usage_value(r, "input_tokens")
+        return None if base is None else base + (usage_value(r, "cache_read_input_tokens") or 0) + (usage_value(r, "cache_creation_input_tokens") or 0)
+
+    separate = any(usage_value(r, "cache_read_input_tokens") is not None or usage_value(r, "cache_creation_input_tokens") is not None for r in runs)
+    every = [
+        {"id": "output_tokens", "label": "Output tokens", "unit": "tokens", "get": lambda r: usage_value(r, "output_tokens")},
+        {"id": "input_tokens", "label": "Input tokens", "unit": "tokens", "get": input_tokens, **({"note": "including cache reads and writes, which this executor reports apart from input_tokens"} if separate else {})},
+        {"id": "seconds", "label": "Executor time", "unit": "seconds", "get": lambda r: r.get("seconds") if is_number(r.get("seconds")) else None},
+        {"id": "commands", "label": "Commands run", "unit": "count", "get": lambda r: r.get("commands") if is_number(r.get("commands")) else None},
+        {"id": "total_cost_usd", "label": "Cost", "unit": "usd", "get": lambda r: usage_value(r, "cost_usd") if usage_value(r, "cost_usd") is not None else usage_value(r, "total_cost_usd")},
+    ]
+    return [m for m in every if any(is_number(m["get"](r)) and m["get"](r) > 0 for r in runs)]
+
+
+def from_trial(trial: dict) -> dict:
+    """Trial report data as the comparison the page derives for --general: as src/comparison-compose.ts fromTrial does it."""
+    arms_axis, cases_axis = trial_axes(trial)
+    plan = trial.get("plan") if isinstance(trial.get("plan"), dict) else {}
+    planned = plan.get("arms") if isinstance(plan.get("arms"), dict) else {}
+    runs = [r for r in trial.get("runs") or [] if isinstance(r, dict) and isinstance(r.get("arm"), str) and isinstance(r.get("scenario"), str)]
+    valid = [r for r in runs if r.get("passed") is True or r.get("passed") is False]
+
+    def scalar(v):
+        return v if v is None or isinstance(v, (str, bool)) or is_number(v) else js_json(v)
+
+    alternatives = []
+    for ident in arms_axis:
+        entry = planned.get(ident) if isinstance(planned.get(ident), dict) else {}
+        attributes = {k: scalar(v) for k, v in entries_of(entry) if k not in FROM_TRIAL_MATERIAL}
+        text = entry.get("instructions_text") if isinstance(entry.get("instructions_text"), str) else None
+        alternatives.append({"id": ident, **({"attributes": attributes} if attributes else {}), **({"content": text} if text else {}),
+                             **({"note": "instructions shortened to the report's text bound"} if entry.get("instructions_truncated") is True else {})})
+    scenarios = [x for x in plan.get("scenarios") or [] if isinstance(x, dict)]
+    cases = []
+    for ident in cases_axis:
+        sc = next((x for x in scenarios if x.get("name") == ident), None) or {}
+        desc, prompt = sc.get("description"), sc.get("prompt")
+        text = desc if isinstance(desc, str) and desc else (prompt[:399] + "…" if len(prompt) > 400 else prompt) if isinstance(prompt, str) and prompt else None
+        cases.append({"id": ident, **({"description": text} if text else {})})
+    required: dict[str, list[str]] = {}
+    for sc in scenarios:
+        for c in [x for x in sc.get("required") or [] if isinstance(x, str)] if isinstance(sc.get("required"), list) else []:
+            required.setdefault(c, []).append(str(sc.get("name")) if sc.get("name") is not None else "undefined")
+    metrics = [{"id": "passed", "label": "Passed", "kind": "binary", "better": "higher", "primary": True,
+                "description": "A run passes when every required check holds and the judge, when there is one, says pass. Invalid runs have no result and are counted apart."}]
+    observations = []
+
+    def at(r):
+        return {"alternative": r["arm"], "case": r["scenario"], **({"unit": r["repeat"]} if is_number(r.get("repeat")) else {}),
+                **({"id": r["job"], "source": r["job"]} if isinstance(r.get("job"), str) else {})}
+
+    for r in runs:
+        ok = r.get("passed") is True or r.get("passed") is False
+        judge = r.get("judge") if isinstance(r.get("judge"), dict) else {}
+        observations.append({**at(r), "metric": "passed", "value": r["passed"] if ok else None,
+                             **({} if ok else {"valid": False, "invalid_reason": str(r.get("invalid_reason") or r.get("status") or "invalid")}),
+                             **({"note": judge["reason"]} if isinstance(judge.get("reason"), str) and judge["reason"] else {}),
+                             **({"excerpt": r["final_message_excerpt"]} if isinstance(r.get("final_message_excerpt"), str) and r["final_message_excerpt"] else {})})
+    for m in cost_measures(trial):
+        unit = FROM_TRIAL_UNITS[m["unit"]]
+        metrics.append({"id": m["id"], "label": m["label"], "kind": "numeric", "better": "lower", **({"unit": unit} if unit else {}), **({"description": m["note"]} if m.get("note") else {})})
+        for r in valid:
+            v = m["get"](r)
+            if is_number(v):
+                observations.append({**at(r), "metric": m["id"], "value": v})
+    kinds: dict[str, set] = {}
+    for r in valid:
+        for k, v in entries_of(r.get("checks")):
+            kinds.setdefault(k, set()).add("boolean" if isinstance(v, bool) else "number" if is_number(v) else "other")
+    for name in sorted(kinds):
+        types = kinds[name]
+        if len(types) != 1 or "other" in types:
+            continue
+        boolean, ident, req = "boolean" in types, f"check:{name}", required.get(name)
+        metrics.append({"id": ident, "label": name, "kind": "binary" if boolean else "numeric", "better": "higher" if boolean and req else "none",
+                        "description": f"A required check in {js_listed(req)}; elsewhere a recorded measure." if req else "A recorded check value; no case requires it."})
+        for r in valid:
+            v = (r.get("checks") if isinstance(r.get("checks"), dict) else {}).get(name)
+            if (isinstance(v, bool) if boolean else is_number(v)):
+                observations.append({**at(r), "metric": ident, "value": v})
+    verdict = lambda r: (r.get("judge") or {}).get("verdict") if isinstance(r.get("judge"), dict) else None
+    if any(verdict(r) in ("pass", "fail") for r in runs):
+        metrics.append({"id": "judge", "label": "Judge says pass", "kind": "binary", "better": "higher"})
+        for r in runs:
+            if verdict(r) in ("pass", "fail"):
+                observations.append({**at(r), "metric": "judge", "value": verdict(r) == "pass"})
+    preferences = []
+    pairwise = trial.get("pairwise") if isinstance(trial.get("pairwise"), dict) else {}
+    pairs = [(k, v) for k, v in entries_of(pairwise) if isinstance(v, dict) and isinstance(v.get("arms"), list) and len(v["arms"]) == 2]
+    for key, summary in pairs:
+        a, b = (js_text(x) for x in summary["arms"])
+        ident = "pairwise" if len(pairs) == 1 else f"pairwise:{key}"
+        judge = summary["judge"]["model"] if isinstance(summary.get("judge"), dict) and isinstance(summary["judge"].get("model"), str) else None
+        metrics.append({"id": ident, "label": "Pairwise preference" if len(pairs) == 1 else f"Pairwise: {a} vs {b}", "kind": "preference", "better": "higher",
+                        "description": "A judge saw matched runs side by side in both orders; only pairs decided the same way in both orders count as decided."})
+        scen = entries_of(summary.get("scenarios")) or [(None, summary.get("overall"))]
+        count = lambda v: int(v) if is_number(v) and float(v).is_integer() and v > 0 else 0
+        for scenario, st in scen:
+            if not isinstance(st, dict):
+                continue
+            def push(n, winner, note=None):
+                for _ in range(n):
+                    preferences.append({"a": a, "b": b, "winner": winner, "metric": ident, **({"case": scenario} if scenario else {}), **({"judge": judge} if judge else {}), **({"note": note} if note else {})})
+            push(count(st.get("a_wins")), a); push(count(st.get("b_wins")), b); push(count(st.get("tie")), "tie")
+            push(count(st.get("inconsistent")), None, "decided differently in the two orders"); push(count(st.get("invalid")), None, "no valid judgment")
+    name = trial.get("name") if isinstance(trial.get("name"), str) and trial.get("name") else None
+    rule = plan.get("decision_rule")
+    directory = trial.get("run_directory")
+    return {
+        **({"title": name} if name else {}),
+        "alternatives": alternatives, "cases": cases, "metrics": metrics, "observations": observations, **({"preferences": preferences} if preferences else {}),
+        **({"baseline": trial["baseline"]} if isinstance(trial.get("baseline"), str) and trial["baseline"] in arms_axis else {}),
+        **({"decision_rule": rule} if isinstance(rule, str) and not blank(rule) else {}),
+        **({"sources": [{"label": "trial.py report", "note": f"run directory {re.sub(r'^/(?:home|Users)/[^/]+(?=/|$)', '~', directory)}"}]} if isinstance(directory, str) and directory else {}),
+    }
+
+
+def js_text(v) -> str:
+    """String(v) for a JSON value, as JavaScript writes it."""
+    if v is None:
+        return "null"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if is_number(v):
+        return number_text(v)
+    if isinstance(v, (list, dict)):
+        return ",".join(js_text(x) for x in v) if isinstance(v, list) else "[object Object]"
+    return str(v)
 
 
 def comparison_from_csv(path: Path, base: dict | None = None) -> dict:
@@ -1325,10 +2456,10 @@ def comparison_from_csv(path: Path, base: dict | None = None) -> dict:
     except FileNotFoundError:
         raise assemble.PackagingError(f"--csv file not found: {path}") from None
     rows = list(csv.reader(io.StringIO(text, newline="")))
-    rows = [r for r in rows if any(cell.strip() for cell in r)]
+    rows = [r for r in rows if any(not blank(cell) for cell in r)]
     if not rows:
         raise InputError(f"{path} is empty", f"the first row names the columns: {', '.join(CSV_REQUIRED)}, then any of {', '.join(CSV_COLUMNS[3:])}")
-    header = [h.strip().lower() for h in rows[0]]
+    header = [strip_ws(h).lower() for h in rows[0]]
     for i, name in enumerate(header):
         if name not in CSV_COLUMNS:
             s = suggest(name, CSV_COLUMNS)
@@ -1349,7 +2480,7 @@ def comparison_from_csv(path: Path, base: dict | None = None) -> dict:
     for line, raw in enumerate(rows[1:], start=2):
         if len(raw) != len(header):
             raise InputError(f"{path}: row {line} has {plural(len(raw), 'cell')} for {plural(len(header), 'column')}", "give every row one cell per column; quote cells that contain commas")
-        row = {name: cell.strip() for name, cell in zip(header, raw)}
+        row = {name: strip_ws(cell) for name, cell in zip(header, raw)}
         for name in ("alternative", "metric"):
             if not row[name]:
                 raise InputError(f"{path}: row {line} has no {name}", f"every row names its {name}")
@@ -1364,7 +2495,7 @@ def comparison_from_csv(path: Path, base: dict | None = None) -> dict:
             if not isinstance(n, int) or n < 0:
                 raise InputError(f'{path}: row {line}: n "{clip(row["n"])}" is not a whole number of trials', "n is the trials behind a count, such as 400")
         alt = row["alternative"]
-        group = [part.strip() for part in row.get("group", "").split(">") if part.strip()]
+        group = [strip_ws(part) for part in row.get("group", "").split(">") if not blank(part)]
         if alt not in alternatives:
             alternatives[alt] = {"id": alt}
             out["alternatives"].append(alternatives[alt])
@@ -1475,7 +2606,7 @@ def comparison_skeleton(data: dict, check: str) -> dict:
         ),
     }
     rule = data.get("decision_rule")
-    if isinstance(rule, str) and rule.strip():
+    if isinstance(rule, str) and not blank(rule):
         out["$rule"] = rule
     out["$metrics"] = {m["id"]: m.get("kind") for m in metrics}
     out["title"] = ""
@@ -1488,6 +2619,10 @@ def comparison_skeleton(data: dict, check: str) -> dict:
     out["alternatives"] = [{"id": a["id"], "label": a.get("label") if isinstance(a.get("label"), str) and a.get("label") else a["id"]} for a in alternatives]
     out["$criterion"] = {"label": "what matters", "metric": metrics[0]["id"] if metrics else "", "weight": 1, "$or": {"scores": {a["id"]: None for a in alternatives}}}
     out["criteria"] = []
+    out["$story"] = "Write for a reader who has never heard of this work: what it is about, what the decider wanted, what was tested, each alternative and case in plain words, and what the report covers and does not. Then say, for each section, what its views show for this data. See catalog.md#the-story."
+    cases = [x["id"] for x in data.get("cases") if isinstance(x, dict) and isinstance(x.get("id"), str)] if isinstance(data.get("cases"), list) else []
+    out["story"] = {"background": "", "intent": "", "questions": [], "rule": "", "covers": "", "notCovered": "", "alternatives": {a["id"]: "" for a in alternatives}, **({"cases": {c: "" for c in cases}} if cases else {})}
+    out["readings"] = {section: "" for section in comparison_sections_shown(data, out, COMPARISON_SECTIONS)}
     return out
 
 
@@ -1502,6 +2637,7 @@ def main() -> int:
     parser.add_argument("--csv", type=Path, help="a long table, one observation per row, read as a comparison (merged into --data when both are given)")
     parser.add_argument("--narrative", type=Path, help="decision, labels and extra sections for the trial or comparison composition")
     parser.add_argument("--spec", type=Path, help="a complete report specification (replaces the composition)")
+    parser.add_argument("--collection", type=Path, help="many reports in one page: members with their trial or comparison and narrative files, themes and pairs (see catalog.md)")
     parser.add_argument("--general", action="store_true", help="with --trial: draw the trial through the comparison views of any alternatives instead of the trial composition; a --narrative is then a comparison narrative")
     parser.add_argument("--output", type=Path, help="standalone HTML file to write (required unless --check or --skeleton)")
     parser.add_argument("--title", help="document title (default: the report's own title)")
@@ -1512,7 +2648,7 @@ def main() -> int:
     compared = bool(args.data or args.csv)
     try:
         if args.skeleton is not None:
-            if bool(args.trial) == compared or args.narrative or args.spec or args.check or args.output or args.general:
+            if bool(args.trial) == compared or args.narrative or args.spec or args.check or args.output or args.general or args.collection:
                 raise assemble.PackagingError("--skeleton takes only --trial, or --data and --csv (and --replace when writing a file)")
             if compared:
                 data = load_comparison(args.data, strict=True) if args.data else None
@@ -1531,8 +2667,10 @@ def main() -> int:
             raise assemble.PackagingError("--general draws a --trial through the comparison views; pass it with --trial (and optionally --narrative) only")
         if args.narrative and not (args.trial or compared):
             raise assemble.PackagingError("--narrative needs --trial, --data or --csv")
-        if not args.trial and not args.spec and not compared:
-            raise assemble.PackagingError("supply --trial, --data, --csv or --spec")
+        if args.collection and (args.trial or compared or args.narrative or args.general):
+            raise assemble.PackagingError("--collection names each report's own files; pass it alone, or with a --spec that uses it")
+        if not args.trial and not args.spec and not compared and not args.collection:
+            raise assemble.PackagingError("supply --trial, --data, --csv, --spec or --collection")
         if args.narrative and args.spec:
             raise assemble.PackagingError("--narrative shapes the composition; a --spec replaces it, so pass one or the other")
         if args.trial and compared and not args.spec:
@@ -1547,6 +2685,10 @@ def main() -> int:
                 raise assemble.PackagingError(f"{args.trial} is not trial report data; write it with `trial.py report RUN_DIR --out FILE`")
             data.append(f"av-trial={args.trial}")
             title = title or trial.get("name")
+            if not args.spec and not args.narrative:
+                # As the page does: the composition checks the narrative it was given, here none; with --general,
+                # against the comparison the page derives from the trial.
+                problems = validate_comparison(from_trial(trial), {}) if args.general else validate_narrative({}, trial)
         if compared:
             comparison = load_comparison(args.data, strict=args.check) if args.data else None
             if args.csv:
@@ -1554,30 +2696,39 @@ def main() -> int:
             elif args.data:
                 data.append(f"av-comparison={args.data}")
             if not args.spec:
-                problems = validate_comparison(comparison)
-            title = title or next((comparison[k] for k in ("title", "question") if isinstance(comparison.get(k), str) and comparison[k].strip()), None)
+                problems = validate_comparison(comparison, {})
+            title = title or next((comparison[k] for k in ("title", "question") if isinstance(comparison.get(k), str) and not blank(comparison[k])), None)
         if args.narrative:
             narrative = load(args.narrative, "--narrative", strict=args.check)
             # With --general the narrative names the comparison the page derives from the trial
             # (fromTrial); the page checks it against that comparison and lists problems at its top.
-            problems = validate_comparison(comparison, narrative) if compared else validate_narrative(narrative, trial) if not args.general else [] if isinstance(narrative, dict) else [
-                {"level": "error", "where": "narrative", "message": "expected a JSON object", "hint": "a comparison narrative is an object such as {\"title\": …, \"decision\": …}; see catalog.md"}]
+            problems = validate_comparison(comparison, narrative) if compared else validate_comparison(from_trial(trial), narrative) if args.general else validate_narrative(narrative, trial)
             diagrams |= uses_diagrams(narrative)
             data.append(f"av-narrative={args.narrative}")
             title = args.title or (narrative.get("title") or narrative.get("question") if isinstance(narrative, dict) else None) or title
+        collection = None
+        if args.collection:
+            collection = load_collection(args.collection, strict=args.check)
+            diagrams |= uses_diagrams(collection)
+            if not args.spec:
+                problems = validate_collection(collection)
+            title = title or (collection.get("title") if isinstance(collection.get("title"), str) and not blank(collection["title"]) else None)
         if args.spec:
             spec = load(args.spec, "--spec", strict=args.check)
             if not isinstance(spec, dict) or not isinstance(spec.get("sections"), list) or not isinstance(spec.get("title"), str):
                 raise assemble.PackagingError(f"{args.spec} needs a string \"title\" and a \"sections\" list")
             # As in the browser, a specification without a comparison of its own borrows the one beside it.
             borrowed = comparison is not None and spec.get("comparison") in (None, False, 0, "")
-            problems = validate_spec({**spec, "comparison": comparison} if borrowed else spec, trial)
+            effective = {**spec, "comparison": comparison} if borrowed else spec
+            if collection is not None and spec.get("collection") in (None, False, 0, ""):
+                effective = {**effective, "collection": collection}
+            problems = validate_spec(effective, trial, None, collection)
             diagrams |= uses_diagrams(spec)
             data.append(f"av-spec={args.spec}")
             title = args.title or spec["title"]
         if args.check:
             print_problems(problems)
-            inputs = ", ".join(str(p) for p in (args.trial, args.data, args.csv, args.narrative, args.spec) if p)
+            inputs = ", ".join(str(p) for p in (args.trial, args.data, args.csv, args.narrative, args.spec, args.collection) if p)
             print(f"checked {inputs}: {counted(problems) if problems else 'no problems'}")
             return 1 if any(p["level"] == "error" for p in problems) else 0
         with tempfile.TemporaryDirectory(prefix="av-report-") as scratch:
@@ -1587,12 +2738,16 @@ def main() -> int:
                 merged = Path(scratch) / "comparison.json"
                 merged.write_text(json.dumps(comparison, ensure_ascii=False), encoding="utf-8")
                 data.append(f"av-comparison={merged}")
+            if collection is not None:
+                gathered = Path(scratch) / "collection.json"
+                gathered.write_text(json.dumps(collection, ensure_ascii=False), encoding="utf-8")
+                data.append(f"av-collection={gathered}")
             if args.general:
                 marker = Path(scratch) / "general.json"
                 marker.write_text("true", encoding="utf-8")
                 data.append(f"av-general={marker}")
             namespace = argparse.Namespace(
-                body=body, output=args.output, title=title or ("Comparison" if compared else "Trial report"), lang="en",
+                body=body, output=args.output, title=title or ("Comparison" if compared else "Report collection" if collection is not None else "Trial report"), lang="en",
                 style=[HERE / "styles/agentic-visuals.css"], script=[HERE / "dist/agentic-visuals.js"],
                 data=data, asset=[], feature=["mermaid"] if diagrams else [], replace=args.replace,
             )

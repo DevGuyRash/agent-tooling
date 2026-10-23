@@ -12,12 +12,15 @@
  * left out, and no view repeats another. The run grid ("grid") is drawn only
  * when a narrative's include names it, since the case dossiers already place
  * every run. */
-import { fmtInt, fmtPct } from "./core";
+import { resolveSections, trialSection } from "./sections";
+import { fmtInt, fmtPct, entriesOf, keysIn, stripText, readDate } from "./core";
+import { casesWords } from "./stats";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
-import { CasePair, caseChecks, casePairs, checkTable, costMeasures, displayPath, judgeFor, pairedOrder, repeatRange, ruleMentions, tally, TrialReport, trialAxes } from "./trial-model";
+import { armTally, CasePair, caseChecks, casePairs, checkTable, costMeasures, displayPath, judgeFor, pairedOrder, repeatRange, ruleMentions, tally, TrialReport, trialAxes } from "./trial-model";
 import type { VerdictInput } from "./blocks/trial";
-import { validateNarrative } from "./validate";
+import { composed, filePointer, validateNarrative } from "./validate";
 import type { Problem } from "./validate";
+import type { Story } from "./reading";
 
 export interface Narrative {
   title?: string;
@@ -51,30 +54,37 @@ export interface Narrative {
   /** Extra blocks appended to a default section, keyed by its id. */
   append?: Record<string, BlockSpec[]>;
   footer?: string;
+  /** What a reader new to the work needs before the results (see catalog.md#the-story). */
+  story?: Story;
+  /** What each section's views say for this data, by section id. */
+  readings?: Record<string, string | string[]>;
 }
 
 /** The default sections' ids, in reading order. A section with nothing to show for a trial is left out;
  * "grid" is drawn only when include names it. */
 export const SECTION_IDS = ["verdict", "setup", "arms", "cases", "grid", "failures", "checks", "pairwise", "cost", "invalid", "runs"] as const;
-/** Earlier ids that still name a default section. */
-const ALIASES: Record<string, string> = { plan: "setup" };
-const alias = (id: unknown) => { const k = String(id); return ALIASES[k] || k; };
+/** The section a name stands for (an earlier id still names a default section). */
+const alias = trialSection;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-/** A date range in words (UTC), such as "4–5 Oct 2026"; unreadable dates are shown as written. */
-function fmtDates(first?: unknown, last?: unknown): string | null {
-  const read = (v: unknown) => { if (typeof v !== "string" || !v) return null; const d = new Date(v); return Number.isNaN(d.getTime()) ? null : d; };
-  const a = read(first), b = read(last) || a;
+/** A date range in words, such as "4–5 Oct 2026": each end's day by the one date rule (core.ts readDate), so a time
+ * is placed on its day in UTC, and the year is written in full. An unreadable first date is shown as written. */
+export function fmtDates(first?: unknown, last?: unknown): string | null {
+  const a = readDate(first)?.day, b = readDate(last)?.day || a;
   if (!a || !b) return typeof first === "string" && first ? String(first) : null;
-  const day = (d: Date) => d.getUTCDate(), mon = (d: Date) => MONTHS[d.getUTCMonth()], yr = (d: Date) => d.getUTCFullYear();
-  if (a.toISOString().slice(0, 10) === b.toISOString().slice(0, 10)) return `${day(a)} ${mon(a)} ${yr(a)}`;
-  if (yr(a) === yr(b) && mon(a) === mon(b)) return `${day(a)}–${day(b)} ${mon(a)} ${yr(a)}`;
-  if (yr(a) === yr(b)) return `${day(a)} ${mon(a)} – ${day(b)} ${mon(b)} ${yr(a)}`;
-  return `${day(a)} ${mon(a)} ${yr(a)} – ${day(b)} ${mon(b)} ${yr(b)}`;
+  const [ya, ma, da] = a.split("-"), [yb, mb, db] = b.split("-");
+  const day = (d: string) => Number(d), mon = (m: string) => MONTHS[Number(m) - 1];
+  if (a === b) return `${day(da)} ${mon(ma)} ${ya}`;
+  if (ya === yb && ma === mb) return `${day(da)}–${day(db)} ${mon(ma)} ${ya}`;
+  if (ya === yb) return `${day(da)} ${mon(ma)} – ${day(db)} ${mon(mb)} ${ya}`;
+  return `${day(da)} ${mon(ma)} ${ya} – ${day(db)} ${mon(mb)} ${yb}`;
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
 const strings = (v: unknown): string[] => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+
+/** Prose given as text or a list of paragraphs, as one text. */
+const proseText = (v: unknown): string => typeof v === "string" ? stripText(v) : Array.isArray(v) ? v.filter((x): x is string => typeof x === "string" && !!stripText(x)).join(" ") : "";
 
 export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): ReportSpec {
   if (!data || !Array.isArray(data.runs)) throw new TypeError("trialReport needs the JSON that `trial.py report RUN_DIR` writes.");
@@ -84,13 +94,15 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   catch (error) { problems = [{ level: "warning", where: "narrative", message: `The narrative could not be checked: ${error instanceof Error ? error.message : String(error)}` }]; }
 
   const axes = trialAxes(data);
-  const rawArms: unknown[] = Array.isArray(narrative.arms) ? narrative.arms : isObject(narrative.arms) ? Object.entries(narrative.arms).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
+  const rawArms: unknown[] = Array.isArray(narrative.arms) ? narrative.arms : isObject(narrative.arms) ? entriesOf(narrative.arms).map(([id, v]) => Object.assign({ id }, isObject(v) ? v : {}, { id })) : [];
   const armSpecs = rawArms.filter((a): a is ArmSpec => isObject(a) && typeof a.id === "string");
   // Narrative arms set the identity order, but only arms that ran enter it: a misspelled id must not shift every color.
   const order = [...new Set([...armSpecs.map(a => a.id).filter(id => axes.arms.includes(id)), ...axes.arms])];
   const arms: ArmSpec[] = order.map(id => armSpecs.find(a => a.id === id) || { id });
   const label = (id: string) => armSpecs.find(a => a.id === id)?.label || id;
   const all = tally(data.runs);
+  // One arm's runs, with the runtime's word on its interval.
+  const one = axes.arms.length === 1 ? armTally(data, axes.arms[0]) : all;
   const range = repeatRange(data);
   // An arm's runs were judged by the judge the plan records in the arm's own entry, else by the plan's; arms that share one are named together.
   // Judges are told apart by every setting their runs record, the endpoint too, so two that read alike are numbered by endpoint, not merged.
@@ -134,7 +146,10 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   const baseCount = axes.cases.length - new Set(variants).size;
   const vLabel = new Set(pairs.map(p => p.label)).size === 1 ? pairs[0].label : "more turns";
   const version = /^\+\s*/.test(vLabel) ? `with ${vLabel.replace(/^\+\s*/, "")} added` : vLabel === "more turns" ? "with more turns" : `as a variant (${vLabel})`;
-  const rule = typeof data.plan?.decision_rule === "string" && data.plan.decision_rule.trim() ? data.plan.decision_rule : undefined;
+  // The plan's rule, word for word; where it only points at a file the reader cannot open, the rule as the narrative states it.
+  const recorded = typeof data.plan?.decision_rule === "string" && stripText(data.plan.decision_rule) ? data.plan.decision_rule : undefined;
+  const stated = isObject(narrative.story) ? proseText((narrative.story as Record<string, unknown>).rule) : "";
+  const rule = recorded && filePointer(recorded) && stated ? stated : recorded;
 
   const reasons = new Map<string, number>();
   for (const r of data.runs) if (r.passed === null) { const k = String(r.invalid_reason || r.status || "unknown"); reasons.set(k, (reasons.get(k) || 0) + 1); }
@@ -146,9 +161,12 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
       : undefined;
 
   const appended = new Map<string, BlockSpec[]>();
-  for (const [k, blocks] of Object.entries(isObject(narrative.append) ? narrative.append : {})) if (Array.isArray(blocks)) appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
+  for (const [k, blocks] of entriesOf(isObject(narrative.append) ? narrative.append : {})) if (Array.isArray(blocks)) appended.set(alias(k), [...(appended.get(alias(k)) || []), ...blocks]);
   const sections: Array<{ key: string; section: SectionSpec }> = [];
-  const add = (key: string, s: SectionSpec) => sections.push({ key, section: { ...s, id: key, blocks: [...s.blocks, ...(appended.get(key) || [])] } });
+  // What each section's views say for this data, from the narrative's readings (keyed by section id or an earlier name).
+  // Resolved as the checks resolve them (resolveSections): the first key naming a section gives its reading.
+  const readings = resolveSections(narrative.readings, alias).values;
+  const add = (key: string, s: SectionSpec) => sections.push({ key, section: { ...s, id: key, ...(readings.has(key) ? { reading: readings.get(key) as string | string[] } : {}), blocks: [...s.blocks, ...(appended.get(key) || [])] } });
 
   // ---------------------------------------------------------------- verdict
   const decision = isObject(narrative.decision) ? narrative.decision : null;
@@ -166,7 +184,10 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
         { value: all.runs, label: "Runs" },
         { value: all.valid, label: "Valid", note: all.runs ? fmtPct(all.valid / all.runs) : undefined, tone: anyValid ? "pass" : "warn" },
         { value: all.invalid, label: "Invalid", note: all.invalid ? "excluded, not failures" : "none", tone: all.invalid ? "warn" : "neutral" },
-        ...(!multiArm && anyValid ? [{ value: fmtPct(all.rate), label: "Pass rate", note: `${all.pass} of ${all.valid} valid${all.interval ? ` · 95% ${fmtPct(all.interval[0])}–${fmtPct(all.interval[1])}` : ""}` }] : []),
+        // Over several cases the runs repeat each case rather than sample new ones: plain counts, and each case's own interval under Cases.
+        ...(!multiArm && anyValid ? [one.cases > 1
+          ? { value: `${one.pass} of ${one.valid}`, label: "Runs passed", note: `across ${one.over}; each case's rate and 95% interval are under Cases` }
+          : { value: fmtPct(one.rate), label: "Pass rate", note: `${one.pass} of ${one.valid} valid${one.interval ? ` · 95% ${fmtPct(one.interval[0])}–${fmtPct(one.interval[1])}` : ""}` }] : []),
         { value: axes.arms.length, label: axes.arms.length === 1 ? "Arm" : "Arms" },
         { value: baseCount, label: baseCount === 1 ? "Case" : "Cases", note: pairs.length ? `+${pairs.length} variant${pairs.length === 1 ? "" : "s"}: ${axes.cases.length} versions` : undefined },
         { value: range ? (range.min === range.max ? `×${range.max}` : `×${range.min}–${range.max}`) : "—", label: "Repeats", note: range && range.min !== range.max ? "varies by arm or case" : undefined },
@@ -203,15 +224,15 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
     // Pooling a base case with its variant blurs the comparison; with every case paired, the pooled ladder gives way to one per side.
     add("arms", {
       title: "Results by arm", label: "Arms",
-      lead: `Each arm pooled over ${allPaired ? "the cases in each set" : "every case it ran"}. Intervals are 95% Wilson intervals over valid runs; invalid runs are counted beside them, never as failures. Pooling weights cases by their valid runs, so read the cases below before trusting a pooled difference.${identical.length ? " Identical arms received the same material: the distance between them is what chance alone produces." : ""}`,
+      lead: `Each arm pooled over ${allPaired ? "the cases in each set" : "every case it ran"}.${axes.cases.length > 1 ? " Runs on one case repeat that case rather than sample new cases, so pooled counts are shown as counts with no interval; each case's own pass rate and 95% interval are under Cases, and differences are given case by case." : " Intervals are 95% Wilson intervals over valid runs."} Invalid runs are counted beside them, never as failures. Pooling weights cases by their valid runs, so read the cases below before trusting a pooled difference.${identical.length ? " Identical arms received the same material: the distance between them is what chance alone produces." : ""}`,
       blocks: [
         ...(allPaired ? [] : [{ type: "ladder", ...tie, ...(groups.length || pairs.length ? { title: "All cases" } : {}) }]),
         ...(pairs.length ? [
-          { type: "ladder", title: "Base cases", description: allPaired ? `The ${bases.length === 1 ? "case" : `${bases.length} cases`} as written.` : `The ${bases.length === 1 ? "case" : `${bases.length} cases`} that also ran as a variant, as written.`, cases: bases, ...tie },
+          { type: "ladder", title: "Base cases", description: allPaired ? `The ${bases.length === 1 ? "case" : casesWords(bases.length, false)} as written.` : `The ${bases.length === 1 ? "case" : casesWords(bases.length, false)} that also ran as a variant, as written.`, cases: bases, ...tie },
           { type: "ladder", title: `Variants (${vLabel})`, description: `The same ${bases.length === 1 ? "case" : "cases"}, each run with ${vLabel.replace(/^\+\s*/, "")} added.`, cases: pairs.map(p => p.variant), ...tie },
         ] : []),
         ...groups.map(g => ({ type: "ladder", title: g.label, ...(g.note ? { description: g.note } : {}), cases: g.cases, ...tie })),
-        ...(baseline || identical.length ? [{ type: "contrast", title: baseline ? `Difference from ${label(baseline)}` : "Difference between identical arms", arms: order, ...tie, ...(baseline && threshold !== undefined ? { threshold } : {}) }] : []),
+        ...(baseline || identical.length ? [{ type: "contrast", title: baseline ? `Difference from ${label(baseline)}` : "Difference between identical arms", arms: order, ...tie, ...(baseline && threshold !== undefined ? { threshold } : {}), ...(axes.cases.length > 1 ? { by: "case" } : {}) }] : []),
         ...variantContrast,
       ],
     });
@@ -227,7 +248,9 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
     title: "Case by case", label: "Cases",
     lead: `What each case asked, what counted as a pass, and how it went${multiArm ? " for each arm" : ""}.`,
     // The composition decides the pairing once, so every view pairs the same cases. With no valid run, an overview would only repeat "no valid runs".
-    blocks: [{ type: "cases", cases, arms: order, ...(groups.length ? { groups } : {}), pairs: pairs.length ? pairs : "off", ...(anyValid ? {} : { index: false }) }],
+    blocks: [{ type: "cases", cases, arms: order, ...(groups.length ? { groups } : {}), pairs: pairs.length ? pairs : "off", ...(anyValid ? {} : { index: false }),
+      // The narrative's plain description of each case leads its dossier.
+      ...(isObject(narrative.story) && isObject((narrative.story as Record<string, unknown>).cases) ? { descriptions: (narrative.story as Record<string, unknown>).cases as Record<string, string> } : {}) }],
   });
   const include = Array.isArray(narrative.include) ? narrative.include.map(alias) : null;
   // The case dossiers place every run by case and arm, so the run grid would repeat them; a narrative can still ask for it.
@@ -247,7 +270,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   else if (anyValid && !multiArm && cases.some(c => caseChecks(data, c, axes.arms).measures.length))
     // One arm: each dossier already shows its required checks and judge, so this section keeps only the measures.
     add("checks", { title: "Recorded measures", label: "Measures", lead: "What each case's checks recorded besides pass and fail, over valid runs: values the plan records but does not require, so they never decide a pass. The required checks and the judge are in each case's dossier above.", blocks: [{ type: "checks", required: false, ...(pairs.length ? { pairs } : {}) }] });
-  if (isObject(data.pairwise) && Object.keys(data.pairwise).length)
+  if (isObject(data.pairwise) && keysIn(data.pairwise).length)
     add("pairwise", { title: "Pairwise judgments", label: "Pairwise", lead: "A judge saw matched runs side by side in both orders. Only pairs decided the same way in both orders count toward a win rate.", blocks: [{ type: "pairwise" }] });
   if (anyValid && costMeasures(data).length)
     add("cost", { title: "Cost and time", label: "Cost", lead: "Every valid run's usage as its executor reported it. Executors report different fields, so compare like with like.", blocks: [{ type: "cost" }] });
@@ -272,7 +295,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   const name = typeof data.name === "string" && data.name ? data.name : undefined;
   const armText = order.length === 1 ? `One arm (${label(order[0])})` : order.length <= 4 ? `${order.length} arms (${order.map(label).join(", ")})` : `${order.length} arms`;
   const reps = range ? (range.min === range.max ? `${range.max} repeat${range.max === 1 ? "" : "s"}` : `${range.min}–${range.max} repeats`) : "";
-  const caseText = `${baseCount} case${baseCount === 1 ? "" : "s"}${!pairs.length ? "" : allPaired ? `, ${baseCount === 1 ? "run" : "each run"} as written and ${version} (${axes.cases.length} case versions)` : `, ${pairs.length === 1 ? "one" : pairs.length} of them also run ${version} (${axes.cases.length} case versions)`}`;
+  const caseText = `${casesWords(baseCount, false)}${!pairs.length ? "" : allPaired ? `, ${baseCount === 1 ? "run" : "each run"} as written and ${version} (${axes.cases.length} case versions)` : `, ${pairs.length === 1 ? "one" : pairs.length} of them also run ${version} (${axes.cases.length} case versions)`}`;
   // Without a narrative the page has no question of its own; the plan's rule is the one place that says what the trial tested.
   const purpose = rule && !narrative.summary && !narrative.question && !narrative.title ? " What the trial tested is stated only in its decision rule, quoted under Verdict." : "";
   const shape = order.length
@@ -280,8 +303,8 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
     : undefined;
   const ran = isObject(data.ran) ? fmtDates(data.ran.first, data.ran.last) : null;
   const written = fmtDates(data.generated_at);
-  return {
-    title: [narrative.title, narrative.question, name].find((t): t is string => typeof t === "string" && !!t.trim()) || "Trial results",
+  return composed({
+    title: [narrative.title, narrative.question, name].find((t): t is string => typeof t === "string" && !!stripText(t)) || "Trial results",
     kicker: typeof narrative.kicker === "string" && narrative.kicker ? narrative.kicker : `Split test${name ? ` · ${name}` : ""}`,
     summary: narrative.summary ?? shape,
     meta: [
@@ -291,8 +314,9 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
       ...(typeof data.run_directory === "string" && data.run_directory ? [{ label: "Run directory", value: displayPath(data.run_directory) }] : []),
     ],
     arms, cases: isObject(narrative.cases) ? narrative.cases as Record<string, string> : undefined, trial: data,
+    ...(isObject(narrative.story) ? { story: narrative.story as unknown as Story } : {}),
     footer: narrative.footer || (written ? `Report data written ${written}. Every view is drawn from the data embedded in this file, and each run names its native record.` : undefined),
     problems,
     sections: kept.map(s => isObject(s.section) ? s.section as unknown as SectionSpec : s.section as SectionSpec),
-  };
+  }, problems);
 }

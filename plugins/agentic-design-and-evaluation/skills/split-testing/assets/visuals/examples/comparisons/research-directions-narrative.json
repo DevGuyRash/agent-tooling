@@ -1,5 +1,48 @@
 {
   "kicker": "Split test · research directions",
+  "story": {
+    "background": [
+      "A study wants to find out why food-bank sites run out of stock. Before committing, it tested three **directions** on invented food-bank networks whose cause is known: **mining records** the sites already keep, **asking people** who run them, and **simulating** how stock moves. Each direction has approaches of its own, nine in all. The example is fictional, made to show how a choice among research directions reads as a report.",
+      "Each approach was tried three times on five invented networks, each with one planted cause, and a run succeeded when it named that cause. One records approach was run twice as identical copies, so the gap between the copies shows how far chance alone moves a result."
+    ],
+    "intent": "The research lead asked: “To find why food-bank sites run out of stock, should the study mine records, ask people, or simulate, and which approach should it use?”",
+    "questions": [
+      "Which direction finds the planted cause most often, pooled over its approaches?",
+      "Does that direction work on every kind of cause, including those nobody records?",
+      "Within the leading direction, is one approach ahead by more than chance?"
+    ],
+    "rule": "Fixed before the runs: carry forward the direction that recovers the planted cause most often, if it reaches 60% of valid runs and does not fall below 50% on any of the five networks. Within it, choose the leading approach only if it leads the next by more than the two identical copies differ; otherwise carry the whole direction forward.",
+    "alternatives": {
+      "a1": "Regression on inventory logs (mining records): a statistical model of stock levels from the sites' own logs. Its identical copy is a1r.",
+      "a1r": "The same regression on inventory logs, run again as an identical copy, to show how much chance alone moves a result.",
+      "a2": "Seasonal time series (mining records): looks for repeating patterns in stock levels over the year.",
+      "a3": "Text mining of case reports (mining records): reads the sites' written incident reports for causes.",
+      "b1": "Short survey of coordinators (asking people): a brief written questionnaire for site coordinators.",
+      "b2": "Structured interviews (asking people): set questions asked in conversation with coordinators and volunteers.",
+      "b3": "Open interviews (asking people): free conversation with coordinators and volunteers.",
+      "c1": "Agent-based simulation (simulating): models each donor, volunteer and visitor and lets stock-outs emerge.",
+      "c2": "Queueing model (simulating): models stock as queues of arrivals and departures."
+    },
+    "cases": {
+      "k1": "Seasonal demand swings: demand peaks every winter. A cause the records show clearly.",
+      "k2": "Supplier reliability: one supplier delivers late. A cause the records show.",
+      "k3": "Donation timing: drop-offs bunch at the start of the week. A cause records and models can both show.",
+      "k4": "Volunteer turnover: the weekend crew keeps changing and nobody records who works, so only people can tell.",
+      "k5": "Storage capacity: the cold room is too small and its use is not logged, so only people or a model can tell."
+    },
+    "covers": "Whether each approach named the planted cause, how good its evidence was judged on a 10-point scale, and how confident it said it was, three runs on each of five invented networks.",
+    "notCovered": "Real food banks, the cost and time of each approach beyond the per-run cost listed, and causes that combine. Nine runs failed to finish and are left out.",
+    "glossary": [
+      {
+        "term": "Recovered the planted cause",
+        "meaning": "The run named the cause built into that invented network."
+      },
+      {
+        "term": "Pooled",
+        "meaning": "Counted over every approach in a direction together."
+      }
+    ]
+  },
   "decision": {
     "verdict": "adopt",
     "headline": "Carry **Ask people** forward and use **structured interviews** within it.",
@@ -8,9 +51,27 @@
       "Within it, structured interviews recovered the cause in 13 of 15 runs (87%) against 10 of 14 (71%) for open interviews, a lead of 15 points. The two identical copies of one records approach differed by 7 points (9 and 8 of 15), so the lead is more than twice the noise."
     ],
     "checks": [
-      {"label": "Pooled recovery of the leading direction at least 60% of valid runs", "observed": "73% (32 of 44)", "threshold": "≥ 60%", "met": true, "group": "Choosing the direction"},
-      {"label": "No concept below 50% for that direction", "observed": "lowest: 56% on donation timing (5 of 9)", "threshold": "≥ 50%", "met": true, "group": "Choosing the direction"},
-      {"label": "Leading approach ahead of the next by more than the identical copies differ", "observed": "+15 points against 7 points between copies", "threshold": "> 7 points", "met": true, "group": "Choosing the approach"}
+      {
+        "label": "Pooled recovery of the leading direction at least 60% of valid runs",
+        "observed": "73% (32 of 44)",
+        "threshold": "≥ 60%",
+        "met": true,
+        "group": "Choosing the direction"
+      },
+      {
+        "label": "No concept below 50% for that direction",
+        "observed": "lowest: 56% on donation timing (5 of 9)",
+        "threshold": "≥ 50%",
+        "met": true,
+        "group": "Choosing the direction"
+      },
+      {
+        "label": "Leading approach ahead of the next by more than the identical copies differ",
+        "observed": "+15 points against 7 points between copies",
+        "threshold": "> 7 points",
+        "met": true,
+        "group": "Choosing the approach"
+      }
     ],
     "conditions": [
       "Five invented food-bank concepts, each with one planted cause",
@@ -27,5 +88,13 @@
       "A decision to study only networks that keep detailed records would put mining records first",
       "More concepts, which would narrow the intervals the choice of approach rests on"
     ]
+  },
+  "readings": {
+    "compared": "Nine approaches in three directions; the two copies of the regression on inventory logs are identical, so their difference is chance alone.",
+    "results": "Structured interviews recovered the planted cause most often, 13 of 15 runs (87%), and open interviews 10 of 14 (71%); the records approaches recovered it in 43% to 60% of runs and the simulations in 27% to 40%. Evidence quality was similar except for the simulations, rated lower.",
+    "differences": "Against the regression on inventory logs, no approach's recovery differs by more than chance; structured interviews come closest (+27 points, interval −5 to +53). The simulations' evidence quality is lower by about 1.4 to 1.7 points of 10, intervals below zero. The identical copy differs from the original by 7 points, the size of chance here.",
+    "groups": "Pooled by direction, asking people recovered the cause in 32 of 44 valid runs (73%), mining records in 23 of 44 (52%) and simulating in 9 of 26 (35%).",
+    "cases": "The directions split by kind of cause. Mining records did well where records exist (seasonal demand, supplier, donation timing) and poorly on volunteer turnover and storage, which nobody logs; asking people never fell below 5 of 9 on any network.",
+    "observations": "396 observations: three measures for each run. Nine are invalid because their runs did not finish."
   }
 }

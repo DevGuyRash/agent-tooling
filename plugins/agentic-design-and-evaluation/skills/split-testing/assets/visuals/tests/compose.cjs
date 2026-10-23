@@ -49,8 +49,11 @@ test("a narrative threshold reaches the difference from the baseline, and sectio
   const contrast = section(spec, "arms").blocks.find(b => b.type === "contrast");
   H.equal(H.plain(contrast.threshold), exampleNarrative.threshold, "the threshold");
   const html = H.element(V.renderReport(spec), 'class="av-block av-block--contrast"');
-  H.includes(html, "meets the +15-point bar, but the interval reaches down to", "the reading against the bar");
-  H.equal(H.count(html, 'class="av-contrast-bar"'), 2, "the bar on the two comparisons, not on the chance-alone row");
+  // Pooled over four cases, by hand: checklist 20 of 23 minus current 14 of 24 is +29 points, worked-example 15 of 22
+  // minus 14 of 24 is +10; neither has an interval, and each case's own row (two arms by four cases) carries the bar.
+  H.includes(html, "The observed +29 meets the +15-point bar.", "the pooled reading against the bar");
+  H.includes(html, "The observed +10 falls short of the +15-point bar.", "the other pooled reading");
+  H.equal(H.count(html, 'class="av-contrast-bar"'), 10, "the bar on the two comparisons and their eight case rows, not on the chance-alone row");
   const runs = section(spec, "runs");
   H.includes(runs.lead, "Every run, filterable.", "the ledger's lead");
   H.equal(runs.blocks[0].description, "", "no second copy inside the panel");
@@ -65,13 +68,14 @@ test("the composed blocks carry the inputs the new views read", () => {
   H.equal(H.plain([failures.type, failures.cases, failures.arms]), ["failures", cases.cases, setup.arms], "failures input");
 });
 
-test("a single-arm trial skips the one-row arm ladder and puts its pass rate in the figures", () => {
+test("a single-arm trial skips the one-row arm ladder and puts its counts in the figures", () => {
   const spec = V.trialReport(F.gridTrial({ only: { c1: "PPF", c2: "PFF" } }));
   H.ok(!ids(spec).includes("arms"), `an arms section for one arm: ${ids(spec)}`);
   const figures = section(spec, "verdict").blocks[1].items;
-  const rate = figures.find(i => i.label === "Pass rate");
-  H.ok(rate && rate.value === "50%" && /3 of 6 valid/.test(rate.note), `pass rate figure ${JSON.stringify(rate)}`);
-  H.ok(!figures.some(i => i.label === "Pass rate") === false, "the pass rate figure");
+  // 2 of 3 on c1 and 1 of 3 on c2: 3 of 6 runs across two cases, with no pooled rate or interval.
+  const runs = figures.find(i => i.label === "Runs passed");
+  H.ok(runs && runs.value === "3 of 6" && /across 2 cases/.test(runs.note), `runs passed figure ${JSON.stringify(runs)}`);
+  H.ok(!figures.some(i => i.label === "Pass rate"), "a pooled pass rate figure");
   H.ok(!V.trialReport(F.gridTrial({ a: { c: "PF" }, b: { c: "PP" } })).sections[0].blocks[1].items.some(i => i.label === "Pass rate"), "a pooled pass rate across arms");
 });
 
@@ -354,6 +358,90 @@ test("invalid reasons are explained in plain words with the remedy for that reas
   H.includes(ledger, '<code class="av-why-code">judge-missing</code>', "the reason code in the ledger");
 });
 
+test("a run whose credentials could not be verified removed says to remove them by hand before rerunning", () => {
+  // references/trials.md: a clearing that cannot be verified makes the run invalid (credential-kept); while it stays noted,
+  // `run` leaves it as it is and exits 3, until what credentials.jsonl lists as unremoved is removed by hand.
+  const data = F.gridTrial({ a: { c: "PP-" }, b: { c: "PPP" } }, run => run.passed === null ? { status: "credential-kept", invalid_reason: "credential-kept" } : {});
+  const html = V.renderReport(V.trialReport(data));
+  const group = html.slice(html.indexOf('<code class="av-inv-reason">credential-kept</code>'));
+  H.ok(group.length < html.length, "the invalid view names the credential-kept runs");
+  const own = group.slice(0, group.indexOf('<div class="av-inv-arms">'));
+  H.includes(own, "could not be verified removed", "what happened");
+  H.includes(own, "no check, evidence extractor or judge read it", "why the run has no result");
+  H.includes(own, "Remove by hand the paths <code>RUN_DIR/credentials.jsonl</code> lists as <code>unremoved</code>", "the cleanup the run waits on");
+  H.includes(own, "exits 3", "what run does until then");
+  const clean = own.indexOf("Remove by hand"), retry = own.indexOf("<code>trial.py run PLAN --out RUN_DIR --retry-invalid</code>");
+  H.ok(clean >= 0 && retry > clean, "the rerun comes only after the cleanup");
+});
+
+test("every status trial.py records is explained with its own remedy, and no finished run is told to run again", () => {
+  // From references/trials.md (Scenario, Keys, Host executor, Re-scoring stored runs, Reading results), launching.md (One
+  // run, The record, What the runtime holds a launcher to, Checks and exposure) and trial.py's statuses. A run whose
+  // executor did not finish is run again with --retry-invalid; a finished run is scored again once its check or judge
+  // can decide it, never run again (trial-flow.md, Validity): a new output would resample exactly those runs. A retry
+  // goes into the same directory only with the plan unchanged: a repair that changes an arm or a scenario is refused
+  // there (trial.py's _merge_stored_plan, which test_compose.py exercises), so it runs into a new one.
+  const RETRY = "trial.py run PLAN --out RUN_DIR --retry-invalid", FRESH = "trial.py run PLAN --out NEW_DIR";
+  // [what the explanation says, what the remedy says, how it gives runs a result]: "retry" into the same directory with
+  // the plan unchanged; "repair" too, a repair that changes the plan run into a new directory; "recheck" in the same
+  // directory, the stored output kept; "report" with no command at all.
+  const unfinished = {
+    "timeout": [["time limit"], ["timeout_s"], "repair"],
+    "exit-3": [["exited with code 3"], [], "retry"],
+    "setup-exit-1": [["setup turn", "code 1", "never started"], ["stderr.log"], "repair"],
+    "setup-timeout": [["setup turn", "time limit", "never started"], ["timeout_s"], "repair"],
+    "setup-watch-unreadable": [["watch", "could not be read after setup", "never started"], ["stderr.log"], "repair"],
+    "setup-failed": [["setup.sh", "300 seconds", "setup_error", "never started"], ["setup.sh"], "repair"],
+    "session-changed": [["follow-up", "another session"], ["continue"], "repair"],
+    "config-changed": [["watched configuration", "a later turn would load", "stopped before"], ["never its session records, locks or caches"], "repair"],
+    "model-changed": [["another model", "one model"], [], "retry"],
+    "no-record": [["no record"], ["record_error"], "repair"],
+    "record-invalid": [["record", "could not be used"], ["record_error", "launching.md"], "repair"],
+    "unfinished": [["did not finish", "finished: false"], [], "retry"],
+    "credential-kept": [["could not be verified removed"], ["credentials.jsonl", "unremoved", "exits 3"], "retry"],
+  };
+  const finished = {
+    "check-error": [["checks failed to run"], ["trial.py recheck RUN_DIR"], "recheck"],
+    "check-missing": [["required check", "neither true nor false"], ["trial.py recheck RUN_DIR"], "recheck"],
+    "judge-missing": [["names no judge"], ["trial.py recheck RUN_DIR --judge"], "recheck"],
+    "judge-unassessed": [["cannot read"], ["judge_context", "trial.py recheck RUN_DIR --rejudge"], "recheck"],
+    "judge-error": [["gave no verdict"], ["trial.py recheck RUN_DIR --rejudge"], "recheck"],
+    "judge-unclear": [["cannot decide"], ["trial.py recheck RUN_DIR --rejudge", "a verdict it likes"], "recheck"],
+    "judge-stale": [["another judge", "another question or evidence"], ["trial.py recheck RUN_DIR --rejudge"], "recheck"],
+    "not-exposed": [["requires_exposure", "did not reach the model"], ["resample", "how many runs each arm lost"], "report"],
+    "exposure-unknown": [["requires_exposure", "cannot show whether"], ["resample", "how many runs each arm lost"], "report"],
+  };
+  const codes = [...Object.keys(unfinished), ...Object.keys(finished)];
+  const data = F.gridTrial({ a: { c: "P".padEnd(codes.length + 1, "-") } }, run => {
+    const code = codes[run.repeat - 2];
+    return code ? { status: code in finished ? "ok" : code, invalid_reason: code } : {};
+  });
+  const html = V.renderReport(V.trialReport(data));
+  const plain = t => t.replace(/<[^>]+>/g, "").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+  const group = code => {
+    const at = html.indexOf(`<code class="av-inv-reason">${code}</code>`);
+    H.ok(at >= 0, `${code}: its own group in the invalid view`);
+    const rest = html.slice(at), gloss = rest.slice(rest.indexOf('class="av-inv-gloss"'), rest.indexOf('class="av-inv-remedy"'));
+    return { gloss: plain(gloss.slice(gloss.indexOf(">") + 1)), remedy: plain(rest.slice(rest.indexOf('class="av-inv-remedy"'), rest.indexOf('<div class="av-inv-arms">')).replace(/^[^>]*>/, "")) };
+  };
+  for (const [code, [what, how, kind]] of Object.entries({ ...unfinished, ...finished })) {
+    const { gloss, remedy } = group(code);
+    const commands = remedy.match(/trial\.py \w+ [A-Z_]+[^.;]*/g) || [];  // a command, as against a mention of what one does
+    H.ok(!gloss.includes("did not finish with a valid result (recorded as"), `${code}: its own explanation, not the generic one`);
+    for (const w of what) H.ok(gloss.includes(w), `${code}: the explanation says "${w}" (got: ${gloss})`);
+    for (const w of how) H.ok(remedy.includes(w), `${code}: the remedy says "${w}" (got: ${remedy})`);
+    if (kind === "retry" || kind === "repair") {
+      H.ok(remedy.includes(`with the plan unchanged, rerun them into this directory: ${RETRY}`) || remedy.includes(`With the plan unchanged, rerun them into this directory: ${RETRY}`), `${code}: an unchanged retry into the same directory (got: ${remedy})`);
+      if (kind === "repair") H.ok(remedy.includes("into a new directory") && remedy.includes(FRESH), `${code}: a repair runs into a new directory (got: ${remedy})`);
+      else H.ok(!remedy.includes("NEW_DIR"), `${code}: nothing to repair in the plan (got: ${remedy})`);
+      H.ok(commands.every(c => c.startsWith(RETRY) || c.startsWith(FRESH)), `${code}: every command is the same-directory retry or the new-directory run (got: ${commands.join(" | ")})`);
+    } else {
+      H.ok(!remedy.includes("--retry-invalid") && !/\bRerun them\b/i.test(remedy) && !remedy.includes("NEW_DIR"), `${code}: a finished run is never told to run again (got: ${remedy})`);
+      H.ok(kind === "report" ? !commands.length : commands.length && commands.every(c => c.startsWith("trial.py recheck RUN_DIR")), `${code}: ${kind === "report" ? "no command" : "scored again in the same directory"} (got: ${commands.join(" | ")})`);
+    }
+  }
+});
+
 test("cost shows no empty panel when only invalid runs recorded usage", () => {
   const data = F.gridTrial({ a: { c: "--" } }, () => ({ seconds: 0.1, usage: {} }));
   H.ok(!ids(V.trialReport(data)).includes("cost"), "a cost section without a valid run");
@@ -546,7 +634,7 @@ test("grouped verdict checks sit under their own subheading, apart from the term
     { label: "Other arm meets the bar", observed: "68%", met: false, group: "Other candidates" },
   ] }, V.createContext({}));
   H.ok(html.indexOf("Main term") < html.indexOf('<h5 class="av-rule-group">Other candidates</h5>') && html.indexOf("Other candidates") < html.indexOf("Other arm meets the bar"), "the group after the deciding terms");
-  H.equal(V.validateSpec({ title: "T", sections: [{ title: "V", blocks: [{ type: "verdict", headline: "h", checks: [{ label: "l", observed: "o", group: "g" }] }] }] }).filter(p => p.level === "error").length, 0, "group is a known field");
+  H.equal(H.withoutStory(V.validateSpec({ title: "T", sections: [{ title: "V", blocks: [{ type: "verdict", headline: "h", checks: [{ label: "l", observed: "o", group: "g" }] }] }] })).filter(p => p.level === "error").length, 0, "group is a known field");
 });
 
 test("what was compared leads with case variants, says repeats per arm, shortens home paths in settings and flags a judge that is an arm's model", () => {

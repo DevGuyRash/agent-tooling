@@ -146,6 +146,9 @@
 .av-cs-reason-list li { display: grid; grid-template-columns: 2.6rem minmax(0, 1fr) auto auto; gap: 4px 10px; align-items: baseline; font-size: .86rem; padding: 6px 10px; border-radius: var(--av-radius-sm); background: var(--av-surface); border: 1px solid var(--av-line); }
 .av-cs-count { font: 600 .82rem var(--av-font-mono); color: var(--av-fail); text-align: right; }
 .av-cs-reason-text { color: var(--av-ink-2); overflow-wrap: break-word; min-width: 0; }
+/* On a narrow block the reason takes the whole line under its count, its arm counts and link beneath it. */
+.av-cs-reasons { container-type: inline-size; }
+@container (max-width: 520px) { .av-cs-reason-list li { grid-template-columns: 2.6rem minmax(0, 1fr); } .av-cs-reason-list li > :nth-child(n+3) { grid-column: 2; } }
 .av-cs-reason-arms { display: inline-flex; gap: 8px; align-items: center; }
 .av-cs-reason-arm { display: inline-flex; align-items: center; gap: 3px; font: 600 .72rem var(--av-font-mono); color: var(--av-ink-2); }
 .av-cs-reason-head { color: var(--av-ink); }
@@ -205,13 +208,15 @@
 .av-has-hl .av-cs-arm.av-hl-on, .av-has-hl .av-cs-vs-row.av-hl-on > * { opacity: 1; }
 
 /* ------------------------------------------------------------- narrow */
-@media (max-width: 860px) {
+/* Dossiers lay out for the block's own box, so cases shown inside half a page stack as on a narrow window. */
+.av-block--cases { container: av-cases / inline-size; }
+@container av-cases (max-width: 50rem) {
   .av-cs-body { grid-template-columns: minmax(0, 1fr); }
   .av-cs-pass { padding-left: 0; border-left: 0; margin-left: 0; padding-top: 16px; border-top: 1px dashed var(--av-line); }
   .av-cs-arm { grid-template-columns: minmax(7rem, 11rem) minmax(5rem, 1fr) 11.5rem; }
   .av-cs-marks { grid-column: 2 / -1; }
 }
-@media (max-width: 640px) {
+@container av-cases (max-width: 36rem) {
   .av-cs-head { grid-template-columns: auto minmax(0, 1fr); }
   .av-cs-n { font-size: 1.4rem; }
   .av-cs-result { grid-column: 1 / -1; justify-self: start; align-items: flex-start; text-align: left; flex-direction: row; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-top: 8px; }

@@ -14,7 +14,7 @@ import re
 import unittest
 from urllib.parse import unquote_to_bytes
 
-from visual_harness import EXAMPLES, REPORT, VISUALS, Scratch, run_python, write_hostile_fixtures
+from visual_harness import EXAMPLES, REPORT, VISUALS, Scratch, run_python, told, told_spec, write_hostile_fixtures
 
 TRIAL = EXAMPLES / "fictional-trial.json"
 NARRATIVE = EXAMPLES / "fictional-narrative.json"
@@ -225,7 +225,7 @@ class ReportRefusalTest(unittest.TestCase):
             self.assertFalse(output.exists(), "a refused run wrote output")
 
     def test_requires_trial_or_spec(self) -> None:
-        self.assertRefused(message="supply --trial, --data, --csv or --spec")
+        self.assertRefused(message="supply --trial, --data, --csv, --spec or --collection")
 
     def test_refuses_a_narrative_with_a_spec(self) -> None:
         self.assertRefused("--trial", TRIAL, "--narrative", NARRATIVE, "--spec", SHOWCASE, message="one or the other")
@@ -301,12 +301,16 @@ class ReportCheckTest(unittest.TestCase):
         return path
 
     def test_the_examples_have_no_problems(self) -> None:
-        for args in (("--trial", TRIAL, "--narrative", NARRATIVE), ("--trial", TRIAL), ("--spec", SHOWCASE)):
+        for args in (("--trial", TRIAL, "--narrative", NARRATIVE), ("--spec", SHOWCASE)):
             with self.subTest(args=args):
                 result = run_python(REPORT, "--check", *args)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stderr, "")
                 self.assertTrue(result.stdout.startswith("checked ") and result.stdout.rstrip().endswith(": no problems"), result.stdout)
+        # The same trial with no narrative tells no story, so the check refuses it, as the page does.
+        bare = run_python(REPORT, "--check", "--trial", TRIAL)
+        self.assertEqual(bare.returncode, 1)
+        self.assertEqual(bare.stderr.splitlines()[0], 'error: narrative: missing "story", which tells a reader new to this work what it is about')
 
     def test_errors_exit_non_zero_with_a_hint_each_and_write_nothing(self) -> None:
         self.narrative["decision"]["verdict"] = "adpot"
@@ -344,7 +348,7 @@ class ReportCheckTest(unittest.TestCase):
                 self.assertTrue(any(line.startswith("hint: ") for line in result.stderr.splitlines()))
 
     def test_checks_a_specification_against_the_trial_beside_it(self) -> None:
-        spec = self.write("spec.json", {"title": "T", "sections": [{"title": "S", "blocks": [{"type": "tapestry", "arms": ["checklist", "chekclist"]}]}]})
+        spec = self.write("spec.json", told_spec({"title": "T", "sections": [{"title": "S", "blocks": [{"type": "tapestry", "arms": ["checklist", "chekclist"]}]}]}, json.loads(TRIAL.read_text(encoding="utf-8"))))
         alone = run_python(REPORT, "--check", "--spec", spec)
         self.assertEqual(alone.returncode, 1)
         self.assertIn("error: sections[0].blocks[0] (tapestry): the tapestry block needs trial data", alone.stderr)
@@ -368,7 +372,7 @@ class ReportCheckTest(unittest.TestCase):
         self.assertEqual(result.stderr, "")
 
     def test_still_refuses_what_a_write_refuses(self) -> None:
-        for args, message in ((("--narrative", NARRATIVE), "--narrative needs --trial"), ((), "supply --trial, --data, --csv or --spec"), (("--trial", self.write("none.json", "{}")), "not trial report data")):
+        for args, message in ((("--narrative", NARRATIVE), "--narrative needs --trial"), ((), "supply --trial, --data, --csv, --spec or --collection"), (("--trial", self.write("none.json", "{}")), "not trial report data")):
             with self.subTest(args=args):
                 result = run_python(REPORT, "--check", *args)
                 self.assertEqual(result.returncode, 1)
@@ -406,10 +410,24 @@ class ReportSkeletonTest(unittest.TestCase):
         path.write_text(json.dumps(self.skeleton()), encoding="utf-8")
         result = run_python(REPORT, "--check", "--trial", TRIAL, "--narrative", path)
         self.assertEqual(result.returncode, 1)
-        self.assertEqual(result.stderr.splitlines()[0], 'error: narrative.decision.headline: "headline" is empty')
-        self.assertEqual(len(result.stderr.splitlines()), 2)
+        # What is left to write: the decision, the story a newcomer needs, and a reading for each section shown.
+        self.assertEqual([line for line in result.stderr.splitlines() if not line.startswith("hint: ")], [
+            'error: narrative.decision.headline: "headline" is empty',
+            'error: narrative.story.background: "background" is empty',
+            'error: narrative.story.intent: "intent" is empty',
+            'error: narrative.story.covers: "covers" is empty',
+            'error: narrative.story.notCovered: "notCovered" is empty',
+            'error: narrative.story: missing "rule": how the decision was to be made, in plain words',
+            "error: narrative.story.questions: lists no question",
+            *[f'error: narrative.story.alternatives: does not describe arm "{a}"' for a in ("current", "current-copy", "checklist", "worked-example")],
+            *[f'error: narrative.story.cases: does not describe case "{c}"' for c in ("label-a-photo", "summarize-minutes", "reply-to-complaint", "explain-a-chart")],
+            # The fictional trial's arms record true-or-false checks (reply_written and two measures), so its checks section shows.
+            *[f'error: narrative.readings: no reading for the "{s}" section' for s in ("setup", "arms", "cases", "failures", "checks", "pairwise", "cost", "invalid", "runs")],
+        ])
         narrative = json.loads(path.read_text(encoding="utf-8"))
         narrative["decision"]["headline"] = "Adopt the checklist."
+        narrative["story"] = {**narrative["story"], **{k: v for k, v in told({}, json.loads(TRIAL.read_text(encoding="utf-8")))["story"].items()}}
+        narrative["readings"] = {k: f"What the {k} views show." for k in narrative["readings"]}
         path.write_text(json.dumps(narrative), encoding="utf-8")
         result = run_python(REPORT, "--check", "--trial", TRIAL, "--narrative", path)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -540,7 +558,7 @@ class ComparisonInputTest(unittest.TestCase):
         self.assertFalse((self.dir / "out" / "refused.html").exists())
 
     def test_data_is_embedded_unchanged_with_its_narrative(self) -> None:
-        data, narrative = self.write("c.json", COMPARISON), self.write("n.json", {"title": "Lunch", "decision": {"verdict": "adopt", "headline": "Peanut butter."}})
+        data, narrative = self.write("c.json", COMPARISON), self.write("n.json", told({"title": "Lunch", "decision": {"verdict": "adopt", "headline": "Peanut butter."}}, comparison=COMPARISON))
         page = self.build("--data", data, "--narrative", narrative)
         self.assertEqual(json.loads(page.json["av-comparison"]), COMPARISON)
         self.assertIn("av-narrative", page.json)
@@ -549,7 +567,7 @@ class ComparisonInputTest(unittest.TestCase):
         self.assertEqual(page.mounts, 1)
 
     def test_a_csv_becomes_a_comparison_with_inferred_kinds_groups_and_invalid_rows(self) -> None:
-        page = self.build("--csv", self.write("ads.csv", TABLE))
+        page = self.build("--csv", self.write("ads.csv", TABLE), "--narrative", self.write("n.json", told({}, comparison={"alternatives": [{"id": "Ad A"}, {"id": "Ad B"}], "cases": [{"id": "monday"}, {"id": "tuesday"}]})))
         c = json.loads(page.json["av-comparison"])
         self.assertEqual({m["id"]: m["kind"] for m in c["metrics"]}, {"clicked": "binary", "conversions": "count", "seconds": "numeric"})
         self.assertEqual(c["alternatives"], [{"id": "Ad A", "group": ["Bold", "Red"]}, {"id": "Ad B", "group": ["Calm"]}])
@@ -567,12 +585,13 @@ class ComparisonInputTest(unittest.TestCase):
     def test_data_defines_what_the_csv_cannot_infer(self) -> None:
         data = self.write("c.json", {"title": "Taste", "alternatives": [{"id": "pb", "label": "Peanut butter"}], "metrics": [{"id": "taste", "kind": "ordinal", "levels": ["meh", "good", "great"]}, {"id": "ate", "kind": "binary"}]})
         table = self.write("t.csv", "alternative,metric,value\npb,taste,great\njelly,taste,meh\npb,ate,1\njelly,ate,0\n")
-        page = self.build("--data", data, "--csv", table)
+        narrative = self.write("n.json", told({}, comparison={"alternatives": [{"id": "pb"}, {"id": "jelly"}]}))
+        page = self.build("--data", data, "--csv", table, "--narrative", narrative)
         c = json.loads(page.json["av-comparison"])
         self.assertEqual([a.get("label") for a in c["alternatives"]], ["Peanut butter", None])
         self.assertEqual([o["value"] for o in c["observations"]], ["great", "meh", True, False])
         self.assertEqual(page.title, "Taste")
-        result = run_python(REPORT, "--check", "--data", data, "--csv", table)
+        result = run_python(REPORT, "--check", "--data", data, "--csv", table, "--narrative", narrative)
         self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_ambiguous_or_unreadable_tables_are_refused_with_a_specific_hint(self) -> None:
@@ -600,7 +619,7 @@ class ComparisonInputTest(unittest.TestCase):
 
     def test_check_reads_a_comparison_and_its_narrative_the_way_the_page_does(self) -> None:
         data = self.write("c.json", COMPARISON)
-        clean = run_python(REPORT, "--check", "--data", data)
+        clean = run_python(REPORT, "--check", "--data", data, "--narrative", self.write("told.json", told({}, comparison=COMPARISON)))
         self.assertEqual((clean.returncode, clean.stderr), (0, ""))
         self.assertTrue(clean.stdout.rstrip().endswith(": no problems"), clean.stdout)
         broken = dict(COMPARISON, observations=[*COMPARISON["observations"], {"alternative": "pbb", "metric": "taste", "value": "superb"}], baseline="jely")
@@ -616,7 +635,7 @@ class ComparisonInputTest(unittest.TestCase):
         self.assertFalse(any(self.dir.glob("*.html")))
 
     def test_a_specification_borrows_the_comparison_beside_it(self) -> None:
-        spec = self.write("s.json", {"title": "T", "sections": [{"title": "S", "blocks": [{"type": "metric", "metric": "tast"}, {"type": "scorecard"}]}]})
+        spec = self.write("s.json", told_spec({"title": "T", "sections": [{"title": "S", "blocks": [{"type": "metric", "metric": "tast"}, {"type": "scorecard"}]}]}, comparison=COMPARISON))
         result = run_python(REPORT, "--check", "--spec", spec, "--data", self.write("c.json", COMPARISON))
         self.assertEqual(result.returncode, 1)
         self.assertIn('error: sections[0].blocks[0] (metric).metric: "tast" is not a metric in this comparison', result.stderr)
@@ -643,7 +662,12 @@ class ComparisonInputTest(unittest.TestCase):
         path = self.write("n.json", narrative)
         check = run_python(REPORT, "--check", "--data", data, "--narrative", path)
         self.assertEqual(check.stderr.splitlines()[0], 'error: narrative.decision.headline: "headline" is empty')
-        self.assertEqual(len(check.stderr.splitlines()), 2)
+        self.assertEqual(sorted(narrative["story"]["alternatives"]), ["jelly", "pb"], "a description to write for each alternative")
+        self.assertEqual(list(narrative["readings"]), ["compared", "results", "differences", "groups", "observations"], "a reading to write for each section shown: both alternatives name a group")
+        filled = {**narrative, "decision": {**narrative["decision"], "headline": "Peanut butter."}, **told({}, comparison=COMPARISON)}
+        filled["readings"] = {k: f"What the {k} views show." for k in narrative["readings"]}
+        done = run_python(REPORT, "--check", "--data", data, "--narrative", self.write("filled.json", filled))
+        self.assertEqual((done.returncode, done.stderr), (0, ""))
         from_csv = run_python(REPORT, "--skeleton", "--csv", self.write("t.csv", TABLE))
         self.assertEqual([a["id"] for a in json.loads(from_csv.stdout)["alternatives"]], ["Ad A", "Ad B"])
         both = run_python(REPORT, "--skeleton", "--trial", TRIAL, "--data", data)
