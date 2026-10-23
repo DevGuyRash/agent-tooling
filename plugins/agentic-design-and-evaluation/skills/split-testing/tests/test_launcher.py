@@ -1094,15 +1094,12 @@ class LauncherTest(unittest.TestCase):
         stuck, kept = home / ".store" / "stuck.jsonl", home / ".store" / "kept.jsonl"
         write(stuck, "planted\n")
         write(kept, "planted\n")
-        real_list, real_remove = os.listxattr, os.removexattr
 
-        def listing(path, *a, **k):
-            return [*real_list(path, *a, **k), *(["security.capability"] if Path(path) == stuck else [])]
+        def listing(path, *a, **k):  # whatever the filesystem keeps
+            return ["security.capability"] if Path(path) == stuck else []
 
         def removing(path, name, *a, **k):
-            if name == "security.capability":
-                raise PermissionError(errno.EPERM, "Operation not permitted")
-            return real_remove(path, name, *a, **k)
+            raise PermissionError(errno.EPERM, "Operation not permitted")
         entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]}, keep_planted=True)
         with mock.patch.object(trial.os, "listxattr", listing), mock.patch.object(trial.os, "removexattr", removing):
             self.assertTrue(trial._end_copies(out, entry, marker))
