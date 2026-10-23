@@ -397,6 +397,38 @@ class BrowserRenderTest(unittest.TestCase):
         glyphs = self.drive(checks, width=1440, script='return [...document.querySelectorAll(".av-heatmap thead .av-glyph")].map(g => Math.round(g.getBoundingClientRect().width));')["result"]
         self.assertTrue(glyphs and all(w >= 10 for w in glyphs), f"each arm's glyph in the table head is drawn: {glyphs}")
 
+    def test_wide_screens_widen_the_reading_measure_and_the_scope_box_splits_evenly(self) -> None:
+        # The owner, on a wide monitor: "why is the text forced into a column like this globally? THere's way more room on
+        # my own screen horizontally". Running text keeps a readable measure at ordinary widths (the story's 75ch, the
+        # summary's 62ch) and widens on wide screens, inside a wider page; the story's scope box sets "This report covers"
+        # and "It does not cover" side by side at one width, where the second used to sit alone in a narrow track.
+        page = self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", EXAMPLES / "fictional-narrative.json")
+        script = """
+const chOf = el => { const p = document.createElement("span"); p.textContent = "0000000000"; p.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap"; el.appendChild(p); const w = p.getBoundingClientRect().width / 10; p.remove(); return w; };
+const cap = el => Math.round(parseFloat(getComputedStyle(el).maxWidth) / chOf(el) * 10) / 10;
+const story = document.querySelector(".av-story > .av-story-part:first-child .av-story-prose");
+const summary = document.querySelector(".av-summary");
+const scope = [...document.querySelectorAll(".av-story-scope > .av-story-part")].map(p => { const r = p.getBoundingClientRect(); return [Math.round(r.top), Math.round(r.width)]; });
+return { page: Math.round(document.querySelector(".av-sections").getBoundingClientRect().width), story: cap(story), summary: cap(summary), scope };
+"""
+        ordinary = self.drive(page, width=1024, script=script)["result"]
+        self.assertAlmostEqual(ordinary["story"], 75, delta=0.6, msg="the story's measure changed at an ordinary width")
+        self.assertAlmostEqual(ordinary["summary"], 62, delta=0.6, msg="the summary's measure changed at an ordinary width")
+        wide = self.drive(page, width=1920, script=script)["result"]
+        self.assertGreaterEqual(wide["page"], 1400, "the page stays narrow on a wide screen")
+        self.assertGreaterEqual(wide["story"], 88, "the story's text stays in a narrow column on a wide screen")
+        self.assertLessEqual(wide["story"], 92.6, "the story's lines grow past a readable length")
+        self.assertGreaterEqual(wide["summary"], 76, "the summary stays in a narrow column on a wide screen")
+        # The sizes follow the screen continuously, not in steps: two nearby wide screens get different widths.
+        nearer, farther = (self.drive(page, width=w, script=script)["result"] for w in (1650, 1750))
+        self.assertLess(nearer["page"], farther["page"], "the page width moves in steps, not with the screen")
+        self.assertLess(nearer["summary"], farther["summary"], "the measure moves in steps, not with the screen")
+        for width, result in ((1024, ordinary), (1920, wide)):
+            with self.subTest(width=width):
+                (top_a, width_a), (top_b, width_b) = result["scope"]
+                self.assertLessEqual(abs(top_a - top_b), 2, "the scope box stacks its two texts instead of setting them side by side")
+                self.assertLessEqual(abs(width_a - width_b), max(width_a, width_b) * 0.05, "the scope box's two texts get different widths")
+
     def test_phone_width_keeps_row_heads_in_their_cells_and_every_value_readable(self) -> None:
         # A check required in only some cases carries a chip such as "in 10 of 20 cases" in its pooled row head. At 320 px
         # the chip once ran into the first arm's cell; kept whole instead, "in 9999 of 10,000 cases" widened the sticky

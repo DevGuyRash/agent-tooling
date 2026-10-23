@@ -4,12 +4,12 @@
 :is(.av-block--alternatives, .av-block--preferences, .av-block--decision-matrix, .av-block--observations) { background: var(--av-raised); border: 1px solid var(--av-line); border-radius: var(--av-radius); padding: clamp(16px, 2.6vw, 28px); box-shadow: var(--av-shadow); }
 
 /* ----------------------------------------------------------------- shared lede, subheads, notes */
-.av-alt-lede, .av-jv-lede { font: 400 clamp(1.05rem, 1.6vw, 1.2rem)/1.45 var(--av-font-display); color: var(--av-ink); max-width: 66ch; }
+.av-alt-lede, .av-jv-lede { font: 400 clamp(1.05rem, 1.6vw, 1.2rem)/1.45 var(--av-font-display); color: var(--av-ink); max-width: min(calc(var(--av-measure) - 2ch), 92ch); }
 .av-alt-lede strong, .av-jv-lede strong { font-weight: 650; }
 .av-jv-subhead, .av-alt-subhead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 22px 0 10px !important; padding-top: 16px; border-top: 1px solid var(--av-line); font-weight: 400; }
 .av-jv-subhead .av-eyebrow, .av-alt-subhead .av-eyebrow { display: inline; }
-.av-jv-subnote, .av-alt-subnote { font-size: .82rem; color: var(--av-ink-3); max-width: 70ch; }
-.av-jv-note, .av-alt-foot, .av-alt-textnote { margin-top: 10px !important; font-size: .82rem; color: var(--av-ink-3); max-width: 72ch; }
+.av-jv-subnote, .av-alt-subnote { font-size: .82rem; color: var(--av-ink-3); max-width: min(calc(var(--av-measure) + 2ch), 92ch); }
+.av-jv-note, .av-alt-foot, .av-alt-textnote { margin-top: 10px !important; font-size: .82rem; color: var(--av-ink-3); max-width: min(calc(var(--av-measure) + 4ch), 92ch); }
 .av-jv-notes { margin-top: 14px; }
 .av-jv-lede + .av-jv-note { margin-top: 8px !important; }
 .av-jv-scroll { margin-top: 2px; }

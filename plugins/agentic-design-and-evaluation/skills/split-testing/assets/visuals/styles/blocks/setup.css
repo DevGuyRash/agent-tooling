@@ -2,7 +2,7 @@
    shared, and the texts they received, with line diffs between those texts. */
 .av-setup-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
 
-.av-setup-lede { font: 400 clamp(1.08rem, 1.7vw, 1.24rem)/1.45 var(--av-font-display); color: var(--av-ink); max-width: 64ch; }
+.av-setup-lede { font: 400 clamp(1.08rem, 1.7vw, 1.24rem)/1.45 var(--av-font-display); color: var(--av-ink); max-width: min(calc(var(--av-measure) - 4ch), 92ch); }
 .av-setup-lede strong { font-weight: 650; }
 .av-setup-scope { margin-top: 8px !important; font-size: .86rem; color: var(--av-ink-3); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
 .av-setup-scope--warn { color: var(--av-warn); }

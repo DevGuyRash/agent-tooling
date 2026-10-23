@@ -5,7 +5,7 @@
 .av-block--failures :where(ul, ol) { list-style: none; margin: 0; padding: 0; }
 
 /* Opening line: how many valid runs failed, where, and what was left out. */
-.av-fx-lede { display: grid; gap: 8px; margin-bottom: 16px; max-width: 76ch; }
+.av-fx-lede { display: grid; gap: 8px; margin-bottom: 16px; max-width: min(calc(var(--av-measure) + 8ch), 92ch); }
 .av-fx-headline { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 12px; color: var(--av-ink-2); font-size: 1rem; line-height: 1.45; }
 .av-fx-big { font: 500 clamp(2rem, 4vw, 2.6rem)/1 var(--av-font-display); font-variant-numeric: lining-nums tabular-nums; color: var(--av-fail); }
 .av-fx-hint { font-size: .84rem; color: var(--av-ink-3); }
@@ -78,7 +78,7 @@
 .av-fx-quote { margin: 0; padding: 2px 0 2px 12px; border-left: 2px solid var(--av-line-strong); display: grid; gap: 3px; min-width: 0; }
 .av-fx-quote--judge { border-left-color: color-mix(in srgb, var(--av-fail) 55%, var(--av-line)); }
 .av-fx-quote .av-eyebrow { font-size: .6rem; }
-.av-fx-quote p { font-size: .88rem; line-height: 1.5; color: var(--av-ink-2); overflow-wrap: anywhere; max-width: 78ch; }
+.av-fx-quote p { font-size: .88rem; line-height: 1.5; color: var(--av-ink-2); overflow-wrap: anywhere; max-width: min(calc(var(--av-measure) + 10ch), 92ch); }
 .av-fx-detail-name { font-size: .76rem !important; }
 .av-fx-detail { font-family: var(--av-font-mono); font-size: .8rem; color: var(--av-ink-2); }
 .av-fx-quote footer { display: flex; }
