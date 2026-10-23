@@ -30,12 +30,27 @@ TRANSIENT = ("502 Bad Gateway", "503 Service", "failed to connect", "Connection 
              "timed out", "Too Many Requests", "429", "overloaded", "error sending request")
 
 
+# Every feature that brings what a signed-in ChatGPT account holds into a run, all turned off whatever login the run
+# holds, as Codex's own feature table names them (codex-rs/features/src/lib.rs at rust-v0.163.0; `codex features list`
+# in codex-cli 0.162 knows each):
+#   apps                 "Enable apps." (the account's apps and connectors; on by default)
+#   plugins              "Enable plugins." (on by default)
+#   remote_plugin        "Enable the PS-backed remote plugin catalog." (on by default)
+#   plugin_sharing       "Enable remote plugin sharing flows." (on by default)
+#   recommended_plugins  "Include recommended plugins in model-visible context." (off by default)
+#   tool_suggest         "Enable discoverable tool suggestions for apps." (on by default)
+#   memories             "Enable startup memory extraction and file-backed memory consolidation." (off by default)
+# No control covers the account's identity, which a run with that login holds, or the policies its workspace delivers
+# to business, education and enterprise plans (codex-rs/cloud-config, "workspace-managed policies").
+ACCOUNT_FEATURES_OFF = ("apps", "plugins", "remote_plugin", "plugin_sharing", "recommended_plugins", "tool_suggest",
+                        "memories")
+
+
 def provider_config(model: str, effort: str, host_config: str) -> str:
     """A minimal Codex config: the model and effort, the provider block of this machine's own config, and
-    nothing that loads instructions, plugins, apps, memories, or web search."""
+    nothing that loads instructions, web search, or what a signed-in account brings (ACCOUNT_FEATURES_OFF)."""
     lines = [f'model = "{model}"', f'model_reasoning_effort = "{effort}"', 'model_reasoning_summary = "detailed"',
-             'web_search = "disabled"', "[features]", "plugins = false", "remote_plugin = false", "apps = false",
-             "memories = false", ""]
+             'web_search = "disabled"', "[features]", *(f"{name} = false" for name in ACCOUNT_FEATURES_OFF), ""]
     cfg = tomllib.loads(host_config) if host_config.strip() else {}
     name = cfg.get("model_provider")
     block = cfg.get("model_providers", {}).get(name) if name else None
