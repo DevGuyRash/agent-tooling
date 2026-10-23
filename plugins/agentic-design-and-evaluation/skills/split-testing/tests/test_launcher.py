@@ -1047,7 +1047,8 @@ class LauncherTest(unittest.TestCase):
     def test_what_is_kept_of_a_planted_home_carries_no_attribute_the_run_set(self):
         # an unchanged planted file, and the directories kept around it, keep their bytes but no extended attribute
         # the run could have written a credential into: neither a user attribute nor an access control list, whose
-        # named-user entries the file's owner may set to any numbers
+        # named-user entries the file's owner may set to any numbers, nor a file capability, which a process may set
+        # on its own file from a user namespace and the runtime outside it cannot remove, so that file goes
         out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
         home = job / "harness" / "home"
         planted = home / ".store" / "planted.jsonl"
@@ -1063,15 +1064,23 @@ class LauncherTest(unittest.TestCase):
             os.removexattr(planted, "system.posix_acl_access")
         except (AttributeError, OSError):
             self.skipTest("no user extended attributes or access control lists on this filesystem")
+        capable = home / ".store" / "capable.jsonl"
+        write(capable, "planted\n")
         entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]}, keep_planted=True)
         for p in (planted, planted.parent, home):
             os.setxattr(p, "user.token", token)
             os.setxattr(p, "system.posix_acl_access", acl)
         os.setxattr(planted.parent, "system.posix_acl_default", acl)
+        mask = struct.pack("<IIIIII", 0x03000001, int.from_bytes(token[:4], "little"), 0, 0, 0, 0)  # revision 3
+        capability = subprocess.run(["unshare", "-Ur", sys.executable, "-c",
+                                     "import os, sys; os.setxattr(sys.argv[1], 'security.capability', bytes.fromhex(sys.argv[2]))",
+                                     str(capable), mask.hex()], capture_output=True).returncode == 0
         self.assertTrue(trial._end_copies(out, entry, marker))
         self.assertEqual(planted.read_text(), "planted\n")
         for p in (planted, planted.parent, home):
-            self.assertEqual([a for a in os.listxattr(p) if not a.startswith(("security.", "trusted."))], [], p)
+            self.assertEqual([a for a in os.listxattr(p) if a != "security.selinux" and not a.startswith("trusted.")], [], p)
+        if capability:
+            self.assertFalse(capable.exists())
 
     def test_a_planted_home_partly_unreadable_or_too_large_to_note_still_starts_and_is_cleared(self):
         # a directory setup left that nobody may read, or an entry that cannot be told apart as a file or a directory,

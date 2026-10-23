@@ -2015,19 +2015,22 @@ def _planted(out: Path, home: Path, keep: list[Path]) -> dict[str, str]:
 
 
 def _without_owner_attributes(path: Path) -> bool:
-    """Remove from `path`, never following a link, every extended attribute its owner could have set (user
-    attributes and access control lists among them), and say whether only those of the security and trusted
-    namespaces, which need privileges to set, are left; a filesystem that keeps none has none."""
-    fixed = ("security.", "trusted.")
+    """Remove from `path`, never following a link, every extended attribute a process of its owner's could have set
+    (user attributes, access control lists, and file capabilities set from a user namespace among them), and say
+    whether only an SELinux label, which must be a context the policy knows, and trusted attributes, which need
+    privilege outside any user namespace, are left; a filesystem that keeps none has none. One that cannot be
+    removed (a file capability set from a user namespace, say) leaves the answer no."""
+    def fixed(name):
+        return name == "security.selinux" or name.startswith("trusted.")
     try:
         names = os.listxattr(path, follow_symlinks=False)
     except OSError as e:
         return e.errno in (errno.ENOTSUP, errno.EOPNOTSUPP)
     try:
         for name in names:
-            if not name.startswith(fixed):
+            if not fixed(name):
                 os.removexattr(path, name, follow_symlinks=False)
-        return all(n.startswith(fixed) for n in os.listxattr(path, follow_symlinks=False))
+        return all(fixed(n) for n in os.listxattr(path, follow_symlinks=False))
     except OSError:
         return False
 
