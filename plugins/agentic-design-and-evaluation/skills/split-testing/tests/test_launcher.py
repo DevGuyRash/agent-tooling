@@ -1043,6 +1043,47 @@ class LauncherTest(unittest.TestCase):
                 self.assertFalse((home / ".store" / "changed.jsonl").exists() or (home / ".tool").exists())
                 shutil.rmtree(out)
 
+    def test_what_is_kept_of_a_planted_home_carries_no_attribute_the_run_set(self):
+        # an unchanged planted file, and the directories kept around it, keep their bytes but none of the user
+        # extended attributes the run could have written a credential into
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        planted = home / ".store" / "planted.jsonl"
+        write(planted, "planted\n")
+        try:
+            os.setxattr(planted, "user.probe", b"1")
+            os.removexattr(planted, "user.probe")
+        except (AttributeError, OSError):
+            self.skipTest("no user extended attributes on this filesystem")
+        entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]}, keep_planted=True)
+        token = "".join(["sess", "-", os.urandom(16).hex()]).encode()
+        for p in (planted, planted.parent, home):
+            os.setxattr(p, "user.token", token)
+        self.assertTrue(trial._end_copies(out, entry, marker))
+        self.assertEqual(planted.read_text(), "planted\n")
+        for p in (planted, planted.parent, home):
+            self.assertEqual([a for a in os.listxattr(p) if a.startswith("user.")], [], p)
+
+    def test_a_planted_home_partly_unreadable_or_too_large_to_note_still_starts_and_is_cleared(self):
+        # a directory setup left that nobody may read is not noted, and its run still starts; a home holding more
+        # files than a note may carry keeps none of them, so every note stays small enough for a sweep to read back
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        write(home / ".store" / "planted.jsonl", "planted\n")
+        write(home / "locked" / "inside", "unread\n")
+        os.chmod(home / "locked", 0)
+        entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]}, keep_planted=True)
+        self.assertEqual(list(entry["planted"]), ["runs/r0123456789abcdef/harness/home/.store/planted.jsonl"])
+        self.assertTrue(trial._end_copies(out, entry, marker))
+        self.assertTrue((home / ".store" / "planted.jsonl").exists())
+        self.assertFalse((home / "locked").exists())
+        write(home / ".store" / "second.jsonl", "planted\n")
+        with mock.patch.object(trial, "PLANTED_MAX", 1):
+            entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]}, keep_planted=True)
+        self.assertEqual(entry["planted"], {})
+        self.assertTrue(trial._end_copies(out, entry, marker))
+        self.assertFalse((home / ".store").exists())
+
     def test_an_expanded_key_variable_is_held_apart_from_configuration_like_a_written_one(self):
         self.plan({"a": dict(self.arm(), api_key_var="${FAKE_KEY_NAME}")})  # whose pass_env holds FAKE_LAUNCHER_MARK
         r = self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run", FAKE_KEY_NAME="FAKE_LAUNCHER_MARK")
