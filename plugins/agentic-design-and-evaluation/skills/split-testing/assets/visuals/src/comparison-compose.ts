@@ -10,7 +10,7 @@
  * can include, exclude, reorder (after) and append, as with the trial report. */
 import { fmtInt } from "./core";
 import type { Alternative, Case, Comparison, Metric, Observation, Preference } from "./comparison-model";
-import { alternativeIds, casesWords, groupPath, invalidJudgments, judgmentMetric, NO_CASE_WORDS, observationStatus, winMatrix } from "./comparison-stats";
+import { alternativeIds, caseKey, casesWords, groupPath, invalidJudgments, judgmentMetric, NO_CASE, NO_CASE_WORDS, observationStatus, winMatrix } from "./comparison-stats";
 import type { ReportSpec, SectionSpec, BlockSpec, ArmSpec } from "./model";
 import { costMeasures, displayPath, trialAxes } from "./trial-model";
 import type { TrialReport } from "./trial-model";
@@ -96,9 +96,9 @@ export function comparisonReport(dataIn: Comparison, narrativeIn: ComparisonNarr
   const observations = objects<Observation>(dataIn.observations);
   const preferences = objects<Preference>(dataIn.preferences);
   const rankings = objects<{ order: unknown }>(dataIn.rankings).filter(r => Array.isArray(r.order));
-  const caseIds = [...new Set([...objects<Case>(dataIn.cases).map(c => c.id), ...[...observations, ...objects<{ case?: unknown }>(dataIn.aggregates), ...preferences, ...objects<{ case?: unknown }>(dataIn.rankings)].map(x => (x as { case?: unknown }).case)].filter((c): c is string => typeof c === "string"))];
+  const caseIds = [...new Set([...objects<Case>(dataIn.cases).map(c => c.id), ...[...observations, ...objects<{ case?: unknown }>(dataIn.aggregates), ...preferences, ...objects<{ case?: unknown }>(dataIn.rankings)].map(x => caseKey((x as { case?: unknown }).case))].filter((c): c is string => typeof c === "string" && caseKey(c) !== NO_CASE))];
   // Evidence naming no case is a group of its own beside the cases, never counted as one.
-  const namesNoCase = [...observations, ...objects<{ case?: unknown }>(dataIn.aggregates), ...preferences, ...objects<{ case?: unknown }>(dataIn.rankings)].some(x => { const c = (x as { case?: unknown }).case; return c === undefined || c === null; });
+  const namesNoCase = [...observations, ...objects<{ case?: unknown }>(dataIn.aggregates), ...preferences, ...objects<{ case?: unknown }>(dataIn.rankings)].some(x => caseKey((x as { case?: unknown }).case) === NO_CASE);
   const grouped = alternatives.filter(a => groupPath(a.group).length > 0);
   const topGroups = new Set(grouped.map(a => groupPath(a.group)[0]));
   // Validity comes from the same reading the summaries use, so the verdict and the views agree.

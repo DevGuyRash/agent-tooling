@@ -162,6 +162,9 @@ def comparison_corpus() -> list[dict]:
         {**BASE, "metrics": [*BASE["metrics"], {"id": "pick2", "kind": "preference"}], "preferences": [{"a": "pb", "b": "jelly", "winner": "pb"}], "identical": [["pb"], ["pb", "jelly"], ["pb", "pb"]], "baseline": "jely"},
         {**BASE, "metrics": [*BASE["metrics"], {"id": "pick2", "kind": "preference", "primary": True}], "preferences": [{"a": "pb", "b": "jelly", "winner": "pb"}], "cases": [], "observations": [o("ate", True, case="dinner")]},
         {**BASE, "observations": [o("ate", True, case="dinner"), {"alternative": "zz", "metric": "nope", "value": 1}], "kind": "x"},
+        # Every form of an unnamed case, with cases declared and without.
+        {**BASE, "cases": [{"id": "c1"}], "observations": [o("ate", True, case="c1"), o("ate", True, case=""), o("ate", True, case="   "), o("ate", True, case=None), o("ate", True)]},
+        {**BASE, "observations": [o("ate", True, case=""), o("ate", True, case="   ")]},
     ]
     corpus += [{"kind": "comparison", "input": c} for c in written]
     narratives = [

@@ -11,7 +11,7 @@ import { ArmRegistry } from "./model";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
 import { armTally, costUsd, countsText, tally, TrialReport, TrialRun } from "./trial-model";
 import type { Comparison, MetricKind } from "./comparison-model";
-import { caseSplit, casesWords, difference, eachWeighted, evidenceAs, NO_CASE, NO_CASE_WORDS, observationStatus, ordinalLevels, pooledWords, summarize, welch } from "./comparison-stats";
+import { caseKey, caseSplit, casesWords, difference, eachWeighted, evidenceAs, NO_CASE, NO_CASE_WORDS, observationStatus, ordinalLevels, pooledWords, summarize, welch } from "./comparison-stats";
 import { fmtDates, trialReport } from "./compose";
 import type { Narrative } from "./compose";
 import { comparisonReport } from "./comparison-compose";
@@ -186,15 +186,15 @@ const goodness = (d: number | null, better: MemberMeasure["better"]): boolean | 
   d === null || Math.abs(d) < 1e-12 || better === "none" ? null : (d > 0) === (better === "higher");
 
 function trialRows(t: TrialReport, arms: string[], label: (id: string) => string, baseline: string | null, caseLabel: (id: string) => string): MemberRow[] {
-  const cases = [...new Set(t.runs.map(r => r?.scenario).filter((x): x is string => typeof x === "string"))];
+  const cases = [...new Set(t.runs.filter(r => r).map(r => caseKey(r.scenario)))];
   return arms.map(id => {
     const runs = t.runs.filter(r => r && r.arm === id);
     const tl = armTally(t, id);
     const costs = runs.filter(r => r.passed === true || r.passed === false).map(costUsd).filter(isNum);
     const model = t.plan?.arms?.[id]?.model;
     const perCase = cases.flatMap(c => {
-      const ct = tally(runs.filter(r => r.scenario === c));
-      return ct.runs ? [{ id: c, label: caseLabel(c), k: ct.pass, n: ct.valid, value: ct.rate, interval: ct.interval, text: ct.valid ? `${ct.pass} of ${ct.valid}` : "no valid runs" }] : [];
+      const ct = tally(runs.filter(r => caseKey(r.scenario) === c));
+      return ct.runs ? [{ id: c, label: c === NO_CASE ? NO_CASE_WORDS : caseLabel(c), k: ct.pass, n: ct.valid, value: ct.rate, interval: ct.interval, text: ct.valid ? `${ct.pass} of ${ct.valid}` : "no valid runs" }] : [];
     });
     return { id, label: label(id), lane: typeof model === "string" ? model : "", k: tl.pass, n: tl.valid, invalid: tl.invalid, value: tl.rate, interval: tl.interval,
       text: !tl.valid ? "no valid runs" : tl.cases > 1 ? countsText(tl) : `${tl.pass} of ${tl.valid} passed (${fmtPct(tl.rate)})`,
@@ -225,10 +225,9 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
   // what names no case as one case of its own. The value, its words, its per-case values, its cases and every change are
   // read from this; each summary's own case weights say which cases its value rests on.
   const relative = primary.kind === "preference" || primary.kind === "rank";
-  const named = (x: unknown) => isObject(x) && (x.case === undefined || x.case === null) ? { ...x, case: NO_CASE } : x;
   const list = (v: unknown) => Array.isArray(v) ? v : [];
   const ev = evidenceAs(c);
-  const cc = { ...ev, observations: list(ev.observations).map(named), aggregates: list(ev.aggregates).map(named), preferences: list(ev.preferences).map(named), rankings: list(ev.rankings).map(named) } as Comparison;
+  const cc = ev;
   const summaries = summarize(cc, primary.id);
   // The cases the report ran: every case its evidence names, whether or not it gave a value (invalid observations, ties,
   // judgments never reached), as each summary lists them. Values, weights and counts read the summaries' case weights.
@@ -240,7 +239,7 @@ function comparisonRows(c: Comparison, ids: string[], label: (id: string) => str
   const declared = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: String(x.id), label: text(x.label) || String(x.id) }));
   // The cases the headline values are taken over: those the headline metric's evidence names, declared ones in their order,
   // then the others in the order the data name them. (The report's cases, on every metric, are its story's: see reportCases.)
-  const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x): x is string => typeof x === "string" && rested.has(x)))];
+  const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? caseKey(x.case) : NO_CASE).filter(x => rested.has(x)))];
   const caseIds = [...declared.filter(d => rested.has(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === NO_CASE ? NO_CASE_WORDS : id }))];
   const rate = primary.kind === "binary" || primary.kind === "count";
   const rows: MemberRow[] = ids.map(id => {
@@ -369,7 +368,7 @@ function caseList(spec: ReportSpec): Array<{ id: string; label: string }> {
 function namesNoCase(spec: ReportSpec): boolean {
   const unnamed = (c: unknown) => isComparisonData(c) && ["observations", "aggregates", "preferences", "rankings"].some(k => {
     const list = (c as unknown as Record<string, unknown>)[k];
-    return Array.isArray(list) && list.some(x => isObject(x) && (x.case === undefined || x.case === null));
+    return Array.isArray(list) && list.some(x => isObject(x) && caseKey(x.case) === NO_CASE);
   });
   return unnamed(spec.comparison) || (Array.isArray(spec.sections) ? spec.sections : []).some(s => isObject(s) && Array.isArray(s.blocks) && s.blocks.some(b => isObject(b) && unnamed(b.data)));
 }

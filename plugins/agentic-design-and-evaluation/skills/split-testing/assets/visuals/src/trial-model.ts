@@ -1,7 +1,7 @@
 /** The document `trial.py report RUN_DIR` writes, and derivations from it.
  * Fields are read defensively: older run directories omit some of them. */
 import { isNum, median, Outcome, wilson } from "./core";
-import { caseSplit, casesWords, pooledCases } from "./stats";
+import { caseKey, caseSplit, casesWords, pooledCases } from "./stats";
 
 export interface TrialRun {
   job?: string; scenario: string; arm: string; repeat?: number; status?: string;
@@ -63,7 +63,7 @@ export interface Tally { pass: number; fail: number; invalid: number; runs: numb
 export function tally(runs: TrialRun[]): Tally {
   let pass = 0, fail = 0, invalid = 0;
   const perCase = new Map<string, number>();
-  const key = (r: TrialRun) => r.scenario === undefined || r.scenario === null ? "" : String(r.scenario);
+  const key = (r: TrialRun) => caseKey(r.scenario);
   for (const r of runs) { const o = outcomeOf(r); if (o === "pass") pass++; else if (o === "fail") fail++; else invalid++; if (o !== "invalid") perCase.set(key(r), (perCase.get(key(r)) || 0) + 1); }
   const valid = pass + fail;
   // A trial's runs repeat their case by design: the shared rule withholds an interval over several cases.

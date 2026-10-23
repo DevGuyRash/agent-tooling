@@ -24,8 +24,8 @@
  * alternative has any on that metric, and from supplied aggregates otherwise. */
 import type { Aggregate, Comparison, ComparisonFilter, Metric, MetricDifference, MetricKind, MetricSummary, Observation, Preference, Ranking } from "./comparison-model";
 import { isNum, quantile, wilson } from "./core";
-import { caseSplit, casesWords, newcombe, pooledCases, validCount, Z95 } from "./stats";
-export { caseSplit, casesWords, eachWeighted, NO_CASE, NO_CASE_WORDS } from "./stats";
+import { caseKey, caseSplit, casesWords, NO_CASE, newcombe, pooledCases, validCount, Z95 } from "./stats";
+export { caseKey, caseSplit, casesWords, eachWeighted, NO_CASE, NO_CASE_WORDS } from "./stats";
 
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => !!v && typeof v === "object" && !Array.isArray(v);
@@ -64,7 +64,8 @@ function caseFilter(data: Comparison, filter: ComparisonFilter): (c: unknown) =>
   const prefix = Array.isArray(filter.caseGroups) && filter.caseGroups.length ? filter.caseGroups.map(String) : null;
   const inGroup = prefix ? new Set(items<{ id: unknown; group?: string[] | string }>(data?.cases).filter(c => typeof c.id === "string" && startsWith(groupPath(c.group), prefix)).map(c => c.id as string)) : null;
   if (!only && !inGroup) return () => true;
-  return c => typeof c === "string" && (!only || only.has(c)) && (!inGroup || inGroup.has(c));
+  // Read through caseKey: evidence naming no case is the NO_CASE group, which no declared case group holds.
+  return c => { const k = caseKey(c); return (!only || only.has(k)) && (!inGroup || inGroup.has(k)); };
 }
 
 /** The preference or rank metric that judgments naming no metric belong to:
@@ -207,7 +208,6 @@ export function bootstrap(xs: number[], ys: number[], stat: (x: number[], y: num
  * every case an observation names, valid or not. */
 interface Read { valid: Map<string, number[]>; keyed: Map<string, Map<string, number[]>>; trials: Map<string, [number, number]>; invalid: Map<string, Map<string, number>>; seen: Set<string>; order: string[]; cases: Map<string, Map<string, number>>; ran: Map<string, Set<string>> }
 function reader(): Read { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [], cases: new Map(), ran: new Map() }; }
-const caseKey = (c: unknown) => c === undefined || c === null ? "" : String(c);
 
 /** What a summary's value pools, in words. */
 export const pooledWords = (s: MetricSummary) => casesWords(...caseSplit((s.caseWeights || []).filter(e => e[1] > 0).map(e => e[0])));
@@ -297,7 +297,7 @@ function readObservations(data: Comparison, metric: Metric, filter: ComparisonFi
   const explicit = Array.isArray(metric.levels) && metric.levels.length > 0;
   for (const o of items<Observation>(data?.observations)) {
     if (o.metric !== metric.id || !okAlt(o.alternative) || !okCase(o.case)) continue;
-    const alt = o.alternative, key = o.case !== undefined || o.unit !== undefined ? `${o.case ?? ""}\u0000${o.unit ?? ""}` : undefined;
+    const alt = o.alternative, key = caseKey(o.case) !== NO_CASE || o.unit !== undefined ? `${caseKey(o.case)}\u0000${o.unit ?? ""}` : undefined;
     ranOn(r, alt, o.case);
     const c = classify(o, kind, levels, explicit);
     if (typeof c === "string") bad(r, alt, c);

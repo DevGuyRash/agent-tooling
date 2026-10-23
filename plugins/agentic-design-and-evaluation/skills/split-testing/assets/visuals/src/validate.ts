@@ -8,6 +8,7 @@ import { esc } from "./core";
 import type { ReportSpec } from "./model";
 import { blockTypes } from "./report";
 import { casePairs } from "./trial-model";
+import { caseKey, NO_CASE } from "./stats";
 import type { TrialReport } from "./trial-model";
 
 export interface Problem { level: "error" | "warning"; where: string; message: string; hint?: string }
@@ -512,6 +513,11 @@ class Checker {
   id(value: string, kind: string, where: string): void {
     const spec = IDS[kind];
     if (!spec) return;
+    // A blank case names no case: every view reads that evidence as evidence naming no case (caseKey).
+    if (kind === "comparison-case" && caseKey(value) === NO_CASE) {
+      if (this.known.comparison) this.add("warning", where, "an empty or blank case names no case, so this is read as evidence naming no case", 'leave "case" out, or name the case');
+      return;
+    }
     const ofComparison = spec.list !== null && FROM_COMPARISON.includes(spec.list), ofCollection = spec.list !== null && FROM_COLLECTION.includes(spec.list);
     if (spec.list && !(ofCollection ? this.known.collection : ofComparison ? this.known.comparison && (spec.list !== "ccases" || this.known.ccases.length > 0) : this.known.trial)) return;
     const options = spec.list ? this.known[spec.list] : MEASURES;
@@ -893,7 +899,8 @@ function namedIds(value: unknown, field: Field | undefined, out: { arms: string[
  * judgments and rankings name. */
 function comparisonCases(data: Obj): string[] {
   const out: string[] = [];
-  const take = (v: unknown) => { if (typeof v === "string" && !out.includes(v)) out.push(v); };
+  // Evidence naming no case (a case missing, null, empty or only spaces) names none, as every view reads it.
+  const take = (v: unknown) => { if (typeof v === "string" && caseKey(v) !== NO_CASE && !out.includes(v)) out.push(v); };
   for (const x of Array.isArray(data.cases) ? data.cases : []) if (isObj(x)) take(x.id);
   for (const key of ["observations", "aggregates", "preferences", "rankings"]) for (const x of Array.isArray(data[key]) ? data[key] as unknown[] : []) if (isObj(x)) take(x.case);
   return out;

@@ -646,6 +646,11 @@ class Checker:
         spec = IDS.get(kind)
         if not spec:
             return
+        # A blank case names no case: every view reads that evidence as evidence naming no case.
+        if kind == "comparison-case" and not value.strip():
+            if self.known["comparison"]:
+                self.add("warning", where, "an empty or blank case names no case, so this is read as evidence naming no case", 'leave "case" out, or name the case')
+            return
         source, noun, many, level, tail = spec
         of_comparison, of_collection = source in FROM_COMPARISON, source in FROM_COLLECTION
         if source and not (self.known["collection"] if of_collection else (self.known["comparison"] and (source != "ccases" or self.known["ccases"])) if of_comparison else self.known["trial"]):
@@ -879,12 +884,15 @@ def named_ids(value, field, out: dict) -> None:
 def comparison_cases(data: dict) -> list:
     """A comparison's cases as the composition finds them: those it declares, then every case its data name."""
     out: list = []
+    # Evidence naming no case (a case missing, null, empty or only spaces) names none, as every view reads it.
+    def named(v) -> bool:
+        return isinstance(v, str) and v.strip() != "" and v not in out
     for x in data.get("cases") if isinstance(data.get("cases"), list) else []:
-        if isinstance(x, dict) and isinstance(x.get("id"), str) and x["id"] not in out:
+        if isinstance(x, dict) and named(x.get("id")):
             out.append(x["id"])
     for key in ("observations", "aggregates", "preferences", "rankings"):
         for x in data.get(key) if isinstance(data.get(key), list) else []:
-            if isinstance(x, dict) and isinstance(x.get("case"), str) and x["case"] not in out:
+            if isinstance(x, dict) and named(x.get("case")):
                 out.append(x["case"])
     return out
 

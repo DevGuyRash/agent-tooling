@@ -61,9 +61,15 @@ export function placement(interval: [number, number], at = 0): Placement {
 export const NO_CASE = "\u0000no case";
 /** Evidence naming no case, in words: a group weighed beside the cases, never counted as one. */
 export const NO_CASE_WORDS = "evidence naming no case";
-/** How many named cases a list of case ids holds, and whether evidence naming no case ("" or NO_CASE) is among them. */
+/** The one place evidence's case is read: the case's name, or NO_CASE for evidence naming none, whether its case is
+ * missing, null, empty or only spaces. Every grouping, count, weight, filter and wording of evidence by case reads its
+ * case through this, so those forms are one group everywhere. */
+export function caseKey(c: unknown): string {
+  return c === undefined || c === null || (typeof c === "string" && !c.trim()) ? NO_CASE : String(c);
+}
+/** How many named cases a list of case keys holds, and whether evidence naming no case is among them. */
 export function caseSplit(ids: Iterable<string>): [number, boolean] {
-  const all = [...new Set(ids)], none = all.filter(id => id === "" || id === NO_CASE);
+  const all = [...new Set([...ids].map(caseKey))], none = all.filter(id => id === NO_CASE);
   return [all.length - none.length, none.length > 0];
 }
 /** The one wording of what a value, an average or a coverage statement is taken over: the named cases, `where` after

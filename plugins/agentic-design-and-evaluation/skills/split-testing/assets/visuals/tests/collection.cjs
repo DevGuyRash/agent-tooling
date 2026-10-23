@@ -1105,4 +1105,47 @@ test("sweep (a selected matrix): on every page, each count of cases a value, ave
   }
 });
 
+test("round 17: a case left out and a case written empty are one group of evidence naming no case", () => {
+  // Each alternative passes twice on c1, and fails twice with no case field and twice with case "". The unnamed evidence is
+  // one group of four failures, so with c1 and that group weighted equally the value is (100% + 0%) / 2 = 50%.
+  const obs = (alternative, c, value) => ({ alternative, ...(c === undefined ? {} : { case: c }), metric: "ok", value });
+  const data = { alternatives: [{ id: "x" }, { id: "y" }], baseline: "x", metrics: [{ id: "ok", kind: "binary", primary: true, better: "higher" }],
+    observations: ["x", "y"].flatMap(a => [obs(a, "c1", true), obs(a, "c1", true), obs(a, undefined, false), obs(a, undefined, false), obs(a, "", false), obs(a, "", false)]) };
+  const pair = { members: [{ id: "a", comparison: data }, { id: "b", comparison: data }] };
+  const x = V.collectionModel(pair).members[0].rows.find(r => r.id === "x");
+  H.equal([x.balanced, x.text, H.plain(x.perCase.map(c => [c.label, c.n]))], [0.5, "2 of 6 across 1 case, plus evidence naming no case", [["c1", 2], ["evidence naming no case", 4]]], "one group of four");
+  H.includes(render({ type: "shifts" }, pair), "50% with each weighted equally", "the average shown");
+  // Every unnamed observation written with case "": the pair still says the evidence naming no case.
+  const empty = { ...data, observations: data.observations.map(o => o.case === undefined ? { ...o, case: "" } : o) };
+  H.includes(text(render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: empty }, { id: "b", comparison: empty }] })), "Cases: 1 case in both, plus evidence naming no case.", "case \"\" is evidence naming no case");
+});
+
+test("sweep (a selected matrix): every form of an unnamed case, missing, null, empty and blank, is one group in every view", () => {
+  // Each kind holds evidence on c1 and on each of the four unnamed forms; read as one group, every view counts one case,
+  // plus evidence naming no case, and the values equal those of the same evidence with the case field left out.
+  const forms = [undefined, null, "", "   "];
+  const at = (c, x) => c === undefined ? { ...x } : { ...x, case: c };
+  const kinds = {
+    observations: (c, i) => ({ observations: ["x", "y"].flatMap(alternative => [at(c, { alternative, metric: "m", value: (i + (alternative === "x" ? 0 : 1)) % 2 === 0 })]) }),
+    totals: (c, i) => ({ aggregates: ["x", "y"].map(alternative => at(c, { alternative, metric: "m", k: alternative === "x" ? i : 1, n: 4 })) }),
+    judgments: (c, i) => ({ preferences: [at(c, { a: "x", b: "y", winner: i % 2 ? "y" : "x" })] }),
+    rankings: (c, i) => ({ rankings: [at(c, { order: i % 2 ? ["y", "x"] : ["x", "y"] })] }),
+  };
+  const metric = { observations: { id: "m", kind: "binary", primary: true }, totals: { id: "m", kind: "binary", primary: true }, judgments: { id: "m", kind: "preference", primary: true }, rankings: { id: "m", kind: "preference", primary: true } };
+  for (const [kind, make] of Object.entries(kinds)) {
+    const join = parts => parts.reduce((all, p) => { for (const [k, v] of Object.entries(p)) all[k] = [...(all[k] || []), ...v]; return all; }, {});
+    const c1 = join([0, 1].map(i => make("c1", i)));
+    const build = cs => ({ alternatives: [{ id: "x" }, { id: "y" }], baseline: "x", metrics: [metric[kind]], ...join([c1, ...cs.map((c, i) => make(c, i))]) });
+    const mixed = build(forms), plain = build(forms.map(() => undefined));
+    const words = d => { const m = V.collectionModel({ members: [{ id: "a", comparison: d }, { id: "b", comparison: d }] }).members[0]; return H.plain([m.rows.map(r => [r.text, r.balanced, (r.perCase || []).map(c => [c.label, c.n])]), m.cases.map(c => c.id), m.noCase]); };
+    H.equal(words(mixed), words(plain), `${kind}: the four forms read as the case field left out`);
+    H.equal(H.plain(V.reportCases(V.comparisonReport(mixed, {}))), ["c1"], `${kind}: the story owes c1 alone`);
+    const own = text(V.renderReport(V.comparisonReport(mixed, {})));
+    H.excludes(own, "2 cases", `${kind}: the report never counts two cases`);
+    const side = text(render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: mixed }, { id: "b", comparison: mixed }] }));
+    H.includes(side, "Cases: 1 case in both, plus evidence naming no case.", `${kind}: the side-by-side Cases line`); H.excludes(side, "2 cases", `${kind}: nor does the side-by-side page`);
+    for (const s of V.summarize(mixed, "m")) H.equal(H.plain((s.caseWeights || []).length), 2, `${kind}: ${s.alternative} weighs c1 and one unnamed group`);
+  }
+});
+
 H.report();

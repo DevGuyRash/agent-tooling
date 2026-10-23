@@ -332,6 +332,7 @@ define("stats", ["require", "exports", "core"], function (require, exports, core
     exports.countPooling = countPooling;
     exports.newcombe = newcombe;
     exports.placement = placement;
+    exports.caseKey = caseKey;
     exports.caseSplit = caseSplit;
     exports.casesWords = casesWords;
     /** The two-sided 95% normal quantile to the precision Newcombe's published
@@ -387,9 +388,15 @@ define("stats", ["require", "exports", "core"], function (require, exports, core
     exports.NO_CASE = "\u0000no case";
     /** Evidence naming no case, in words: a group weighed beside the cases, never counted as one. */
     exports.NO_CASE_WORDS = "evidence naming no case";
-    /** How many named cases a list of case ids holds, and whether evidence naming no case ("" or NO_CASE) is among them. */
+    /** The one place evidence's case is read: the case's name, or NO_CASE for evidence naming none, whether its case is
+     * missing, null, empty or only spaces. Every grouping, count, weight, filter and wording of evidence by case reads its
+     * case through this, so those forms are one group everywhere. */
+    function caseKey(c) {
+        return c === undefined || c === null || (typeof c === "string" && !c.trim()) ? exports.NO_CASE : String(c);
+    }
+    /** How many named cases a list of case keys holds, and whether evidence naming no case is among them. */
     function caseSplit(ids) {
-        const all = [...new Set(ids)], none = all.filter(id => id === "" || id === exports.NO_CASE);
+        const all = [...new Set([...ids].map(caseKey))], none = all.filter(id => id === exports.NO_CASE);
         return [all.length - none.length, none.length > 0];
     }
     /** The one wording of what a value, an average or a coverage statement is taken over: the named cases, `where` after
@@ -444,7 +451,7 @@ define("trial-model", ["require", "exports", "core", "stats"], function (require
     function tally(runs) {
         let pass = 0, fail = 0, invalid = 0;
         const perCase = new Map();
-        const key = (r) => r.scenario === undefined || r.scenario === null ? "" : String(r.scenario);
+        const key = (r) => (0, stats_1.caseKey)(r.scenario);
         for (const r of runs) {
             const o = outcomeOf(r);
             if (o === "pass")
@@ -5258,7 +5265,7 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
 define("comparison-stats", ["require", "exports", "core", "stats", "stats"], function (require, exports, core_12, stats_8, stats_9) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.pooledWords = exports.NO_CASE_WORDS = exports.NO_CASE = exports.eachWeighted = exports.casesWords = exports.caseSplit = void 0;
+    exports.pooledWords = exports.NO_CASE_WORDS = exports.NO_CASE = exports.eachWeighted = exports.casesWords = exports.caseSplit = exports.caseKey = void 0;
     exports.groupPath = groupPath;
     exports.metricOf = metricOf;
     exports.alternativeIds = alternativeIds;
@@ -5279,6 +5286,7 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
     exports.summarizeGroups = summarizeGroups;
     exports.winMatrix = winMatrix;
     exports.invalidJudgments = invalidJudgments;
+    Object.defineProperty(exports, "caseKey", { enumerable: true, get: function () { return stats_9.caseKey; } });
     Object.defineProperty(exports, "caseSplit", { enumerable: true, get: function () { return stats_9.caseSplit; } });
     Object.defineProperty(exports, "casesWords", { enumerable: true, get: function () { return stats_9.casesWords; } });
     Object.defineProperty(exports, "eachWeighted", { enumerable: true, get: function () { return stats_9.eachWeighted; } });
@@ -5316,7 +5324,8 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
         const inGroup = prefix ? new Set(items(data?.cases).filter(c => typeof c.id === "string" && startsWith(groupPath(c.group), prefix)).map(c => c.id)) : null;
         if (!only && !inGroup)
             return () => true;
-        return c => typeof c === "string" && (!only || only.has(c)) && (!inGroup || inGroup.has(c));
+        // Read through caseKey: evidence naming no case is the NO_CASE group, which no declared case group holds.
+        return c => { const k = (0, stats_8.caseKey)(c); return (!only || only.has(k)) && (!inGroup || inGroup.has(k)); };
     }
     /** The preference or rank metric that judgments naming no metric belong to:
      * the only metric of that kind, else the primary one of that kind. */
@@ -5508,12 +5517,11 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
         return [(0, core_12.quantile)(stats, 0.025), (0, core_12.quantile)(stats, 0.975)];
     }
     function reader() { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [], cases: new Map(), ran: new Map() }; }
-    const caseKey = (c) => c === undefined || c === null ? "" : String(c);
     /** What a summary's value pools, in words. */
     const pooledWords = (s) => (0, stats_8.casesWords)(...(0, stats_8.caseSplit)((s.caseWeights || []).filter(e => e[1] > 0).map(e => e[0])));
     exports.pooledWords = pooledWords;
-    function from(r, alt, c, weight = 1) { const m = r.cases.get(alt) || r.cases.set(alt, new Map()).get(alt); m.set(caseKey(c), (m.get(caseKey(c)) || 0) + weight); }
-    function ranOn(r, alt, c) { (r.ran.get(alt) || r.ran.set(alt, new Set()).get(alt)).add(caseKey(c)); }
+    function from(r, alt, c, weight = 1) { const m = r.cases.get(alt) || r.cases.set(alt, new Map()).get(alt); m.set((0, stats_8.caseKey)(c), (m.get((0, stats_8.caseKey)(c)) || 0) + weight); }
+    function ranOn(r, alt, c) { (r.ran.get(alt) || r.ran.set(alt, new Set()).get(alt)).add((0, stats_8.caseKey)(c)); }
     function touch(r, alt) { if (!r.seen.has(alt)) {
         r.seen.add(alt);
         r.order.push(alt);
@@ -5627,7 +5635,7 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
         for (const o of items(data?.observations)) {
             if (o.metric !== metric.id || !okAlt(o.alternative) || !okCase(o.case))
                 continue;
-            const alt = o.alternative, key = o.case !== undefined || o.unit !== undefined ? `${o.case ?? ""}\u0000${o.unit ?? ""}` : undefined;
+            const alt = o.alternative, key = (0, stats_8.caseKey)(o.case) !== stats_8.NO_CASE || o.unit !== undefined ? `${(0, stats_8.caseKey)(o.case)}\u0000${o.unit ?? ""}` : undefined;
             ranOn(r, alt, o.case);
             const c = classify(o, kind, levels, explicit);
             if (typeof c === "string")
@@ -5718,7 +5726,7 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
         // How many values each case gave, counted from the evidence the summary used: observations, head-to-head judgments,
         // or supplied totals (their trials, their decisive judgments, or the counts of their levels).
         const perCase = new Map();
-        const add = (c, n) => perCase.set(caseKey(c), (perCase.get(caseKey(c)) || 0) + n);
+        const add = (c, n) => perCase.set((0, stats_8.caseKey)(c), (perCase.get((0, stats_8.caseKey)(c)) || 0) + n);
         if (metric.kind === "preference" && !s.fromAggregate)
             for (const [c, n] of judgedPerCase || [])
                 add(c, n);
@@ -5735,7 +5743,7 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
         const ran = new Set([...(r.ran.get(alt) || []), ...(judgedOn || [])]);
         if (s.fromAggregate)
             for (const a of aggregatesFor(data, metric.id, alt, filter))
-                ran.add(caseKey(a.case));
+                ran.add((0, stats_8.caseKey)(a.case));
         const weighed = { ...s, caseWeights: [...perCase].filter(e => e[1] > 0), casesRun: [...ran] };
         if (s.intervalMethod === "as reported by the source")
             return weighed;
@@ -5882,8 +5890,8 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
         const ids = [...new Set([...alternativeIds(data).filter(okAlt), ...r.order, ...(judged ? judged.keys() : [])])];
         const judgedPerCase = (id) => { const m = new Map(); for (const d of list)
             if (d.valid && d.winner !== "tie" && (d.a === id || d.b === id))
-                m.set(caseKey(d.case), (m.get(caseKey(d.case)) || 0) + 1); return m; };
-        const judgedOn = (id) => list.filter(d => d.a === id || d.b === id).map(d => caseKey(d.case));
+                m.set((0, stats_8.caseKey)(d.case), (m.get((0, stats_8.caseKey)(d.case)) || 0) + 1); return m; };
+        const judgedOn = (id) => list.filter(d => d.a === id || d.b === id).map(d => (0, stats_8.caseKey)(d.case));
         return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id), judgedPerCase(id), judgedOn(id)));
     }
     /** What a difference pools, from both sides: the cases both have, then what only the first or only the second has, each
@@ -5929,7 +5937,7 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
             const perCase = new Map();
             for (const d of list)
                 if (d.winner !== "tie")
-                    perCase.set(caseKey(d.case), (perCase.get(caseKey(d.case)) || 0) + 1);
+                    perCase.set((0, stats_8.caseKey)(d.case), (perCase.get((0, stats_8.caseKey)(d.case)) || 0) + 1);
             const spread = (0, stats_8.pooledCases)(perCase.values());
             if (spread > 1)
                 return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: null, method: pooledMethod(`net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgments`, (0, stats_8.casesWords)(...(0, stats_8.caseSplit)(perCase.keys()))) };
@@ -6062,7 +6070,7 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
                 wins[j][i]++;
             for (const id of [d.a, d.b]) {
                 const m = perCase.get(id);
-                m.set(caseKey(d.case), (m.get(caseKey(d.case)) || 0) + 1);
+                m.set((0, stats_8.caseKey)(d.case), (m.get((0, stats_8.caseKey)(d.case)) || 0) + 1);
             }
         }
         return { ids, wins, ties, perCase };
@@ -6112,8 +6120,8 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
                 out.add(c.id);
         for (const list of [data.observations, data.aggregates, data.preferences, data.rankings])
             for (const x of Array.isArray(list) ? list : [])
-                if (x && typeof x.case === "string")
-                    out.add(x.case);
+                if (x && (0, comparison_stats_1.caseKey)(x.case) !== comparison_stats_1.NO_CASE)
+                    out.add((0, comparison_stats_1.caseKey)(x.case));
         return [...out];
     }
     function resolve(kind, input, ctx, needMetric = true) {
@@ -6194,7 +6202,7 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
     function coverageLine(src, ctx, metrics) {
         const byGap = new Map(), byMix = new Map();
         const pct = (x) => `${Math.round(x * 100)}%`;
-        const named = (id) => id === "" ? comparison_stats_1.NO_CASE_WORDS : caseName(src.data, ctx, id);
+        const named = (id) => id === comparison_stats_1.NO_CASE ? comparison_stats_1.NO_CASE_WORDS : caseName(src.data, ctx, id);
         for (const m of metrics) {
             if (m.kind === "preference")
                 continue;
@@ -6617,7 +6625,7 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
         // and draw no panels when none of this metric's data names a case.
         const own = m.kind === "rank" || m.kind === "preference" ? [] : [...(Array.isArray(src.data.observations) ? src.data.observations : []), ...(Array.isArray(src.data.aggregates) ? src.data.aggregates : [])]
             .filter(x => x && x.metric === m.id && typeof x.alternative === "string" && src.alts.includes(x.alternative));
-        const caseless = own.filter(x => typeof x.case !== "string" || !x.case).length;
+        const caseless = own.filter(x => (0, comparison_stats_1.caseKey)(x.case) === comparison_stats_1.NO_CASE).length;
         // When none of it names a case, the empty-view notice below says so.
         const caseNote = byCase && caseless && caseless < own.length ? `<p class="av-cmp-scope"><span class="av-eyebrow">No case</span>${(0, core_13.esc)(`${(0, core_13.fmtInt)(caseless)} of ${(0, core_13.fmtInt)(own.length)} entries for ${metricName(m)} name no case; they count in the rows above and in no panel below.`)}</p>` : "";
         const cases = byCase && !(caseless && caseless === own.length) ? (src.filter.cases || caseIds(src.data)) : [];
@@ -7222,7 +7230,7 @@ define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "c
         }
         const hasOverall = [...allPrefs, ...allRanks].some(p => !str(p.metric));
         const metric = str(input.metric) ?? (hasOverall ? undefined : criteria.find(c => (0, comparison_stats_2.metricOf)(data, c)?.primary) ?? criteria[0]);
-        const keepCase = (p) => !cases || (typeof p.case === "string" && cases.includes(p.case));
+        const keepCase = (p) => !cases || cases.includes((0, stats_11.caseKey)(p.case));
         // Judgments naming no criterion belong to the overall question, or to the one preference metric the comparison declares.
         const belongs = (named, to) => {
             const own = str(named);
@@ -7331,7 +7339,7 @@ define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "c
                 const order = (Array.isArray(r.order) ? r.order : []).filter(x => !subset || (typeof x === "string" && subset.has(x)));
                 if (order.length > 1 && order.every(x => typeof x === "string" && known.has(x)) && new Set(order).size === order.length) {
                     valid.push(order);
-                    validCase.push(r.case === undefined || r.case === null ? "" : String(r.case));
+                    validCase.push((0, stats_11.caseKey)(r.case));
                 }
                 else
                     bad++;
@@ -7369,13 +7377,13 @@ define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "c
         let byCase = "";
         const caseIds = [];
         for (const p of prefs) {
-            const c = str(p.case);
-            if (c && !caseIds.includes(c))
+            const c = (0, stats_11.caseKey)(p.case);
+            if (c !== stats_11.NO_CASE && !caseIds.includes(c))
                 caseIds.push(c);
         }
         if (caseIds.length > 1 && judged.length > 1) {
             byCase = breakdown("By case", "each alternative’s win rate over the decisive judgments in that case; the highest in a row is marked", caseIds.map(c => ({ label: caseLabel(data, ctx, c), code: c, m: (0, comparison_stats_2.winMatrix)(data, metric, { ...filter, cases: [c] }), n: prefs.filter(p => p.case === c).length })));
-            const noCase = prefs.filter(p => !str(p.case)).length;
+            const noCase = prefs.filter(p => (0, stats_11.caseKey)(p.case) === stats_11.NO_CASE).length;
             if (noCase)
                 byCase += `<p class="av-jv-note">${(0, core_14.esc)(`${plural(noCase, "judgment")} name no case and ${noCase === 1 ? "is" : "are"} counted only above.`)}</p>`;
         }
@@ -7616,7 +7624,7 @@ define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "c
         const data = comparisonOf(input, ctx, "observations");
         const keepAlt = Array.isArray(input.alternatives) || input.groups?.length ? new Set(altsOf(data, ctx, input.alternatives, input.groups).map(a => a.id)) : null, keepCase = Array.isArray(input.cases) ? new Set(input.cases) : null, keepMetric = Array.isArray(input.metrics) || input.metric ? new Set([...(Array.isArray(input.metrics) ? input.metrics : []), ...(input.metric ? [input.metric] : [])]) : null;
         const known = new Set(list(data.alternatives).filter(a => isObject(a) && typeof a.id === "string").map(a => a.id));
-        const keep = (x) => (!keepAlt || keepAlt.has(String(x.alternative))) && (!keepCase || keepCase.has(String(x.case))) && (!keepMetric || keepMetric.has(String(x.metric)));
+        const keep = (x) => (!keepAlt || keepAlt.has(String(x.alternative))) && (!keepCase || keepCase.has((0, stats_11.caseKey)(x.case))) && (!keepMetric || keepMetric.has(String(x.metric)));
         const raw = Array.isArray(data.observations) ? data.observations : [], status = (0, comparison_stats_2.observationStatus)(data);
         const filtered = !!(keepAlt || keepCase || keepMetric);
         const aggs = list(data.aggregates).filter(isObject).filter(keep);
@@ -7640,7 +7648,7 @@ define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "c
             if (metric?.kind === "ordinal" && !levelsOf.has(metric.id))
                 levelsOf.set(metric.id, (0, comparison_stats_2.ordinalLevels)(data, metric));
             const cell = valueCell(metric, o, levelsOf.get(metric?.id ?? "") || []);
-            rows.push({ kind: "observation", alt: String(o.alternative ?? ""), caseId: o.case === undefined || o.case === null ? "" : String(o.case), metric: String(o.metric ?? ""), value: reason ? `<span class="av-obs-void">${cell.html}</span>` : cell.html, sort: cell.sort, outcome: reason ? "invalid" : "valid", reason: reason ?? "", note: str(o.note) ?? "", excerpt: str(o.excerpt) ?? "", source: str(o.source) ?? "", unit: o.unit === undefined || o.unit === null ? "" : String(o.unit) });
+            rows.push({ kind: "observation", alt: String(o.alternative ?? ""), caseId: (0, stats_11.caseKey)(o.case) === stats_11.NO_CASE ? "" : (0, stats_11.caseKey)(o.case), metric: String(o.metric ?? ""), value: reason ? `<span class="av-obs-void">${cell.html}</span>` : cell.html, sort: cell.sort, outcome: reason ? "invalid" : "valid", reason: reason ?? "", note: str(o.note) ?? "", excerpt: str(o.excerpt) ?? "", source: str(o.source) ?? "", unit: o.unit === undefined || o.unit === null ? "" : String(o.unit) });
         });
         const invalid = rows.filter(r => r.outcome === "invalid").length, valid = observed - invalid;
         for (const g of aggs) {
@@ -7658,7 +7666,7 @@ define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "c
                 parts.push(`<span class="av-obs-sub">reported interval ${(0, core_14.esc)(shown(g.lo))} to ${(0, core_14.esc)(shown(g.hi))}</span>`);
             if (isObject(g.counts))
                 parts.push(`<span class="av-obs-sub">${(0, core_14.esc)(Object.entries(g.counts).filter(([, c]) => (0, core_14.isNum)(c)).map(([l, c]) => `${l}: ${(0, core_14.fmtInt)(c)}`).join(" · "))}</span>`);
-            rows.push({ kind: "aggregate", alt: String(g.alternative ?? ""), caseId: g.case === undefined || g.case === null ? "" : String(g.case), metric: String(g.metric ?? ""), value: parts.length ? `<span class="av-obs-agg">${parts.join("")}</span>` : missing("no summary values", "This aggregate supplies no counts or statistics."), sort: (0, core_14.num)(g.mean) ?? (k !== null && n ? k / n : -Infinity), outcome: "aggregate", reason: "", note: str(g.note) ?? "", excerpt: "", source: str(g.source) ?? "", unit: "" });
+            rows.push({ kind: "aggregate", alt: String(g.alternative ?? ""), caseId: (0, stats_11.caseKey)(g.case) === stats_11.NO_CASE ? "" : (0, stats_11.caseKey)(g.case), metric: String(g.metric ?? ""), value: parts.length ? `<span class="av-obs-agg">${parts.join("")}</span>` : missing("no summary values", "This aggregate supplies no counts or statistics."), sort: (0, core_14.num)(g.mean) ?? (k !== null && n ? k / n : -Infinity), outcome: "aggregate", reason: "", note: str(g.note) ?? "", excerpt: "", source: str(g.source) ?? "", unit: "" });
         }
         const altIds = [...new Set(rows.map(r => r.alt).filter(Boolean))].sort(byIdentity(ctx)), caseIds = [...new Set(rows.map(r => r.caseId).filter(Boolean))], metricIds = [...new Set(rows.map(r => r.metric).filter(Boolean))];
         const hasCase = caseIds.length > 0, hasUnit = rows.some(r => r.unit), hasSource = rows.some(r => r.source), hasNote = rows.some(r => r.note || r.excerpt);
@@ -8018,9 +8026,9 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
         const observations = objects(dataIn.observations);
         const preferences = objects(dataIn.preferences);
         const rankings = objects(dataIn.rankings).filter(r => Array.isArray(r.order));
-        const caseIds = [...new Set([...objects(dataIn.cases).map(c => c.id), ...[...observations, ...objects(dataIn.aggregates), ...preferences, ...objects(dataIn.rankings)].map(x => x.case)].filter((c) => typeof c === "string"))];
+        const caseIds = [...new Set([...objects(dataIn.cases).map(c => c.id), ...[...observations, ...objects(dataIn.aggregates), ...preferences, ...objects(dataIn.rankings)].map(x => (0, comparison_stats_3.caseKey)(x.case))].filter((c) => typeof c === "string" && (0, comparison_stats_3.caseKey)(c) !== comparison_stats_3.NO_CASE))];
         // Evidence naming no case is a group of its own beside the cases, never counted as one.
-        const namesNoCase = [...observations, ...objects(dataIn.aggregates), ...preferences, ...objects(dataIn.rankings)].some(x => { const c = x.case; return c === undefined || c === null; });
+        const namesNoCase = [...observations, ...objects(dataIn.aggregates), ...preferences, ...objects(dataIn.rankings)].some(x => (0, comparison_stats_3.caseKey)(x.case) === comparison_stats_3.NO_CASE);
         const grouped = alternatives.filter(a => (0, comparison_stats_3.groupPath)(a.group).length > 0);
         const topGroups = new Set(grouped.map(a => (0, comparison_stats_3.groupPath)(a.group)[0]));
         // Validity comes from the same reading the summaries use, so the verdict and the views agree.
@@ -8351,15 +8359,15 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
     const PASS_RATE = { id: "passed", label: "pass rate", kind: "binary", better: "higher", unit: "", percent: true, domain: [0, 1] };
     const goodness = (d, better) => d === null || Math.abs(d) < 1e-12 || better === "none" ? null : (d > 0) === (better === "higher");
     function trialRows(t, arms, label, baseline, caseLabel) {
-        const cases = [...new Set(t.runs.map(r => r?.scenario).filter((x) => typeof x === "string"))];
+        const cases = [...new Set(t.runs.filter(r => r).map(r => (0, comparison_stats_4.caseKey)(r.scenario)))];
         return arms.map(id => {
             const runs = t.runs.filter(r => r && r.arm === id);
             const tl = (0, trial_model_11.armTally)(t, id);
             const costs = runs.filter(r => r.passed === true || r.passed === false).map(trial_model_11.costUsd).filter(core_17.isNum);
             const model = t.plan?.arms?.[id]?.model;
             const perCase = cases.flatMap(c => {
-                const ct = (0, trial_model_11.tally)(runs.filter(r => r.scenario === c));
-                return ct.runs ? [{ id: c, label: caseLabel(c), k: ct.pass, n: ct.valid, value: ct.rate, interval: ct.interval, text: ct.valid ? `${ct.pass} of ${ct.valid}` : "no valid runs" }] : [];
+                const ct = (0, trial_model_11.tally)(runs.filter(r => (0, comparison_stats_4.caseKey)(r.scenario) === c));
+                return ct.runs ? [{ id: c, label: c === comparison_stats_4.NO_CASE ? comparison_stats_4.NO_CASE_WORDS : caseLabel(c), k: ct.pass, n: ct.valid, value: ct.rate, interval: ct.interval, text: ct.valid ? `${ct.pass} of ${ct.valid}` : "no valid runs" }] : [];
             });
             return { id, label: label(id), lane: typeof model === "string" ? model : "", k: tl.pass, n: tl.valid, invalid: tl.invalid, value: tl.rate, interval: tl.interval,
                 text: !tl.valid ? "no valid runs" : tl.cases > 1 ? (0, trial_model_11.countsText)(tl) : `${tl.pass} of ${tl.valid} passed (${(0, core_17.fmtPct)(tl.rate)})`,
@@ -8392,10 +8400,9 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         // what names no case as one case of its own. The value, its words, its per-case values, its cases and every change are
         // read from this; each summary's own case weights say which cases its value rests on.
         const relative = primary.kind === "preference" || primary.kind === "rank";
-        const named = (x) => isObject(x) && (x.case === undefined || x.case === null) ? { ...x, case: comparison_stats_4.NO_CASE } : x;
         const list = (v) => Array.isArray(v) ? v : [];
         const ev = (0, comparison_stats_4.evidenceAs)(c);
-        const cc = { ...ev, observations: list(ev.observations).map(named), aggregates: list(ev.aggregates).map(named), preferences: list(ev.preferences).map(named), rankings: list(ev.rankings).map(named) };
+        const cc = ev;
         const summaries = (0, comparison_stats_4.summarize)(cc, primary.id);
         // The cases the report ran: every case its evidence names, whether or not it gave a value (invalid observations, ties,
         // judgments never reached), as each summary lists them. Values, weights and counts read the summaries' case weights.
@@ -8407,7 +8414,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
         const declared = (Array.isArray(c.cases) ? c.cases : []).filter(x => isObject(x) && typeof x.id === "string").map(x => ({ id: String(x.id), label: text(x.label) || String(x.id) }));
         // The cases the headline values are taken over: those the headline metric's evidence names, declared ones in their order,
         // then the others in the order the data name them. (The report's cases, on every metric, are its story's: see reportCases.)
-        const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? x.case : undefined).filter((x) => typeof x === "string" && rested.has(x)))];
+        const inData = [...new Set([...list(cc.observations), ...list(cc.aggregates), ...list(cc.preferences), ...list(cc.rankings)].map(x => isObject(x) ? (0, comparison_stats_4.caseKey)(x.case) : comparison_stats_4.NO_CASE).filter(x => rested.has(x)))];
         const caseIds = [...declared.filter(d => rested.has(d.id)), ...inData.filter(id => !declared.some(d => d.id === id)).map(id => ({ id, label: id === comparison_stats_4.NO_CASE ? comparison_stats_4.NO_CASE_WORDS : id }))];
         const rate = primary.kind === "binary" || primary.kind === "count";
         const rows = ids.map(id => {
@@ -8547,7 +8554,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
     function namesNoCase(spec) {
         const unnamed = (c) => isComparisonData(c) && ["observations", "aggregates", "preferences", "rankings"].some(k => {
             const list = c[k];
-            return Array.isArray(list) && list.some(x => isObject(x) && (x.case === undefined || x.case === null));
+            return Array.isArray(list) && list.some(x => isObject(x) && (0, comparison_stats_4.caseKey)(x.case) === comparison_stats_4.NO_CASE);
         });
         return unnamed(spec.comparison) || (Array.isArray(spec.sections) ? spec.sections : []).some(s => isObject(s) && Array.isArray(s.blocks) && s.blocks.some(b => isObject(b) && unnamed(b.data)));
     }
@@ -9535,7 +9542,7 @@ define("report", ["require", "exports", "core", "model", "blocks/trial", "blocks
 </div>`;
     }
 });
-define("validate", ["require", "exports", "core", "report", "trial-model"], function (require, exports, core_20, report_2, trial_model_12) {
+define("validate", ["require", "exports", "core", "report", "trial-model", "stats"], function (require, exports, core_20, report_2, trial_model_12, stats_14) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.FILE_REF = void 0;
@@ -10104,6 +10111,12 @@ define("validate", ["require", "exports", "core", "report", "trial-model"], func
             const spec = IDS[kind];
             if (!spec)
                 return;
+            // A blank case names no case: every view reads that evidence as evidence naming no case (caseKey).
+            if (kind === "comparison-case" && (0, stats_14.caseKey)(value) === stats_14.NO_CASE) {
+                if (this.known.comparison)
+                    this.add("warning", where, "an empty or blank case names no case, so this is read as evidence naming no case", 'leave "case" out, or name the case');
+                return;
+            }
             const ofComparison = spec.list !== null && FROM_COMPARISON.includes(spec.list), ofCollection = spec.list !== null && FROM_COLLECTION.includes(spec.list);
             if (spec.list && !(ofCollection ? this.known.collection : ofComparison ? this.known.comparison && (spec.list !== "ccases" || this.known.ccases.length > 0) : this.known.trial))
                 return;
@@ -10582,7 +10595,8 @@ define("validate", ["require", "exports", "core", "report", "trial-model"], func
      * judgments and rankings name. */
     function comparisonCases(data) {
         const out = [];
-        const take = (v) => { if (typeof v === "string" && !out.includes(v))
+        // Evidence naming no case (a case missing, null, empty or only spaces) names none, as every view reads it.
+        const take = (v) => { if (typeof v === "string" && (0, stats_14.caseKey)(v) !== stats_14.NO_CASE && !out.includes(v))
             out.push(v); };
         for (const x of Array.isArray(data.cases) ? data.cases : [])
             if (isObj(x))
@@ -12949,10 +12963,10 @@ define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", 
     Object.defineProperty(exports, "reportCompare", { enumerable: true, get: function () { return collection_3.reportCompare; } });
     Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_10.frame; } });
 });
-define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_24, model_5, report_4, compose_3, trial_model_14, enhance_2, figures_3, validate_6, comparison_compose_3, comparison_stats_6, collection_5, reader_2, failure_5, stats_14, diff_3, text_layout_3, blocks) {
+define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_24, model_5, report_4, compose_3, trial_model_14, enhance_2, figures_3, validate_6, comparison_compose_3, comparison_stats_6, collection_5, reader_2, failure_5, stats_15, diff_3, text_layout_3, blocks) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.readerRoute = exports.COLLECTION_SECTION_IDS = exports.collectionModel = exports.memberReport = exports.compareReport = exports.collectionReport = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.NO_CASE_WORDS = exports.caseSplit = exports.casesWords = exports.evidenceAs = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.reportCases = exports.validateCollection = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
+    exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.readerRoute = exports.COLLECTION_SECTION_IDS = exports.collectionModel = exports.memberReport = exports.compareReport = exports.collectionReport = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.NO_CASE_WORDS = exports.caseSplit = exports.casesWords = exports.caseKey = exports.evidenceAs = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.reportCases = exports.validateCollection = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
     exports.autoMount = autoMount;
     Object.defineProperty(exports, "escapeText", { enumerable: true, get: function () { return core_24.escapeText; } });
     Object.defineProperty(exports, "wilson", { enumerable: true, get: function () { return core_24.wilson; } });
@@ -12985,6 +12999,7 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
     Object.defineProperty(exports, "summarize", { enumerable: true, get: function () { return comparison_stats_6.summarize; } });
     Object.defineProperty(exports, "difference", { enumerable: true, get: function () { return comparison_stats_6.difference; } });
     Object.defineProperty(exports, "evidenceAs", { enumerable: true, get: function () { return comparison_stats_6.evidenceAs; } });
+    Object.defineProperty(exports, "caseKey", { enumerable: true, get: function () { return comparison_stats_6.caseKey; } });
     Object.defineProperty(exports, "casesWords", { enumerable: true, get: function () { return comparison_stats_6.casesWords; } });
     Object.defineProperty(exports, "caseSplit", { enumerable: true, get: function () { return comparison_stats_6.caseSplit; } });
     Object.defineProperty(exports, "NO_CASE_WORDS", { enumerable: true, get: function () { return comparison_stats_6.NO_CASE_WORDS; } });
@@ -13012,7 +13027,7 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
     Object.defineProperty(exports, "COLLECTION_SECTION_IDS", { enumerable: true, get: function () { return collection_5.COLLECTION_SECTION_IDS; } });
     Object.defineProperty(exports, "readerRoute", { enumerable: true, get: function () { return reader_2.readerRoute; } });
     Object.defineProperty(exports, "failureCause", { enumerable: true, get: function () { return failure_5.failureCause; } });
-    Object.defineProperty(exports, "newcombe", { enumerable: true, get: function () { return stats_14.newcombe; } });
+    Object.defineProperty(exports, "newcombe", { enumerable: true, get: function () { return stats_15.newcombe; } });
     Object.defineProperty(exports, "lineDiff", { enumerable: true, get: function () { return diff_3.lineDiff; } });
     Object.defineProperty(exports, "diffRuns", { enumerable: true, get: function () { return diff_3.diffRuns; } });
     Object.defineProperty(exports, "diffStats", { enumerable: true, get: function () { return diff_3.diffStats; } });

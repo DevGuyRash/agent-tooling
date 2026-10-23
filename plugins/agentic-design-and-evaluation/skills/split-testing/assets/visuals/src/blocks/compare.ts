@@ -7,7 +7,7 @@
 import { attrs, axisTicks, count, esc, fmtInt, fmtNum, inline, isNum, niceTicks, num, outcomeMark } from "../core";
 import type { RenderContext } from "../model";
 import type { Alternative, Comparison, ComparisonFilter, Metric, MetricDifference, MetricKind, MetricSummary } from "../comparison-model";
-import { difference as differenceOf, evidenceAs, groupComparison, groupPath, NO_CASE_WORDS, pooledWords, summarize, summarizeGroups } from "../comparison-stats";
+import { caseKey, difference as differenceOf, evidenceAs, groupComparison, groupPath, NO_CASE, NO_CASE_WORDS, pooledWords, summarize, summarizeGroups } from "../comparison-stats";
 import { placement, Placement } from "../stats";
 import { empty, frame, FrameInput, pos } from "./frame";
 
@@ -60,7 +60,7 @@ function caseIds(data: Comparison): string[] {
   const out = new Set<string>();
   for (const c of Array.isArray(data.cases) ? data.cases : []) if (c && typeof c.id === "string") out.add(c.id);
   for (const list of [data.observations, data.aggregates, data.preferences, data.rankings])
-    for (const x of Array.isArray(list) ? list : []) if (x && typeof (x as { case?: unknown }).case === "string") out.add((x as { case: string }).case);
+    for (const x of Array.isArray(list) ? list : []) if (x && caseKey((x as { case?: unknown }).case) !== NO_CASE) out.add(caseKey((x as { case?: unknown }).case));
   return [...out];
 }
 
@@ -122,7 +122,7 @@ function scopeLine(src: Source, ctx: RenderContext): string {
 function coverageLine(src: Source, ctx: RenderContext, metrics: Metric[]): string {
   const byGap = new Map<string, string[]>(), byMix = new Map<string, string[]>();
   const pct = (x: number) => `${Math.round(x * 100)}%`;
-  const named = (id: string) => id === "" ? NO_CASE_WORDS : caseName(src.data, ctx, id);
+  const named = (id: string) => id === NO_CASE ? NO_CASE_WORDS : caseName(src.data, ctx, id);
   for (const m of metrics) {
     if (m.kind === "preference") continue;
     const sums = summarize(src.data, m.id, src.filter).filter(x => src.alts.includes(x.alternative) && x.caseWeights?.length);
@@ -532,7 +532,7 @@ export function metric(input: MetricInput, ctx: RenderContext): string {
   // and draw no panels when none of this metric's data names a case.
   const own = m.kind === "rank" || m.kind === "preference" ? [] : [...(Array.isArray(src.data.observations) ? src.data.observations : []), ...(Array.isArray(src.data.aggregates) ? src.data.aggregates : [])]
     .filter(x => x && x.metric === m.id && typeof x.alternative === "string" && src.alts.includes(x.alternative));
-  const caseless = own.filter(x => typeof x.case !== "string" || !x.case).length;
+  const caseless = own.filter(x => caseKey(x.case) === NO_CASE).length;
   // When none of it names a case, the empty-view notice below says so.
   const caseNote = byCase && caseless && caseless < own.length ? `<p class="av-cmp-scope"><span class="av-eyebrow">No case</span>${esc(`${fmtInt(caseless)} of ${fmtInt(own.length)} entries for ${metricName(m)} name no case; they count in the rows above and in no panel below.`)}</p>` : "";
   const cases = byCase && !(caseless && caseless === own.length) ? (src.filter.cases || caseIds(src.data)) : [];

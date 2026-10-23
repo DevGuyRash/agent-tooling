@@ -11,7 +11,7 @@ import { diffRuns, diffStats, DiffLine, lineDiff, splitLines, wordDiff } from ".
 import { fingerprint } from "../identity";
 import type { Alternative, Comparison, Metric, MetricSummary, Observation } from "../comparison-model";
 import { evidenceAs, groupPath, judgmentMetric, metricOf, observationStatus, ordinalLevels, summarize, winMatrix } from "../comparison-stats";
-import { caseSplit, casesWords, pooledCases } from "../stats";
+import { caseKey, caseSplit, casesWords, NO_CASE, pooledCases } from "../stats";
 import type { RenderContext } from "../model";
 import { empty, frame, FrameInput, pos } from "./frame";
 
@@ -270,7 +270,7 @@ export function preferences(input: PreferencesInput, ctx: RenderContext): string
   for (const p of [...allPrefs, ...allRanks]) { const m = str(p.metric); if (m && !criteria.includes(m)) criteria.push(m); }
   const hasOverall = [...allPrefs, ...allRanks].some(p => !str(p.metric));
   const metric = str(input.metric) ?? (hasOverall ? undefined : criteria.find(c => metricOf(data, c)?.primary) ?? criteria[0]);
-  const keepCase = (p: { case?: string }) => !cases || (typeof p.case === "string" && cases.includes(p.case));
+  const keepCase = (p: { case?: string }) => !cases || cases.includes(caseKey(p.case));
   // Judgments naming no criterion belong to the overall question, or to the one preference metric the comparison declares.
   const belongs = (named: unknown, to: string | undefined): boolean => {
     const own = str(named);
@@ -367,7 +367,7 @@ export function preferences(input: PreferencesInput, ctx: RenderContext): string
     const valid: string[][] = [], validCase: string[] = []; let bad = 0;
     for (const r of ranks) {
       const order = (Array.isArray(r.order) ? r.order : []).filter(x => !subset || (typeof x === "string" && subset.has(x)));
-      if (order.length > 1 && order.every(x => typeof x === "string" && known.has(x)) && new Set(order).size === order.length) { valid.push(order as string[]); validCase.push(r.case === undefined || r.case === null ? "" : String(r.case)); } else bad++;
+      if (order.length > 1 && order.every(x => typeof x === "string" && known.has(x)) && new Set(order).size === order.length) { valid.push(order as string[]); validCase.push(caseKey(r.case)); } else bad++;
     }
     const spans = valid.map(o => o.length), partial = valid.some(o => o.length < known.size);
     const stat = (id: string) => {
@@ -400,10 +400,10 @@ export function preferences(input: PreferencesInput, ctx: RenderContext): string
   };
   let byCase = "";
   const caseIds: string[] = [];
-  for (const p of prefs) { const c = str(p.case); if (c && !caseIds.includes(c)) caseIds.push(c); }
+  for (const p of prefs) { const c = caseKey(p.case); if (c !== NO_CASE && !caseIds.includes(c)) caseIds.push(c); }
   if (caseIds.length > 1 && judged.length > 1) {
     byCase = breakdown("By case", "each alternative’s win rate over the decisive judgments in that case; the highest in a row is marked", caseIds.map(c => ({ label: caseLabel(data, ctx, c), code: c, m: winMatrix(data, metric, { ...filter, cases: [c] }), n: prefs.filter(p => p.case === c).length })));
-    const noCase = prefs.filter(p => !str(p.case)).length;
+    const noCase = prefs.filter(p => caseKey(p.case) === NO_CASE).length;
     if (noCase) byCase += `<p class="av-jv-note">${esc(`${plural(noCase, "judgment")} name no case and ${noCase === 1 ? "is" : "are"} counted only above.`)}</p>`;
   }
   let byCriterion = "";
@@ -657,7 +657,7 @@ export function observations(input: ObservationsInput, ctx: RenderContext): stri
   const data = comparisonOf(input, ctx, "observations");
   const keepAlt = Array.isArray(input.alternatives) || input.groups?.length ? new Set(altsOf(data, ctx, input.alternatives, input.groups).map(a => a.id)) : null, keepCase = Array.isArray(input.cases) ? new Set(input.cases) : null, keepMetric = Array.isArray(input.metrics) || input.metric ? new Set([...(Array.isArray(input.metrics) ? input.metrics : []), ...(input.metric ? [input.metric] : [])]) : null;
   const known = new Set(list(data.alternatives).filter(a => isObject(a) && typeof a.id === "string").map(a => a.id));
-  const keep = (x: { alternative?: unknown; case?: unknown; metric?: unknown }) => (!keepAlt || keepAlt.has(String(x.alternative))) && (!keepCase || keepCase.has(String(x.case))) && (!keepMetric || keepMetric.has(String(x.metric)));
+  const keep = (x: { alternative?: unknown; case?: unknown; metric?: unknown }) => (!keepAlt || keepAlt.has(String(x.alternative))) && (!keepCase || keepCase.has(caseKey(x.case))) && (!keepMetric || keepMetric.has(String(x.metric)));
   const raw = Array.isArray(data.observations) ? data.observations : [], status = observationStatus(data);
   const filtered = !!(keepAlt || keepCase || keepMetric);
   const aggs = list(data.aggregates).filter(isObject).filter(keep);
@@ -676,7 +676,7 @@ export function observations(input: ObservationsInput, ctx: RenderContext): stri
     const metric = metricOf(data, String(o.metric));
     if (metric?.kind === "ordinal" && !levelsOf.has(metric.id)) levelsOf.set(metric.id, ordinalLevels(data, metric));
     const cell = valueCell(metric, o, levelsOf.get(metric?.id ?? "") || []);
-    rows.push({ kind: "observation", alt: String(o.alternative ?? ""), caseId: o.case === undefined || o.case === null ? "" : String(o.case), metric: String(o.metric ?? ""), value: reason ? `<span class="av-obs-void">${cell.html}</span>` : cell.html, sort: cell.sort, outcome: reason ? "invalid" : "valid", reason: reason ?? "", note: str(o.note) ?? "", excerpt: str(o.excerpt) ?? "", source: str(o.source) ?? "", unit: o.unit === undefined || o.unit === null ? "" : String(o.unit) });
+    rows.push({ kind: "observation", alt: String(o.alternative ?? ""), caseId: caseKey(o.case) === NO_CASE ? "" : caseKey(o.case), metric: String(o.metric ?? ""), value: reason ? `<span class="av-obs-void">${cell.html}</span>` : cell.html, sort: cell.sort, outcome: reason ? "invalid" : "valid", reason: reason ?? "", note: str(o.note) ?? "", excerpt: str(o.excerpt) ?? "", source: str(o.source) ?? "", unit: o.unit === undefined || o.unit === null ? "" : String(o.unit) });
   });
   const invalid = rows.filter(r => r.outcome === "invalid").length, valid = observed - invalid;
   for (const g of aggs) {
@@ -688,7 +688,7 @@ export function observations(input: ObservationsInput, ctx: RenderContext): stri
     if (k === null && n !== null && n > 0) parts.push(`<span class="av-obs-sub">n = ${esc(fmtInt(n))}</span>`);
     if (num(g.lo) !== null && num(g.hi) !== null) parts.push(`<span class="av-obs-sub">reported interval ${esc(shown(g.lo as number))} to ${esc(shown(g.hi as number))}</span>`);
     if (isObject(g.counts)) parts.push(`<span class="av-obs-sub">${esc(Object.entries(g.counts).filter(([, c]) => isNum(c)).map(([l, c]) => `${l}: ${fmtInt(c as number)}`).join(" · "))}</span>`);
-    rows.push({ kind: "aggregate", alt: String(g.alternative ?? ""), caseId: g.case === undefined || g.case === null ? "" : String(g.case), metric: String(g.metric ?? ""), value: parts.length ? `<span class="av-obs-agg">${parts.join("")}</span>` : missing("no summary values", "This aggregate supplies no counts or statistics."), sort: num(g.mean) ?? (k !== null && n ? k / n : -Infinity), outcome: "aggregate", reason: "", note: str(g.note) ?? "", excerpt: "", source: str(g.source) ?? "", unit: "" });
+    rows.push({ kind: "aggregate", alt: String(g.alternative ?? ""), caseId: caseKey(g.case) === NO_CASE ? "" : caseKey(g.case), metric: String(g.metric ?? ""), value: parts.length ? `<span class="av-obs-agg">${parts.join("")}</span>` : missing("no summary values", "This aggregate supplies no counts or statistics."), sort: num(g.mean) ?? (k !== null && n ? k / n : -Infinity), outcome: "aggregate", reason: "", note: str(g.note) ?? "", excerpt: "", source: str(g.source) ?? "", unit: "" });
   }
 
   const altIds = [...new Set(rows.map(r => r.alt).filter(Boolean))].sort(byIdentity(ctx)), caseIds = [...new Set(rows.map(r => r.caseId).filter(Boolean))], metricIds = [...new Set(rows.map(r => r.metric).filter(Boolean))];
