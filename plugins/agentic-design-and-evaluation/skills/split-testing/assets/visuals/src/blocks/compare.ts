@@ -64,6 +64,11 @@ function caseIds(data: Comparison): string[] {
   return [...out];
 }
 
+/** Whether any evidence of the comparison names no case. */
+function namesNoCase(data: Comparison): boolean {
+  return [data.observations, data.aggregates, data.preferences, data.rankings].some(list => (Array.isArray(list) ? list : []).some(x => x && caseKey((x as { case?: unknown }).case) === NO_CASE));
+}
+
 function resolve(kind: string, input: CompareInput, ctx: RenderContext, needMetric = true): Source | string {
   const own = !!input.data && typeof input.data === "object";
   const raw = own ? input.data : ctx.comparison;
@@ -91,7 +96,8 @@ function resolve(kind: string, input: CompareInput, ctx: RenderContext, needMetr
   const inside = (id: string) => !groups || !groups.length || groups.every((g, i) => groupPath(info.get(id)?.group)[i] === g);
   const alts = (pick ? [...new Set(pick.filter(id => info.has(id)))] : known).filter(inside);
   if (!alts.length) return frame(kind, input, `${problemList(problems)}${empty(groups?.length ? `No alternative sits inside the group ${groups.join(" › ")}.` : "No alternatives to show.")}`);
-  if (cases) { const all = caseIds(raw), bad = cases.filter(c => !all.includes(c)); if (bad.length) problems.push(`No observations name these cases: ${listed(bad)}. Cases: ${listed(all)}.`); }
+  // A selector reads its case as evidence does: an empty or blank one selects the evidence naming no case.
+  if (cases) { const all = caseIds(raw), none = namesNoCase(raw), bad = cases.filter(c => caseKey(c) === NO_CASE ? !none : !all.includes(c)); if (bad.length) problems.push(`No observations name these cases: ${listed(bad.map(c => caseKey(c) === NO_CASE ? NO_CASE_WORDS : c))}. Cases: ${listed(all)}.`); }
   const filter: ComparisonFilter = {};
   if (cases) filter.cases = cases;
   if (groups && groups.length) filter.groups = groups;
@@ -103,13 +109,18 @@ function resolve(kind: string, input: CompareInput, ctx: RenderContext, needMetr
 }
 
 function caseName(data: Comparison, ctx: RenderContext, id: string): string {
+  if (caseKey(id) === NO_CASE) return NO_CASE_WORDS;
   const c = (Array.isArray(data.cases) ? data.cases : []).find(x => x && x.id === id);
   return typeof c?.label === "string" && c.label ? c.label : ctx.caseLabels[id] || id;
 }
 
 function scopeLine(src: Source, ctx: RenderContext): string {
   const parts: string[] = [];
-  if (src.filter.cases) parts.push(`${src.filter.cases.length === 1 ? "case" : "cases"} ${src.filter.cases.map(c => caseName(src.data, ctx, c)).join(", ")}`);
+  if (src.filter.cases) {
+    // Named cases by name; an empty or blank selector as the evidence naming no case it selects.
+    const named = [...new Set(src.filter.cases.filter(c => caseKey(c) !== NO_CASE))], none = src.filter.cases.some(c => caseKey(c) === NO_CASE);
+    parts.push([named.length ? `${named.length === 1 ? "case" : "cases"} ${named.map(c => caseName(src.data, ctx, c)).join(", ")}` : "", none ? NO_CASE_WORDS : ""].filter(Boolean).join(" and "));
+  }
   if (src.filter.groups) parts.push(`alternatives in ${src.filter.groups.join(" › ")}`);
   if (src.filter.caseGroups) parts.push(`cases in ${src.filter.caseGroups.join(" › ")}`);
   return parts.length ? `<p class="av-cmp-scope"><span class="av-eyebrow">Only</span>${esc(parts.join("; "))}</p>` : "";

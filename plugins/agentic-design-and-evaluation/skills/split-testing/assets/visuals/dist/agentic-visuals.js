@@ -5319,7 +5319,8 @@ define("comparison-stats", ["require", "exports", "core", "stats", "stats"], fun
         return (id) => typeof id === "string" && (!only || only.has(id)) && (!prefix || startsWith(paths.get(id) || [], prefix));
     }
     function caseFilter(data, filter) {
-        const only = Array.isArray(filter.cases) ? new Set(filter.cases.map(String)) : null;
+        // Selectors read their case as evidence does: an empty or blank one selects the evidence naming no case.
+        const only = Array.isArray(filter.cases) ? new Set(filter.cases.map(stats_8.caseKey)) : null;
         const prefix = Array.isArray(filter.caseGroups) && filter.caseGroups.length ? filter.caseGroups.map(String) : null;
         const inGroup = prefix ? new Set(items(data?.cases).filter(c => typeof c.id === "string" && startsWith(groupPath(c.group), prefix)).map(c => c.id)) : null;
         if (!only && !inGroup)
@@ -6124,6 +6125,10 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
                     out.add((0, comparison_stats_1.caseKey)(x.case));
         return [...out];
     }
+    /** Whether any evidence of the comparison names no case. */
+    function namesNoCase(data) {
+        return [data.observations, data.aggregates, data.preferences, data.rankings].some(list => (Array.isArray(list) ? list : []).some(x => x && (0, comparison_stats_1.caseKey)(x.case) === comparison_stats_1.NO_CASE));
+    }
     function resolve(kind, input, ctx, needMetric = true) {
         const own = !!input.data && typeof input.data === "object";
         const raw = own ? input.data : ctx.comparison;
@@ -6161,10 +6166,11 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
         const alts = (pick ? [...new Set(pick.filter(id => info.has(id)))] : known).filter(inside);
         if (!alts.length)
             return (0, frame_7.frame)(kind, input, `${problemList(problems)}${(0, frame_7.empty)(groups?.length ? `No alternative sits inside the group ${groups.join(" › ")}.` : "No alternatives to show.")}`);
+        // A selector reads its case as evidence does: an empty or blank one selects the evidence naming no case.
         if (cases) {
-            const all = caseIds(raw), bad = cases.filter(c => !all.includes(c));
+            const all = caseIds(raw), none = namesNoCase(raw), bad = cases.filter(c => (0, comparison_stats_1.caseKey)(c) === comparison_stats_1.NO_CASE ? !none : !all.includes(c));
             if (bad.length)
-                problems.push(`No observations name these cases: ${listed(bad)}. Cases: ${listed(all)}.`);
+                problems.push(`No observations name these cases: ${listed(bad.map(c => (0, comparison_stats_1.caseKey)(c) === comparison_stats_1.NO_CASE ? comparison_stats_1.NO_CASE_WORDS : c))}. Cases: ${listed(all)}.`);
         }
         const filter = {};
         if (cases)
@@ -6182,13 +6188,18 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
         return { data: (0, comparison_stats_1.evidenceAs)(raw, filter), metrics: usable, metric, alts, info, filter, baseline, problems };
     }
     function caseName(data, ctx, id) {
+        if ((0, comparison_stats_1.caseKey)(id) === comparison_stats_1.NO_CASE)
+            return comparison_stats_1.NO_CASE_WORDS;
         const c = (Array.isArray(data.cases) ? data.cases : []).find(x => x && x.id === id);
         return typeof c?.label === "string" && c.label ? c.label : ctx.caseLabels[id] || id;
     }
     function scopeLine(src, ctx) {
         const parts = [];
-        if (src.filter.cases)
-            parts.push(`${src.filter.cases.length === 1 ? "case" : "cases"} ${src.filter.cases.map(c => caseName(src.data, ctx, c)).join(", ")}`);
+        if (src.filter.cases) {
+            // Named cases by name; an empty or blank selector as the evidence naming no case it selects.
+            const named = [...new Set(src.filter.cases.filter(c => (0, comparison_stats_1.caseKey)(c) !== comparison_stats_1.NO_CASE))], none = src.filter.cases.some(c => (0, comparison_stats_1.caseKey)(c) === comparison_stats_1.NO_CASE);
+            parts.push([named.length ? `${named.length === 1 ? "case" : "cases"} ${named.map(c => caseName(src.data, ctx, c)).join(", ")}` : "", none ? comparison_stats_1.NO_CASE_WORDS : ""].filter(Boolean).join(" and "));
+        }
         if (src.filter.groups)
             parts.push(`alternatives in ${src.filter.groups.join(" › ")}`);
         if (src.filter.caseGroups)
@@ -7230,7 +7241,7 @@ define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "c
         }
         const hasOverall = [...allPrefs, ...allRanks].some(p => !str(p.metric));
         const metric = str(input.metric) ?? (hasOverall ? undefined : criteria.find(c => (0, comparison_stats_2.metricOf)(data, c)?.primary) ?? criteria[0]);
-        const keepCase = (p) => !cases || cases.includes((0, stats_11.caseKey)(p.case));
+        const keepCase = (p) => !cases || cases.map(stats_11.caseKey).includes((0, stats_11.caseKey)(p.case));
         // Judgments naming no criterion belong to the overall question, or to the one preference metric the comparison declares.
         const belongs = (named, to) => {
             const own = str(named);
@@ -7622,7 +7633,7 @@ define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "c
     }
     function observations(input, ctx) {
         const data = comparisonOf(input, ctx, "observations");
-        const keepAlt = Array.isArray(input.alternatives) || input.groups?.length ? new Set(altsOf(data, ctx, input.alternatives, input.groups).map(a => a.id)) : null, keepCase = Array.isArray(input.cases) ? new Set(input.cases) : null, keepMetric = Array.isArray(input.metrics) || input.metric ? new Set([...(Array.isArray(input.metrics) ? input.metrics : []), ...(input.metric ? [input.metric] : [])]) : null;
+        const keepAlt = Array.isArray(input.alternatives) || input.groups?.length ? new Set(altsOf(data, ctx, input.alternatives, input.groups).map(a => a.id)) : null, keepCase = Array.isArray(input.cases) ? new Set(input.cases.map(stats_11.caseKey)) : null, keepMetric = Array.isArray(input.metrics) || input.metric ? new Set([...(Array.isArray(input.metrics) ? input.metrics : []), ...(input.metric ? [input.metric] : [])]) : null;
         const known = new Set(list(data.alternatives).filter(a => isObject(a) && typeof a.id === "string").map(a => a.id));
         const keep = (x) => (!keepAlt || keepAlt.has(String(x.alternative))) && (!keepCase || keepCase.has((0, stats_11.caseKey)(x.case))) && (!keepMetric || keepMetric.has(String(x.metric)));
         const raw = Array.isArray(data.observations) ? data.observations : [], status = (0, comparison_stats_2.observationStatus)(data);
@@ -10114,7 +10125,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
             // A blank case names no case: every view reads that evidence as evidence naming no case (caseKey).
             if (kind === "comparison-case" && (0, stats_14.caseKey)(value) === stats_14.NO_CASE) {
                 if (this.known.comparison)
-                    this.add("warning", where, "an empty or blank case names no case, so this is read as evidence naming no case", 'leave "case" out, or name the case');
+                    this.add("warning", where, "an empty or blank case names no case: it stands for the evidence naming no case", 'name a case, or leave "case" out where the evidence names none');
                 return;
             }
             const ofComparison = spec.list !== null && FROM_COMPARISON.includes(spec.list), ofCollection = spec.list !== null && FROM_COLLECTION.includes(spec.list);
@@ -10690,15 +10701,21 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
         const trial = spec.trial ? spec.trial : options.trial, comparison = spec.comparison ? spec.comparison : options.comparison;
         return specNeeds(spec, knownFrom(trial, comparison), trial, comparison).cases || [];
     }
-    /** Trial runs that name no scenario (left out, null, empty or only spaces): trial.py never writes one, so such a run is
-     * malformed input, refused rather than read as a case of its own or as evidence naming no case. */
-    function trialScenarios(c, trial, where) {
-        if (!isObj(trial) || !Array.isArray(trial.runs))
-            return;
+    /** The one check of trial data, however it enters: a specification's own `trial`, a trial supplied beside a
+     * specification, a narrative's trial (so every composed trial report), and a collection member's. It must be trial report
+     * data, and each run must name its scenario: trial.py never writes a run whose scenario is left out, null, empty or only
+     * spaces, so such a run is malformed input, refused rather than read as a case of its own. False when it is not trial
+     * data. Where two entries check one trial, each problem is listed once (order removes the repeat). */
+    function checkTrial(c, trial, where) {
+        if (!isObj(trial) || !Array.isArray(trial.runs)) {
+            c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE");
+            return false;
+        }
         trial.runs.forEach((r, i) => {
             if (isObj(r) && (0, stats_14.caseKey)(r.scenario) === stats_14.NO_CASE)
                 c.add("error", `${where}.runs[${i}].scenario`, "a trial run must name its scenario", "write the trial with trial.py report RUN_DIR --out FILE, which names each run's scenario");
         });
+        return true;
     }
     /** Every block of a specification's or a narrative's own sections, and of its appended blocks. */
     function blocksOf(owner) {
@@ -10743,10 +10760,7 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
         const collection = spec.collection ? spec.collection : options.collection;
         const c = new Checker(knownFrom(trial, comparison, collection), registered(), "spec");
         c.shape(spec, SPEC, "", {
-            trial: (value, where) => { if (!isObj(value) || !Array.isArray(value.runs))
-                c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE");
-            else
-                trialScenarios(c, value, where); },
+            trial: (value, where) => { checkTrial(c, value, where); },
             comparison: (value, where) => {
                 if (!isComparison(value))
                     c.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');
@@ -10767,6 +10781,9 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
                 });
             },
         });
+        // A trial supplied beside the specification is the one its views read: checked as its own would be.
+        if (!spec.trial && options.trial !== undefined && options.trial !== null)
+            checkTrial(c, options.trial, "trial");
         storyChecks(c, spec, "", specNeeds(spec, c.known, trial, comparison));
         sectionReadings(c, spec.sections, "", own?.sections);
         // A composition copies its inputs into the specification (a narrative's story, its verdict), so the check can find an
@@ -10788,6 +10805,9 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
         const c = new Checker(knownFrom(trial), registered(), "narrative");
         if (!isObj(narrative))
             return [{ level: "error", where: "narrative", message: `expected an object, found ${found(narrative)}`, hint: 'a narrative is an object such as {"title": "…", "decision": { … }}' }];
+        // The trial the narrative is told against: a narrative needs trial data to be read against.
+        if (trial !== undefined && trial !== null && !checkTrial(c, trial, "trial"))
+            return order(c.problems);
         const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : null;
         const include = strings(narrative.include)?.map(sectionKey) || null, exclude = (strings(narrative.exclude) || []).map(sectionKey);
         const kept = DEFAULT_SECTIONS.filter(s => (include ? include.includes(s) : !OPT_IN_SECTIONS.includes(s)) && !exclude.includes(s));
@@ -10900,7 +10920,6 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
                 }
             },
         });
-        trialScenarios(c, trial, "trial");
         storyChecks(c, narrative, "narrative", storyObligations(c.known, trial, undefined, blocksOf(narrative), {}, true));
         pointedRule(c, narrative, isObj(trial) && isObj(trial.plan) ? trial.plan.decision_rule : undefined, "the plan's");
         readingsChecks(c, narrative, "narrative", trialSectionsShown(trial, narrative, kept), SECTION_NAMES, sectionKey);
@@ -11225,10 +11244,8 @@ define("validate", ["require", "exports", "core", "report", "trial-model", "stat
                     c.add("warning", `${at}.narrative`, "a specification replaces the composition a narrative shapes, so this narrative is not used", "put the decision and labels in the specification itself, or remove the narrative");
             }
             if (hasTrial && sources === 1) {
-                if (!isObj(m.trial) || !Array.isArray(m.trial.runs))
-                    c.add("error", `${at}.trial`, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE");
                 // Without a narrative the member's report is composed from none, and checked as such.
-                else
+                if (checkTrial(c, m.trial, `${at}.trial`))
                     under(validateNarrative(narrated ? m.narrative : {}, m.trial));
             }
             if (hasComparison && sources === 1) {

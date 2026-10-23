@@ -60,7 +60,8 @@ function altFilter(data: Comparison, filter: ComparisonFilter): (id: unknown) =>
   return (id: unknown): id is string => typeof id === "string" && (!only || only.has(id)) && (!prefix || startsWith(paths.get(id) || [], prefix));
 }
 function caseFilter(data: Comparison, filter: ComparisonFilter): (c: unknown) => boolean {
-  const only = Array.isArray(filter.cases) ? new Set(filter.cases.map(String)) : null;
+  // Selectors read their case as evidence does: an empty or blank one selects the evidence naming no case.
+  const only = Array.isArray(filter.cases) ? new Set(filter.cases.map(caseKey)) : null;
   const prefix = Array.isArray(filter.caseGroups) && filter.caseGroups.length ? filter.caseGroups.map(String) : null;
   const inGroup = prefix ? new Set(items<{ id: unknown; group?: string[] | string }>(data?.cases).filter(c => typeof c.id === "string" && startsWith(groupPath(c.group), prefix)).map(c => c.id as string)) : null;
   if (!only && !inGroup) return () => true;

@@ -515,7 +515,7 @@ class Checker {
     if (!spec) return;
     // A blank case names no case: every view reads that evidence as evidence naming no case (caseKey).
     if (kind === "comparison-case" && caseKey(value) === NO_CASE) {
-      if (this.known.comparison) this.add("warning", where, "an empty or blank case names no case, so this is read as evidence naming no case", 'leave "case" out, or name the case');
+      if (this.known.comparison) this.add("warning", where, "an empty or blank case names no case: it stands for the evidence naming no case", 'name a case, or leave "case" out where the evidence names none');
       return;
     }
     const ofComparison = spec.list !== null && FROM_COMPARISON.includes(spec.list), ofCollection = spec.list !== null && FROM_COLLECTION.includes(spec.list);
@@ -963,13 +963,17 @@ export function reportCases(spec: ReportSpec | unknown, options: { trial?: unkno
   const trial = spec.trial ? spec.trial : options.trial, comparison = spec.comparison ? spec.comparison : options.comparison;
   return specNeeds(spec, knownFrom(trial, comparison), trial, comparison).cases || [];
 }
-/** Trial runs that name no scenario (left out, null, empty or only spaces): trial.py never writes one, so such a run is
- * malformed input, refused rather than read as a case of its own or as evidence naming no case. */
-function trialScenarios(c: Checker, trial: unknown, where: string): void {
-  if (!isObj(trial) || !Array.isArray(trial.runs)) return;
+/** The one check of trial data, however it enters: a specification's own `trial`, a trial supplied beside a
+ * specification, a narrative's trial (so every composed trial report), and a collection member's. It must be trial report
+ * data, and each run must name its scenario: trial.py never writes a run whose scenario is left out, null, empty or only
+ * spaces, so such a run is malformed input, refused rather than read as a case of its own. False when it is not trial
+ * data. Where two entries check one trial, each problem is listed once (order removes the repeat). */
+function checkTrial(c: Checker, trial: unknown, where: string): boolean {
+  if (!isObj(trial) || !Array.isArray(trial.runs)) { c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE"); return false; }
   trial.runs.forEach((r, i) => {
     if (isObj(r) && caseKey(r.scenario) === NO_CASE) c.add("error", `${where}.runs[${i}].scenario`, "a trial run must name its scenario", "write the trial with trial.py report RUN_DIR --out FILE, which names each run's scenario");
   });
+  return true;
 }
 /** Every block of a specification's or a narrative's own sections, and of its appended blocks. */
 function blocksOf(owner: Obj): unknown[] {
@@ -1010,7 +1014,7 @@ export function validateSpec(spec: ReportSpec | unknown, options: { trial?: unkn
   const collection = (spec as Obj).collection ? (spec as Obj).collection : options.collection;
   const c = new Checker(knownFrom(trial, comparison, collection), registered(), "spec");
   c.shape(spec, SPEC, "", {
-    trial: (value, where) => { if (!isObj(value) || !Array.isArray(value.runs)) c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE"); else trialScenarios(c, value, where); },
+    trial: (value, where) => { checkTrial(c, value, where); },
     comparison: (value, where) => {
       if (!isComparison(value)) c.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');
       else c.problems.push(...validateComparison(value));
@@ -1026,6 +1030,8 @@ export function validateSpec(spec: ReportSpec | unknown, options: { trial?: unkn
       });
     },
   });
+  // A trial supplied beside the specification is the one its views read: checked as its own would be.
+  if (!(spec as Obj).trial && options.trial !== undefined && options.trial !== null) checkTrial(c, options.trial, "trial");
   storyChecks(c, spec as Obj, "", specNeeds(spec as Obj, c.known, trial, comparison));
   sectionReadings(c, (spec as Obj).sections, "", own?.sections);
   // A composition copies its inputs into the specification (a narrative's story, its verdict), so the check can find an
@@ -1047,6 +1053,8 @@ export function validateSpec(spec: ReportSpec | unknown, options: { trial?: unkn
 export function validateNarrative(narrative: unknown, trial?: unknown): Problem[] {
   const c = new Checker(knownFrom(trial), registered(), "narrative");
   if (!isObj(narrative)) return [{ level: "error", where: "narrative", message: `expected an object, found ${found(narrative)}`, hint: 'a narrative is an object such as {"title": "…", "decision": { … }}' }];
+  // The trial the narrative is told against: a narrative needs trial data to be read against.
+  if (trial !== undefined && trial !== null && !checkTrial(c, trial, "trial")) return order(c.problems);
   const strings = (v: unknown) => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : null;
   const include = strings(narrative.include)?.map(sectionKey) || null, exclude = (strings(narrative.exclude) || []).map(sectionKey);
   const kept = DEFAULT_SECTIONS.filter(s => (include ? include.includes(s) : !OPT_IN_SECTIONS.includes(s)) && !exclude.includes(s));
@@ -1135,7 +1143,6 @@ export function validateNarrative(narrative: unknown, trial?: unknown): Problem[
       }
     },
   });
-  trialScenarios(c, trial, "trial");
   storyChecks(c, narrative, "narrative", storyObligations(c.known, trial, undefined, blocksOf(narrative), {}, true));
   pointedRule(c, narrative, isObj(trial) && isObj(trial.plan) ? trial.plan.decision_rule : undefined, "the plan's");
   readingsChecks(c, narrative, "narrative", trialSectionsShown(trial, narrative, kept), SECTION_NAMES, sectionKey);
@@ -1383,9 +1390,8 @@ export function validateCollection(collection: unknown): Problem[] {
       if (narrated) c.add("warning", `${at}.narrative`, "a specification replaces the composition a narrative shapes, so this narrative is not used", "put the decision and labels in the specification itself, or remove the narrative");
     }
     if (hasTrial && sources === 1) {
-      if (!isObj(m.trial) || !Array.isArray(m.trial.runs)) c.add("error", `${at}.trial`, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE");
       // Without a narrative the member's report is composed from none, and checked as such.
-      else under(validateNarrative(narrated ? m.narrative : {}, m.trial));
+      if (checkTrial(c, m.trial, `${at}.trial`)) under(validateNarrative(narrated ? m.narrative : {}, m.trial));
     }
     if (hasComparison && sources === 1) {
       if (!isComparison(m.comparison)) c.add("error", `${at}.comparison`, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');

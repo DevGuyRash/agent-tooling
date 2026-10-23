@@ -270,7 +270,7 @@ export function preferences(input: PreferencesInput, ctx: RenderContext): string
   for (const p of [...allPrefs, ...allRanks]) { const m = str(p.metric); if (m && !criteria.includes(m)) criteria.push(m); }
   const hasOverall = [...allPrefs, ...allRanks].some(p => !str(p.metric));
   const metric = str(input.metric) ?? (hasOverall ? undefined : criteria.find(c => metricOf(data, c)?.primary) ?? criteria[0]);
-  const keepCase = (p: { case?: string }) => !cases || cases.includes(caseKey(p.case));
+  const keepCase = (p: { case?: string }) => !cases || cases.map(caseKey).includes(caseKey(p.case));
   // Judgments naming no criterion belong to the overall question, or to the one preference metric the comparison declares.
   const belongs = (named: unknown, to: string | undefined): boolean => {
     const own = str(named);
@@ -655,7 +655,7 @@ function valueCell(metric: Metric | undefined, o: Observation, levels: string[])
 
 export function observations(input: ObservationsInput, ctx: RenderContext): string {
   const data = comparisonOf(input, ctx, "observations");
-  const keepAlt = Array.isArray(input.alternatives) || input.groups?.length ? new Set(altsOf(data, ctx, input.alternatives, input.groups).map(a => a.id)) : null, keepCase = Array.isArray(input.cases) ? new Set(input.cases) : null, keepMetric = Array.isArray(input.metrics) || input.metric ? new Set([...(Array.isArray(input.metrics) ? input.metrics : []), ...(input.metric ? [input.metric] : [])]) : null;
+  const keepAlt = Array.isArray(input.alternatives) || input.groups?.length ? new Set(altsOf(data, ctx, input.alternatives, input.groups).map(a => a.id)) : null, keepCase = Array.isArray(input.cases) ? new Set(input.cases.map(caseKey)) : null, keepMetric = Array.isArray(input.metrics) || input.metric ? new Set([...(Array.isArray(input.metrics) ? input.metrics : []), ...(input.metric ? [input.metric] : [])]) : null;
   const known = new Set(list(data.alternatives).filter(a => isObject(a) && typeof a.id === "string").map(a => a.id));
   const keep = (x: { alternative?: unknown; case?: unknown; metric?: unknown }) => (!keepAlt || keepAlt.has(String(x.alternative))) && (!keepCase || keepCase.has(caseKey(x.case))) && (!keepMetric || keepMetric.has(String(x.metric)));
   const raw = Array.isArray(data.observations) ? data.observations : [], status = observationStatus(data);

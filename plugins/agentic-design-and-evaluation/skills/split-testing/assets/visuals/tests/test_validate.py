@@ -10,7 +10,7 @@ from pathlib import Path
 import sys
 import unittest
 
-from visual_harness import EXAMPLES, NODE, REPORT, TESTS, NodeCases, Scratch, run_node, story_for, told, write_hostile_fixtures
+from visual_harness import EXAMPLES, NODE, REPORT, TESTS, NodeCases, Scratch, run_node, run_python, story_for, told, write_hostile_fixtures
 
 
 def load_report_module():
@@ -117,6 +117,8 @@ def written_corpus() -> list[dict]:
         # Runs naming no scenario (left out, null, empty, only spaces) are refused; the context trial, its narrative too.
         s([{"type": "text", "text": "x"}], None, trial={"runs": [{"arm": "a", "scenario": "c1"}, {"arm": "a"}, {"arm": "a", "scenario": None}, {"arm": "a", "scenario": ""}, {"arm": "a", "scenario": "   "}, "not a run"]}),
         n({}, "blank"),
+        # The same trial borrowed beside a specification, and a filter on an empty or blank case.
+        s([{"type": "ladder"}], "blank"),
         s([{"type": "text", "text": "x"}], None, arms=[{"id": "a"}, {"id": "a"}], meta=[{"label": "L"}], cases={"zz": "Z"}),
         {"kind": "spec", "input": {"title": "T", "sections": [{"id": "a", "title": "A", "blocks": []}, {"id": "a", "title": "B", "blocks": []}, {"id": "1", "title": "C", "blocks": []}, None, {"title": "D", "blocks": {}}]}, "trial": None},
         {"kind": "spec", "input": {"title": "T", "sections": [], "problems": [{"level": "error", "where": "narrative.x", "message": "m", "hint": "h"}, {"level": "fatal", "where": "w", "message": "m"}, {"where": 3}, None]}, "trial": None},
@@ -165,6 +167,8 @@ def comparison_corpus() -> list[dict]:
         {**BASE, "metrics": [*BASE["metrics"], {"id": "pick2", "kind": "preference"}], "preferences": [{"a": "pb", "b": "jelly", "winner": "pb"}], "identical": [["pb"], ["pb", "jelly"], ["pb", "pb"]], "baseline": "jely"},
         {**BASE, "metrics": [*BASE["metrics"], {"id": "pick2", "kind": "preference", "primary": True}], "preferences": [{"a": "pb", "b": "jelly", "winner": "pb"}], "cases": [], "observations": [o("ate", True, case="dinner")]},
         {**BASE, "observations": [o("ate", True, case="dinner"), {"alternative": "zz", "metric": "nope", "value": 1}], "kind": "x"},
+        # A filter on an empty or blank case selects the evidence naming no case.
+        {**BASE, "observations": [o("ate", True, case=""), o("ate", False, case="lunch")]},
         # Every form of an unnamed case, with cases declared and without.
         {**BASE, "cases": [{"id": "c1"}], "observations": [o("ate", True, case="c1"), o("ate", True, case=""), o("ate", True, case="   "), o("ate", True, case=None), o("ate", True)]},
         {**BASE, "observations": [o("ate", True, case=""), o("ate", True, case="   ")]},
@@ -349,6 +353,18 @@ class FromTrialAgreementTest(unittest.TestCase):
                     result = run_node("-e", script, TESTS / "harness.cjs", path)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(R.from_trial(json.loads(path.read_text(encoding="utf-8"))), json.loads(result.stdout))
+
+
+class TrialEntryTest(unittest.TestCase):
+    def test_report_check_refuses_a_borrowed_trial_run_naming_no_scenario(self) -> None:
+        trial = {"runs": [{"job": "j1", "arm": "a", "scenario": "c1", "repeat": 1, "passed": True, "valid": True}, {"job": "j2", "arm": "a", "scenario": "", "repeat": 2, "passed": False, "valid": True}]}
+        spec = {"title": "T", "story": story_for(), "sections": [{"title": "S", "reading": "r", "blocks": [{"type": "ladder"}]}]}
+        with Scratch() as directory:
+            (directory / "trial.json").write_text(json.dumps(trial), encoding="utf-8")
+            (directory / "spec.json").write_text(json.dumps(spec), encoding="utf-8")
+            result = run_python(REPORT, "--check", "--spec", directory / "spec.json", "--trial", directory / "trial.json")
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("trial.runs[1].scenario: a trial run must name its scenario", result.stdout + result.stderr)
 
 
 class ValidateCasesTest(NodeCases):

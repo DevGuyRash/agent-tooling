@@ -223,4 +223,53 @@ test("a trial run that names no scenario is refused by every check that reads tr
   H.equal(said(V.validateNarrative({}, F.gridTrial({ a: { c1: "PP" } }))), [], "runs that name their scenario pass");
 });
 
+test("round 18: an empty or blank case filter selects the evidence naming no case, and every way trial data enters is checked", () => {
+  const text = html => html.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ");
+  // 1. a passes and b fails, each once, both with case "": a filter on "" or on spaces selects that evidence, 1 of 1 and 0 of 1.
+  const data = { alternatives: [{ id: "a" }, { id: "b" }], metrics: [{ id: "ok", kind: "binary" }],
+    observations: [{ alternative: "a", case: "", metric: "ok", value: true }, { alternative: "b", case: "", metric: "ok", value: false }] };
+  for (const selector of ["", "   "]) {
+    const sums = H.plain(V.summarize(data, "ok", { cases: [selector] }).map(s => [s.alternative, s.k, s.n]));
+    H.equal(sums, [["a", 1, 1], ["b", 0, 1]], `"${selector}": the summaries`);
+    const view = text(V.renderBlock({ type: "metric", metric: "ok", cases: [selector] }, V.createContext({ comparison: data })));
+    H.includes(view, "1/1", `"${selector}": a's one observation`); H.excludes(view, "no observations", `"${selector}": nothing missing`);
+    H.includes(view, "Only evidence naming no case", `"${selector}": the filter in the words the views use`);
+  }
+  const said = H.plain(V.validateSpec({ title: "T", sections: [{ title: "S", reading: "r", blocks: [{ type: "metric", metric: "ok", cases: [""] }] }], comparison: data })).filter(p => /cases\[0\]/.test(p.where));
+  H.ok(said.length === 1 && /evidence naming no case/.test(said[0].message) && said[0].level === "warning", `the check says what the filter selects: ${JSON.stringify(said)}`);
+  // 2. A run naming no scenario, borrowed beside a specification rather than carried in it, is refused as when carried.
+  const trial = { runs: [{ job: "j1", arm: "a", scenario: "c1", repeat: 1, passed: true, valid: true }, { job: "j2", arm: "a", scenario: "", repeat: 2, passed: false, valid: true }] };
+  const spec = { title: "T", sections: [{ title: "S", reading: "r", blocks: [{ type: "ladder" }] }] };
+  const refused = problems => H.plain(problems).filter(p => /scenario/.test(p.where)).map(p => `${p.level} ${p.where}: ${p.message}`);
+  const owed = ["error trial.runs[1].scenario: a trial run must name its scenario"];
+  H.equal(refused(V.validateSpec(spec, { trial })), owed, "borrowed beside the specification");
+  H.equal(refused(V.validateSpec({ ...spec, trial })), owed, "carried in it, once");
+  H.equal(refused(V.validateSpec({ ...spec, trial }, { trial })), owed, "both, once");
+  H.equal(refused(V.validateNarrative({}, trial)), owed, "a narrative's trial");
+  H.equal(refused(V.validateCollection({ members: [{ id: "m", trial }, { id: "s", spec: { ...spec, trial } }] })), ["error collection.members[0].trial.runs[1].scenario: a trial run must name its scenario", "error collection.members[1].spec.trial.runs[1].scenario: a trial run must name its scenario"], "a collection's trial member and its specification member");
+});
+
+test("sweep (a selected matrix): every filter form selects the one group of evidence naming no case, in every comparison view", () => {
+  // Evidence in each unnamed form, x passing and y failing on each, and a named case c1 the filters leave out.
+  const forms = [undefined, null, "", "   "];
+  const at = (c, x) => c === undefined ? x : { ...x, case: c };
+  const data = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "ok", kind: "binary" }, { id: "p", kind: "preference" }],
+    observations: [...forms.flatMap(c => [at(c, { alternative: "x", metric: "ok", value: true }), at(c, { alternative: "y", metric: "ok", value: false })]), { alternative: "x", case: "c1", metric: "ok", value: false }],
+    preferences: [...forms.map(c => at(c, { a: "x", b: "y", winner: "x" })), { a: "x", b: "y", winner: "y", case: "c1" }] };
+  const ctx = () => V.createContext({ comparison: data });
+  for (const selector of ["", " ", "   "]) {
+    H.equal(H.plain(V.summarize(data, "ok", { cases: [selector] }).map(s => [s.alternative, s.k, s.n])), [["x", 4, 4], ["y", 0, 4]], `"${selector}": the four forms, and not c1`);
+    H.equal(V.difference(data, "ok", "x", "y", { cases: [selector] }).estimate, 1, `"${selector}": the difference over them`);
+    const wins = H.plain(V.winMatrix(data, "p", { cases: [selector] }).wins);
+    H.equal(wins, [[0, 4], [0, 0]], `"${selector}": the judgments' wins`);
+    const prefs = V.renderBlock({ type: "preferences", metric: "p", cases: [selector] }, ctx());
+    H.excludes(prefs, "No judgments were recorded", `"${selector}": the preferences view keeps them`);
+    const ledger = V.renderBlock({ type: "observations", cases: [selector] }, ctx());
+    H.equal((ledger.match(/data-av-row=/g) || []).length, 8, `"${selector}": the ledger lists the eight unnamed observations`);
+    // x passes all four, y none: 4/4 and 0/4, a difference of +100 points.
+    for (const type of ["metric", "scorecard"]) { const html = V.renderBlock({ type, metric: "ok", cases: [selector] }, ctx()); H.includes(html, "4/4", `"${selector}" (${type}): x's four`); H.includes(html, "0/4", `"${selector}" (${type}): y's four`); }
+    H.includes(V.renderBlock({ type: "difference", metric: "ok", cases: [selector] }, ctx()).replace(/<[^>]+>/g, " ").replace(/\s+/g, " "), "y 0% · 0/4 minus x 100% · 4/4 −100 pts", `"${selector}" (difference): y minus x over them`);
+  }
+});
+
 H.report();

@@ -649,7 +649,7 @@ class Checker:
         # A blank case names no case: every view reads that evidence as evidence naming no case.
         if kind == "comparison-case" and not value.strip():
             if self.known["comparison"]:
-                self.add("warning", where, "an empty or blank case names no case, so this is read as evidence naming no case", 'leave "case" out, or name the case')
+                self.add("warning", where, "an empty or blank case names no case: it stands for the evidence naming no case", 'name a case, or leave "case" out where the evidence names none')
             return
         source, noun, many, level, tail = spec
         of_comparison, of_collection = source in FROM_COMPARISON, source in FROM_COLLECTION
@@ -881,14 +881,17 @@ def named_ids(value, field, out: dict) -> None:
             named_ids(value.get(k), f, out)
 
 
-def trial_scenarios(c, trial, where: str) -> None:
-    """Trial runs that name no scenario (left out, null, empty or only spaces): trial.py never writes one, so such a run
-    is malformed input, refused rather than read as a case of its own or as evidence naming no case."""
+def check_trial_data(c, trial, where: str) -> bool:
+    """The one check of trial data, however it enters (as src/validate.ts checkTrial): it must be trial report data, and
+    each run must name its scenario; a run whose scenario is left out, null, empty or only spaces is malformed input.
+    False when it is not trial data. Where two entries check one trial, ordered() lists each problem once."""
     if not isinstance(trial, dict) or not isinstance(trial.get("runs"), list):
-        return
+        c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE")
+        return False
     for i, r in enumerate(trial["runs"]):
         if isinstance(r, dict) and (r.get("scenario") is None or (isinstance(r.get("scenario"), str) and not r["scenario"].strip())):
             c.add("error", f"{where}.runs[{i}].scenario", "a trial run must name its scenario", "write the trial with trial.py report RUN_DIR --out FILE, which names each run's scenario")
+    return True
 
 
 def comparison_cases(data: dict) -> list:
@@ -1355,10 +1358,7 @@ def validate_spec(spec, trial=None, comparison=None, collection=None) -> list[di
     c = Checker(known_from(trial, comparison, gathered if gathered not in (None, False, 0, "") else collection), "spec")
 
     def check_trial(value, where: str) -> None:
-        if not isinstance(value, dict) or not isinstance(value.get("runs"), list):
-            c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE")
-        else:
-            trial_scenarios(c, value, where)
+        check_trial_data(c, value, where)
 
     def check_comparison(value, where: str) -> None:
         if not is_comparison(value):
@@ -1381,6 +1381,9 @@ def validate_spec(spec, trial=None, comparison=None, collection=None) -> list[di
         c.problems.extend(validate_collection(value))
 
     c.shape(spec, SPEC, "", {"trial": check_trial, "comparison": check_comparison, "collection": check_collection, "sections": check_sections})
+    # A trial supplied beside the specification is the one its views read: checked as its own would be.
+    if not spec.get("trial") and trial is not None:
+        check_trial_data(c, trial, "trial")
     story_checks(c, spec, "", story_obligations(c.known, trial, comparison, blocks_of(spec), spec, has_verdict(spec)))
     section_readings(c, spec.get("sections"), "")
     return ordered(c.problems)
@@ -1436,10 +1439,8 @@ def validate_collection(collection) -> list[dict]:
             if narrated:
                 c.add("warning", f"{at}.narrative", "a specification replaces the composition a narrative shapes, so this narrative is not used", "put the decision and labels in the specification itself, or remove the narrative")
         if has_trial and sources == 1:
-            if not isinstance(m["trial"], dict) or not isinstance(m["trial"].get("runs"), list):
-                c.add("error", f"{at}.trial", "is not trial report data", "write it with trial.py report RUN_DIR --out FILE")
-            else:
-                # Without a narrative the member's report is composed from none, and checked as such.
+            # Without a narrative the member's report is composed from none, and checked as such.
+            if check_trial_data(c, m["trial"], f"{at}.trial"):
                 found_problems = validate_narrative(m["narrative"] if narrated else {}, m["trial"])
         if has_comparison and sources == 1:
             if not is_comparison(m["comparison"]):
@@ -1781,6 +1782,9 @@ def validate_narrative(narrative, trial=None) -> list[dict]:
     c = Checker(known_from(trial), "narrative")
     if not isinstance(narrative, dict):
         return [{"level": "error", "where": "narrative", "message": f"expected an object, found {found(narrative)}", "hint": 'a narrative is an object such as {"title": "…", "decision": { … }}'}]
+    # The trial the narrative is told against: a narrative needs trial data to be read against.
+    if trial is not None and not check_trial_data(c, trial, "trial"):
+        return ordered(c.problems)
 
     def strings(v):
         return [x for x in v if isinstance(x, str)] if isinstance(v, list) else None
@@ -1893,7 +1897,6 @@ def validate_narrative(narrative, trial=None) -> list[dict]:
     c.shape(narrative, NARRATIVE, "narrative", {
         "decision": decision, "arms": arms, "identical": identical, "pairs": pairs, "threshold": threshold, "include": section_ids, "exclude": section_ids, "sections": sections, "append": append,
     })
-    trial_scenarios(c, trial, "trial")
     story_checks(c, narrative, "narrative", story_obligations(c.known, trial, None, blocks_of(narrative), {}, True))
     pointed_rule(c, narrative, trial["plan"].get("decision_rule") if isinstance(trial, dict) and isinstance(trial.get("plan"), dict) else None, "the plan's")
     readings_checks(c, narrative, "narrative", trial_sections_shown(trial, narrative, kept), SECTION_NAMES, section_key)
