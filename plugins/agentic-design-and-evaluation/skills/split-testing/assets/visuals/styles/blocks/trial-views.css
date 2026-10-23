@@ -8,10 +8,10 @@
 .av-rule-text { max-height: none; overflow: visible; }
 .av-rule-text--long { font-style: normal; font-family: var(--av-font-text); font-size: .93rem; line-height: 1.6; }
 .av-verdict-headline--quiet { font: 500 clamp(1.12rem, 1.9vw, 1.3rem)/1.4 var(--av-font-display); max-width: 60ch; }
-.av-verdict-grid--none .av-verdict-detail { max-width: 72ch; }
+.av-verdict-grid--none .av-verdict-detail { max-width: min(calc(var(--av-measure) + 4ch), 92ch); }
 .av-rule--main { margin-top: 22px; border: 1px solid var(--av-line); border-radius: 8px; padding: clamp(16px, 2.4vw, 24px); }
-.av-rule--main .av-rule-text { max-width: 76ch; }
-.av-verdict-alert { display: flex; align-items: baseline; gap: 10px; margin-top: 16px !important; padding: 10px 14px; border-radius: 8px; background: var(--av-warn-soft); color: var(--av-ink); font-size: .9rem; max-width: 76ch; }
+.av-rule--main .av-rule-text { max-width: min(calc(var(--av-measure) + 8ch), 92ch); }
+.av-verdict-alert { display: flex; align-items: baseline; gap: 10px; margin-top: 16px !important; padding: 10px 14px; border-radius: 8px; background: var(--av-warn-soft); color: var(--av-ink); font-size: .9rem; max-width: min(calc(var(--av-measure) + 8ch), 92ch); }
 .av-verdict-alert .av-mark { position: relative; top: 1px; }
 .av-verdict-alert a { white-space: nowrap; font-weight: 600; }
 .av-mentions { margin-top: 22px; }
@@ -139,7 +139,7 @@
 /* ----------------------------------------------------------------- plan */
 .av-plan-arms th .av-ladder-note { margin-top: 2px; }
 .av-plan-arms .av-arm-label { overflow-wrap: normal; word-break: normal; }
-.av-case-desc { white-space: pre-wrap; font-size: .86rem; color: var(--av-ink-2); max-width: 76ch; }
+.av-case-desc { white-space: pre-wrap; font-size: .86rem; color: var(--av-ink-2); max-width: min(calc(var(--av-measure) + 8ch), 92ch); }
 
 /* ----------------------------------------------------------------- narrow screens */
 @media (max-width: 860px) {

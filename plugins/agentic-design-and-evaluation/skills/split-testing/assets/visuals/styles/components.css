@@ -72,7 +72,7 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 15.5
 .av-kicker { font: 600 .74rem/1.4 var(--av-font-mono); letter-spacing: .14em; text-transform: uppercase; color: var(--av-accent); margin-bottom: 18px !important; display: flex; align-items: center; gap: 10px; }
 .av-kicker::before { content: ""; width: 22px; height: 2px; background: currentColor; border-radius: 2px; }
 .av-title { font: 500 clamp(2.1rem, 5.4vw, 3.75rem)/1.04 var(--av-font-display); letter-spacing: -.018em; max-width: 22ch; text-wrap: balance; color: var(--av-ink); }
-.av-summary { margin-top: 18px !important; font-size: clamp(1.02rem, 1.6vw, 1.18rem); line-height: 1.6; color: var(--av-ink-2); max-width: 62ch; }
+.av-summary { margin-top: 18px !important; font-size: clamp(1.02rem, 1.6vw, 1.18rem); line-height: 1.6; color: var(--av-ink-2); max-width: min(calc(var(--av-measure) - 6ch), 92ch); }
 .av-summary p + p { margin-top: .6em; }
 .av-meta { display: flex; flex-wrap: wrap; gap: 10px 28px; margin-top: 22px !important; }
 .av-meta div { min-width: 0; }
@@ -94,13 +94,13 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 15.5
 .av-section[data-av-target] .av-section-n { -webkit-text-stroke-color: var(--av-accent); color: var(--av-accent-soft); transition: color .3s, -webkit-text-stroke-color .3s; }
 .av-section-n { font: 400 clamp(2.4rem, 5vw, 3.4rem)/.9 var(--av-font-display); color: transparent; -webkit-text-stroke: 1px var(--av-ink-3); letter-spacing: -.03em; padding-top: 2px; user-select: none; }
 .av-section-title { font: 500 clamp(1.55rem, 3vw, 2.1rem)/1.15 var(--av-font-display); letter-spacing: -.012em; text-wrap: balance; }
-.av-section-lead { margin-top: 10px; color: var(--av-ink-2); max-width: 70ch; font-size: .98rem; }
+.av-section-lead { margin-top: 10px; color: var(--av-ink-2); max-width: min(calc(var(--av-measure) + 2ch), 92ch); font-size: .98rem; }
 
 /* ----------------------------------------------------------------- blocks */
 .av-block { margin-bottom: 28px; }
 .av-block-head { margin-bottom: 16px; }
 .av-block-title { font: 600 1.02rem/1.35 var(--av-font-text); letter-spacing: -.005em; }
-.av-block-desc { margin-top: 6px; color: var(--av-ink-2); font-size: .93rem; max-width: 72ch; }
+.av-block-desc { margin-top: 6px; color: var(--av-ink-2); font-size: .93rem; max-width: min(calc(var(--av-measure) + 4ch), 92ch); }
 .av-block-desc p + p { margin-top: .5em; }
 .av-block-note { margin-top: 14px !important; font-size: .82rem; color: var(--av-ink-3); }
 .av-empty { color: var(--av-ink-3); font-style: italic; padding: 18px 0; }
@@ -182,7 +182,7 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 15.5
 .av-stamp-word { font: 700 .78rem/1 var(--av-font-text); letter-spacing: .13em; text-transform: uppercase; }
 .av-verdict-headline { font: 500 clamp(1.45rem, 2.8vw, 2.05rem)/1.22 var(--av-font-display); letter-spacing: -.01em; text-wrap: pretty; max-width: 34ch; }
 .av-verdict-headline strong { font-weight: 700; }
-.av-verdict-detail { margin-top: 14px; color: var(--av-ink-2); max-width: 62ch; }
+.av-verdict-detail { margin-top: 14px; color: var(--av-ink-2); max-width: min(calc(var(--av-measure) - 6ch), 92ch); }
 .av-verdict-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 18px 26px; margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--av-line); }
 .av-verdict-list h4 { font: 600 .7rem/1.3 var(--av-font-text); letter-spacing: .12em; text-transform: uppercase; color: var(--av-ink-3); margin-bottom: 8px; }
 .av-verdict-list ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 7px; font-size: .9rem; color: var(--av-ink-2); }
@@ -387,7 +387,7 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 15.5
 /* Only the phone layout clips the ledger, so only it shows the control (it outranks .av-btn's display). */
 button.av-ledger-more { display: none; }
 .av-ledger-export-what { font-weight: 600; color: var(--av-ink); }
-.av-export-status { margin-top: 8px !important; font-size: .78rem; color: var(--av-ink-3); max-width: 72ch; }
+.av-export-status { margin-top: 8px !important; font-size: .78rem; color: var(--av-ink-3); max-width: min(calc(var(--av-measure) + 4ch), 92ch); }
 .av-export-status:empty { display: none; }
 .av-footer-export { margin-top: 12px !important; display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
 .av-footer-export .av-export-status { margin-top: 0 !important; }

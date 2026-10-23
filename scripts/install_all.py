@@ -382,7 +382,7 @@ def receipt_identity(receipt: Mapping[str, object], host: str, plugin_id: str, *
     value = plugins.get(plugin_id) if isinstance(plugins, dict) else None
     if value is None:
         return None
-    if not isinstance(value, dict) or not isinstance(value.get("version"), str) or not isinstance(value.get("digest"), str) or len(value["digest"]) != 64:
+    if not isinstance(value, dict) or not isinstance(value.get("version"), str) or not value["version"].strip() or not isinstance(value.get("digest"), str) or len(value["digest"]) != 64:
         raise InstallError(f"invalid installer receipt identity: {host} {plugin_id}")
     return Identity(value["version"], value["digest"])
 
@@ -410,6 +410,10 @@ def plan_host(host: str, state: HostState, selected: Mapping[str, Identity], rec
             previous is not None
             and observed_digest is not None
             and observed_digest != previous.digest
+            # A copy at another version than the receipt's was replaced by an install or update (the host's own, say), not
+            # edited locally. The receipt says nothing about that copy, so an edit made to it after such an update is not
+            # detected; only a changed copy at the receipt's own version is.
+            and current == previous.version
             and not exact_candidate
             and not args.force
         ):

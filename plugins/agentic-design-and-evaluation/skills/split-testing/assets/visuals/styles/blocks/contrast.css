@@ -66,7 +66,7 @@
 .av-contrast-place--above, .av-contrast-place--below { border-color: var(--av-ink-2); color: var(--av-ink); }
 
 /* The plain reading under the track. */
-.av-contrast-reading { grid-column: 2 / -1; font-size: .84rem; line-height: 1.45; color: var(--av-ink-2); max-width: 72ch; }
+.av-contrast-reading { grid-column: 2 / -1; font-size: .84rem; line-height: 1.45; color: var(--av-ink-2); max-width: min(calc(var(--av-measure) + 4ch), 92ch); }
 .av-contrast-reading strong { color: var(--av-ink); font-weight: 600; }
 .av-contrast-row[data-place="spans"] .av-contrast-reading strong { font-weight: 550; }
 
@@ -93,7 +93,7 @@
 .av-contrast-legend-zero { width: 0; height: 14px; border-left: 1.5px solid color-mix(in srgb, var(--av-ink) 70%, transparent); }
 .av-contrast-problems { list-style: none; margin: 0 0 16px; padding: 10px 14px; border: 1px dashed var(--av-warn); border-radius: var(--av-radius-sm); background: var(--av-warn-soft); color: var(--av-ink); font-size: .84rem; display: grid; gap: 4px; }
 .av-contrast-scope { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; margin: -6px 0 14px !important; font-size: .82rem; color: var(--av-ink-2); }
-.av-contrast-method { margin-top: 14px; font-size: .8rem; line-height: 1.5; color: var(--av-ink-3); max-width: 80ch; }
+.av-contrast-method { margin-top: 14px; font-size: .8rem; line-height: 1.5; color: var(--av-ink-3); max-width: min(calc(var(--av-measure) + 12ch), 92ch); }
 .av-contrast-method summary { cursor: pointer; width: fit-content; color: var(--av-ink-2); font-weight: 550; padding: 2px 0; }
 .av-contrast-method summary:hover { color: var(--av-ink); }
 .av-contrast-method[open] summary { margin-bottom: 4px; }
