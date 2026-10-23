@@ -188,7 +188,7 @@ class ClaudeInvocationTest(LauncherCase):
                                       "autoMemoryEnabled": False, "disableRemoteControl": True,
                                       "crossSessionInbound": "refuse", "isolatePeerMachines": True,
                                       "autoUploadSessions": False,
-                                      "permissions": {"deny": ["RemoteTrigger", "DesignSync", "ClaudeDesign", "ShareOnboardingGuide"]}})
+                                      "permissions": {"deny": ["RemoteTrigger", "DesignSync", "ClaudeDesign", "ShareOnboardingGuide", "ListAgents", "SendFile"]}})
                     self.assertEqual(env["ENABLE_CLAUDEAI_MCP_SERVERS"], "false")
 
     def test_an_unconfined_run_accepts_edits_and_a_judge_has_no_tools(self):

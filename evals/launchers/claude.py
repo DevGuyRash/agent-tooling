@@ -45,14 +45,19 @@ WRITING_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 #                                   claude.ai/design projects, two separate tools with separate gates (BIN: "only
 #                                   available with claude.ai authentication"; ClaudeDesign reads projects under the
 #                                   account's existing Design consent); ShareOnboardingGuide,
-#                                   a share link on Team and Enterprise plans (TR)
-# No control covers the account's identity (its email in Claude Code's own context, its organization in the transcript)
+#                                   a share link on Team and Enterprise plans (TR); ListAgents, which can list the
+#                                   account's cloud sessions ("Stop sending and listing: add permission deny rules naming
+#                                   SendMessage and ListAgents", docs/en/cross-session-messaging); SendFile, which
+#                                   resolves names against them. SendMessage stays: denying it "also removes messaging
+#                                   to subagents", which a run under test may use.
+# No control covers SendMessage's name resolution, which can suggest the account's cloud session names for a name that
+# matches nothing, nor the account's identity (its email in Claude Code's own context, its organization in the transcript)
 # or the settings its organization delivers (server-managed settings, which outrank every local source).
 ACCOUNT_OFF = {
     "settings": {"syncClaudeAiSkills": False, "syncClaudeAiPlugins": False, "disableClaudeAiConnectors": True,
                  "enableArtifact": False, "autoMemoryEnabled": False, "disableRemoteControl": True,
                  "crossSessionInbound": "refuse", "isolatePeerMachines": True, "autoUploadSessions": False,
-                 "permissions": {"deny": ["RemoteTrigger", "DesignSync", "ClaudeDesign", "ShareOnboardingGuide"]}},
+                 "permissions": {"deny": ["RemoteTrigger", "DesignSync", "ClaudeDesign", "ShareOnboardingGuide", "ListAgents", "SendFile"]}},
     "env": {"ENABLE_CLAUDEAI_MCP_SERVERS": "false"},
 }
 
