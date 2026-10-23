@@ -1,4 +1,5 @@
 """Launcher arms and judges (see references/launching.md), exercised through the CLI with a pretend agent launcher."""
+import contextlib
 import json
 import os
 import shutil
@@ -16,6 +17,13 @@ sys.path.insert(0, str(SCRIPT.parent))
 import trial  # noqa: E402
 
 CONFINED = bool(shutil.which("bwrap"))
+
+
+def copies_container() -> Path:
+    """Where this user's copied credentials are kept, worked out apart from the runtime: trial-copies-<uid> under
+    /run/user/<uid> when that is the user's own directory, else under /tmp."""
+    uid, run = os.getuid(), Path(f"/run/user/{os.getuid()}")
+    return (run if run.is_dir() and run.stat().st_uid == uid else Path("/tmp")) / f"trial-copies-{uid}"
 
 
 def write(path: Path, text: str, mode=None):
@@ -45,9 +53,7 @@ class LauncherTest(unittest.TestCase):
               "---\nname: helper\ndescription: Helps with things.\n---\n"
               "This helper skill line is long enough to identify the skill by its content alone.\n")
         self.out = self.tmp / "out"
-        # where the runtime keeps its copies of credentials, outside every run directory: under /tmp, as it does
-        self.xdg = Path(tempfile.mkdtemp(prefix="xdg-", dir="/tmp"))
-        self.addCleanup(shutil.rmtree, self.xdg, True)
+        self.root = copies_container()  # where every run of this user's keeps its copies, whatever its environment
 
     def tearDown(self):
         subprocess.run(["chmod", "-R", "u+rwx", str(self.tmp)], capture_output=True)
@@ -64,7 +70,7 @@ class LauncherTest(unittest.TestCase):
 
     def run_cli(self, *args, mode="", **env):
         return subprocess.run([sys.executable, str(SCRIPT), *args], capture_output=True, text=True, timeout=600,
-                              env=dict(os.environ, FAKE_LAUNCHER_MODE=mode, **{"XDG_RUNTIME_DIR": str(self.xdg), **env}))
+                              env=dict(os.environ, FAKE_LAUNCHER_MODE=mode, **env))
 
     def run_plan(self, mode="", **env):
         return self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), mode=mode, **env)
@@ -560,9 +566,18 @@ class LauncherTest(unittest.TestCase):
                               "    return {'made_file': run.file('out.txt').strip() == 'hi', 'sign_in_gone': not left}\n")
         self.plan({"a": arm}, judge=judge)
 
-    def _copies_left(self, xdg=None):
-        """The copies' directories the runtime's container under `xdg` (the test's $XDG_RUNTIME_DIR) still holds."""
-        return [d for c in (xdg or self.xdg).iterdir() if c.name.startswith("trial-copies-") for d in c.iterdir()]
+    def _copies_left(self):
+        """The copies' directories this test's runs noted (in their journals and removal records) that still exist: the
+        container is every run's of this user's, so only those this test's runs made are its to account for."""
+        noted = set()
+        for log in self.tmp.rglob("credentials.jsonl"):
+            for line in log.read_text().splitlines():
+                entry = json.loads(line)
+                noted.update(p for p in [*entry.get("removed", []), *entry.get("unremoved", [])] if p.startswith("/"))
+        for note in self.tmp.rglob(".copies/*.json"):
+            with contextlib.suppress(ValueError, AttributeError):
+                noted.add(json.loads(note.read_text()).get("private") or "")
+        return sorted(p for p in noted if p and os.path.lexists(p))
 
     def _no_credential_left(self, secret, output=""):
         self.assertEqual([p for p in self.out.rglob("*") if p.name in (".fake-sign-in", ".fake-auth")], [])
@@ -583,7 +598,7 @@ class LauncherTest(unittest.TestCase):
         out = self.tmp / "out-unit"
         home = out / "runs" / "r0123456789abcdef" / "harness" / "home"
         home.mkdir(parents=True)
-        seen = []
+        seen, made = [], []
 
         def stop(fsrc, fdst, *args):  # the moment the first credential byte would be written
             seen.append(oct(os.fstat(fdst.fileno()).st_mode & 0o777))
@@ -592,19 +607,20 @@ class LauncherTest(unittest.TestCase):
         try:
             for rel, src in ((".fake-sign-in", self.tmp / "src" / "sign-in"), (".fake-auth", self.tmp / "src" / "auth")):
                 arm = {"copy": {rel: str(src)}}
-                with self.subTest(rel=rel), mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)), \
-                        mock.patch.object(trial.shutil, "copyfileobj", stop):
+                with self.subTest(rel=rel), mock.patch.object(trial.shutil, "copyfileobj", stop):
                     entry, _ = trial._start_copies(out, home.parent.parent, arm)
                     private = Path(entry["private"])
+                    self.addCleanup(shutil.rmtree, private, True)
+                    made.append(private / "0")
                     self.assertEqual(oct(private.stat().st_mode & 0o777), "0o700")
                     self.assertEqual(oct(private.parent.stat().st_mode & 0o777), "0o700")  # the runtime's own container
-                    self.assertEqual(private.parent, self.xdg / f"trial-copies-{os.getuid()}")
+                    self.assertEqual(private.parent, self.root)
                     with self.assertRaises(OSError):
                         trial._place_copies(arm, home, private)
         finally:
             os.umask(old)
         self.assertEqual(seen, ["0o600", "0o600"])
-        made = [p for p in self.xdg.rglob("0") if p.is_dir()]  # the copied directory
+        made = [p for p in made if p.is_dir()]  # the copied directory
         self.assertTrue(made)
         self.assertTrue(all(oct(p.stat().st_mode & 0o777) == "0o700" for p in made))
 
@@ -688,8 +704,7 @@ class LauncherTest(unittest.TestCase):
             with self.subTest(mode=mode, then=then):
                 shutil.rmtree(self.out, ignore_errors=True)
                 proc = subprocess.Popen([sys.executable, str(SCRIPT), "run", str(self.tmp / "plan.json"), "--out", str(self.out)],
-                                        env=dict(os.environ, FAKE_LAUNCHER_MODE=mode, FAKE_LAUNCHER_MARK=secret,
-                                                 XDG_RUNTIME_DIR=str(self.xdg)),
+                                        env=dict(os.environ, FAKE_LAUNCHER_MODE=mode, FAKE_LAUNCHER_MARK=secret),
                                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
                 try:
                     for _ in range(600):
@@ -720,7 +735,7 @@ class LauncherTest(unittest.TestCase):
         # directory of the runtime's, one naming the run directory's plan as a placement: never acted on
         mine = self.tmp / "keep-me"
         write(mine / "notes.txt", "the user's own\n")
-        named = self.xdg / f"trial-copies-{os.getuid()}" / "abcd1234"
+        named = self.tmp / "other" / f"trial-copies-{os.getuid()}" / "abcd1234"  # shaped as the runtime's own
         write(named / "0", "kept\n")
         forged = {"theirs.json": {"private": str(mine), "placed": [f"runs/{job}/harness/home/.fake-sign-in"]},
                   "plan.json": {"private": str(named), "placed": ["plan.json"]}}
@@ -752,16 +767,16 @@ class LauncherTest(unittest.TestCase):
         home.mkdir(parents=True)
         write(self.tmp / "auth" / "token", secret)
         arm = {"copy": {".fake-auth": str(self.tmp / "auth")}}
-        with mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)):
-            entry, marker = trial._start_copies(out, job, arm)
-            private = Path(entry["private"])
-            trial._place_copies(arm, home, private)
-            with mock.patch.object(trial.shutil, "rmtree", side_effect=OSError("cannot remove")):
-                self.assertFalse(trial._end_copies(out, entry, marker))
-            self.assertTrue(marker.exists() and (private / "0" / "token").exists())
-            log = [json.loads(l) for l in (out / "credentials.jsonl").read_text().splitlines()]
-            self.assertEqual(log[-1]["unremoved"], [str(private)])
-            trial._sweep_copies(out, "run")  # a later sweep, whose removal works, finishes it
+        entry, marker = trial._start_copies(out, job, arm)
+        private = Path(entry["private"])
+        self.addCleanup(shutil.rmtree, private, True)
+        trial._place_copies(arm, home, private)
+        with mock.patch.object(trial.shutil, "rmtree", side_effect=OSError("cannot remove")):
+            self.assertFalse(trial._end_copies(out, entry, marker))
+        self.assertTrue(marker.exists() and (private / "0" / "token").exists())
+        log = [json.loads(l) for l in (out / "credentials.jsonl").read_text().splitlines()]
+        self.assertEqual(log[-1]["unremoved"], [str(private)])
+        trial._sweep_copies(out, "run")  # a later sweep, whose removal works, finishes it
         self.assertFalse(marker.exists() or private.exists())
         self.assertEqual(self._copies_left(), [])
 
@@ -776,12 +791,11 @@ class LauncherTest(unittest.TestCase):
             if Path(path).parent.name.startswith("trial-copies-"):
                 raise KeyboardInterrupt
             return real(path, *args, **kwargs)
-        with mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)):
-            with mock.patch.object(trial.os, "mkdir", stopped), self.assertRaises(KeyboardInterrupt):
-                trial._start_copies(out, job, arm)
-            self.assertEqual(self._copies_left(), [])  # nothing made that is not noted
-            write(out / ".copies" / "0123abcd.json.k3j2.tmp", '{"private"')  # a note whose own writing was interrupted
-            trial._sweep_copies(out, "run")
+        with mock.patch.object(trial.os, "mkdir", stopped), self.assertRaises(KeyboardInterrupt):
+            trial._start_copies(out, job, arm)
+        self.assertEqual(self._copies_left(), [])  # nothing made that is not noted
+        write(out / ".copies" / "0123abcd.json.k3j2.tmp", '{"private"')  # a note whose own writing was interrupted
+        trial._sweep_copies(out, "run")
         self.assertEqual(list((out / ".copies").iterdir()), [])
 
     def test_reading_the_journal_during_a_run_never_removes_a_note_being_written(self):
@@ -811,14 +825,13 @@ class LauncherTest(unittest.TestCase):
             if Path(path).name == "stash":
                 raise OSError("cannot remove")
             return real(path, *a, **k)
-        with mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)):
-            entry, marker = trial._start_copies(out, job, arm)
-            with mock.patch.object(trial.shutil, "rmtree", stuck):
-                self.assertFalse(trial._end_copies(out, entry, marker))
-            self.assertTrue(marker.exists() and trial._held(out, job))
-            log = [json.loads(l) for l in (out / "credentials.jsonl").read_text().splitlines()]
-            self.assertEqual(log[-1]["unremoved"], ["runs/r0123456789abcdef/harness/home/.tool/stash"])
-            trial._sweep_copies(out, "recheck")
+        entry, marker = trial._start_copies(out, job, arm)
+        with mock.patch.object(trial.shutil, "rmtree", stuck):
+            self.assertFalse(trial._end_copies(out, entry, marker))
+        self.assertTrue(marker.exists() and trial._held(out, job))
+        log = [json.loads(l) for l in (out / "credentials.jsonl").read_text().splitlines()]
+        self.assertEqual(log[-1]["unremoved"], ["runs/r0123456789abcdef/harness/home/.tool/stash"])
+        trial._sweep_copies(out, "recheck")
         self.assertFalse(marker.exists() or trial._held(out, job) or (home / ".tool" / "stash").exists())
         self.assertEqual((home / ".tool" / "session.jsonl").read_text(), "a session\n")  # the transcript stays
 
@@ -838,9 +851,8 @@ class LauncherTest(unittest.TestCase):
         record = {"finished": True, "transcripts": ["harness/home/.tool/current", "harness/home/.tool-link/sessions/s1.jsonl"]}
         self.assertIsNone(trial._transcripts_problem(record, job))  # what the record validator accepts
         write(job / "record.json", json.dumps(record))
-        with mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)):
-            entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]})
-            self.assertTrue(trial._end_copies(out, entry, marker))
+        entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]})
+        self.assertTrue(trial._end_copies(out, entry, marker))
         self.assertIsNone(trial._transcripts_problem(record, job))  # is what cleanup keeps
         self.assertEqual((home / ".tool" / "current").read_text(), "a session\n")
         self.assertFalse((home / ".tool" / "cache").exists())
@@ -861,9 +873,8 @@ class LauncherTest(unittest.TestCase):
                     (job / bad).read_text()
                 self.assertIsNotNone(trial._transcripts_problem({"finished": True, "transcripts": [bad]}, job))
         write(job / "record.json", json.dumps(record))
-        with mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)):
-            entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]})
-            self.assertTrue(trial._end_copies(out, entry, marker))
+        entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]})
+        self.assertTrue(trial._end_copies(out, entry, marker))
         self.assertEqual((home / ".tool" / "current").read_text(), "a session\n")  # still reached as named
         self.assertIsNone(trial._transcripts_problem(record, job))
         self.assertEqual(list((home / ".tool" / "scratch").iterdir()), [])  # passed through, and emptied
@@ -878,13 +889,13 @@ class LauncherTest(unittest.TestCase):
         arm = {"copy": {".fake-sign-in": str(self.tmp / "sign-in")}}
         decoy = self.tmp / "decoy"
         write(decoy / "keep.txt", "not the runtime's\n")
-        with mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)):
-            entry, marker = trial._start_copies(out, job, arm)
-            trial._place_copies(arm, home, Path(entry["private"]))
-            write(home / ".tool" / "cache", "a tool's own sign-in cache\n")
-            shutil.rmtree(entry["private"])
-            os.symlink(decoy, entry["private"])  # what an unconfined agent could leave there
-            trial._sweep_copies(out, "recheck")
+        entry, marker = trial._start_copies(out, job, arm)
+        trial._place_copies(arm, home, Path(entry["private"]))
+        write(home / ".tool" / "cache", "a tool's own sign-in cache\n")
+        shutil.rmtree(entry["private"])
+        os.symlink(decoy, entry["private"])  # what an unconfined agent could leave there
+        self.addCleanup(os.unlink, entry["private"])
+        trial._sweep_copies(out, "recheck")
         self.assertTrue(marker.exists() and trial._held(out, job))
         log = [json.loads(l) for l in (out / "credentials.jsonl").read_text().splitlines()]
         self.assertEqual(log[-1]["unremoved"], [entry["private"]])
@@ -893,27 +904,28 @@ class LauncherTest(unittest.TestCase):
         self.assertTrue(Path(entry["private"]).is_symlink())  # nor removed
         self.assertFalse((home / ".tool").exists())  # its home cleared all the same
 
-    def test_nothing_a_run_is_given_may_expose_the_copies_container(self):
-        # what a run is given to read, start, or copy may neither be, hold, nor lie in the directory every run's copied
-        # credentials are kept in: refused as the plan loads, and as each run starts against its run directory's own
-        root = self.xdg / f"trial-copies-{os.getuid()}"
-        (root / "abcd1234").mkdir(parents=True)
-        for setting in ({"readable": [str(self.xdg)]}, {"readable": [str(root / "abcd1234")]},
-                        {"resources": {"skills/x": str(root)}}, {"copy": {".x": str(root / "abcd1234")}}):
+    def test_nothing_a_run_is_given_may_expose_any_copies_container(self):
+        # what a run is given to read, start, or copy may neither be, hold, nor lie in any place a copies' container of
+        # this user's can be (trial-copies-<uid> under /run/user/<uid> or /tmp), whichever one its own run directory
+        # uses: refused as the plan loads, saying why, before anything reads it
+        uid = os.getuid()
+        tmp_place = Path(f"/tmp/trial-copies-{uid}")
+        cases = [{"readable": ["/tmp"]}, {"readable": [str(tmp_place / "abcd1234")]},
+                 {"resources": {"skills/x": "/tmp"}}, {"copy": {".x": str(tmp_place / "abcd1234")}}]
+        if Path(f"/run/user/{uid}").is_dir():
+            cases.append({"readable": [f"/run/user/{uid}"]})
+        for setting in cases:
             with self.subTest(**{k: str(v) for k, v in setting.items()}):
                 self.plan({"a": dict(self.arm(), **setting)})
                 r = self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run")
                 self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
                 self.assertIn("where the runtime keeps every run's copied credentials", r.stderr)
-        # a run directory that recorded another container than this invocation's is held to its own as each run starts
-        other = Path(tempfile.mkdtemp(prefix="xdg-", dir="/tmp"))
+        # a path elsewhere under /tmp is no place a container can be, and is given as asked
+        other = Path(tempfile.mkdtemp(prefix="runtime-", dir="/tmp"))
         self.addCleanup(shutil.rmtree, other, True)
-        self.out.mkdir()
-        (self.out / ".copies-root").write_text(f"{other / f'trial-copies-{os.getuid()}'}\n")
         self.plan({"a": dict(self.arm(), readable=[str(other)])})
-        r = self.run_plan()
-        self.assertEqual(r.returncode, 2, r.stdout + r.stderr)
-        self.assertIn("where the runtime keeps every run's copied credentials", r.stderr)
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--dry-run")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
     def test_pruning_keeps_what_a_transcript_passes_through_as_cleanup_does(self):
         # one keep-set: a transcript reached through the private home's cache directory stays reachable once the run's
@@ -925,13 +937,58 @@ class LauncherTest(unittest.TestCase):
         record = {"finished": True, "transcripts": ["harness/home/.cache/../sessions/s1.jsonl"]}
         write(job / "record.json", json.dumps(record))
         self.assertIsNone(trial._transcripts_problem(record, job))
-        with mock.patch.dict(os.environ, XDG_RUNTIME_DIR=str(self.xdg)):
-            entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]})
-            self.assertTrue(trial._end_copies(out, entry, marker))
+        entry, marker = trial._start_copies(out, job, {"secret_env": ["TOKEN"]})
+        self.assertTrue(trial._end_copies(out, entry, marker))
         self.assertIsNone(trial._transcripts_problem(record, job))
         trial._prune(job)
         self.assertIsNone(trial._transcripts_problem(record, job))  # still reached as named
         self.assertEqual((job / record["transcripts"][0]).read_text(), "a session\n")
+
+    def test_what_a_copied_credential_held_as_it_was_delivered_is_what_is_replaced_in_what_the_run_prints(self):
+        # the source is refreshed the moment after it is copied: the run holds the copy, so what the run prints is kept
+        # with the copy's own strings replaced, not the source's new ones
+        delivered, refreshed = ("".join(["sess", "-", os.urandom(16).hex()]) for _ in range(2))
+        src = self.tmp / "sign-in"
+        write(src, delivered)
+        out = self.tmp / "out-unit"
+        job = out / "runs" / "r0123456789abcdef"
+        for d in (job / "work", job / "harness"):
+            d.mkdir(parents=True)
+        spec = {"name": "s", "dir": str(self.tmp / "scenarios" / "make-file"), "prompt": "create out.txt",
+                "followups": [], "sandbox": "none", "trial_inputs": []}
+        arm = {"executor": "launcher", "script": str(self.tmp / "launcher.py"), "model": "pretend-1",
+               "pass_env": ["FAKE_LAUNCHER_MODE"], "copy": {".fake-sign-in": str(src)}}
+        real = trial._copy_private
+
+        def then_refreshed(source, dest, *args):  # the tool signs in again, at its source, right after the copy
+            real(source, dest, *args)
+            src.write_text(refreshed)
+        with mock.patch.dict(os.environ, FAKE_LAUNCHER_MODE="leak"), mock.patch.object(trial, "_copy_private", then_refreshed):
+            env = trial.isolated_env(job, out, spec, arm)
+            status, _ = trial.run_launcher(arm, spec, job, env, out=out)
+        self.assertEqual(status, "ok")
+        printed = (job / "stderr.log").read_text() + (job / "events.jsonl").read_text()
+        self.assertIn("leaked", printed)  # it did print what it held
+        self.assertNotIn(delivered, printed)
+
+    def test_a_link_above_a_copies_directory_leaves_it_unremoved_and_the_home_cleared(self):
+        # a journaled copies' directory reached through a link on the way is never followed: recorded unremoved, its
+        # run held, while its home is cleared and the outcome recorded, as for any other copies' directory not verified
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        write(home / ".tool" / "cache", "a tool's own sign-in cache\n")
+        real = self.tmp / "elsewhere" / f"trial-copies-{os.getuid()}" / "abcd1234"
+        write(real / "0", "".join(["sess", "-", os.urandom(16).hex()]))
+        os.symlink(self.tmp / "elsewhere", self.tmp / "linked")
+        private = str(self.tmp / "linked" / f"trial-copies-{os.getuid()}" / "abcd1234")
+        write(out / ".copies" / "0123456789abcdef.json", json.dumps({
+            "private": private, "placed": [], "home": "runs/r0123456789abcdef/harness/home", "keep": []}))
+        trial._sweep_copies(out, "recheck")
+        log = [json.loads(l) for l in (out / "credentials.jsonl").read_text().splitlines()]
+        self.assertEqual(log[-1]["unremoved"], [private])
+        self.assertTrue((out / ".copies" / "0123456789abcdef.json").exists() and trial._held(out, job))
+        self.assertTrue((real / "0").is_file())  # never followed
+        self.assertFalse((home / ".tool").exists())
 
     def test_a_key_is_read_once_and_the_value_the_run_is_given_is_the_one_replaced_in_what_it_prints(self):
         # an env_file whose value depends on where it is read: the runtime reads it once, gives the run that value, and
@@ -952,8 +1009,7 @@ class LauncherTest(unittest.TestCase):
         secret = "".join(["sess", "-", os.urandom(16).hex()])
         self._signed_in(secret)
         proc = subprocess.Popen([sys.executable, str(SCRIPT), "run", str(self.tmp / "plan.json"), "--out", str(self.out)],
-                                env=dict(os.environ, FAKE_LAUNCHER_MODE="signed-in-slow", FAKE_LAUNCHER_MARK=secret,
-                                         XDG_RUNTIME_DIR=str(self.xdg)),
+                                env=dict(os.environ, FAKE_LAUNCHER_MODE="signed-in-slow", FAKE_LAUNCHER_MARK=secret),
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         try:
             for _ in range(600):
@@ -979,37 +1035,29 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self._no_credential_left(secret, r.stdout + r.stderr)
 
-    def test_a_run_directory_keeps_the_copies_container_it_first_used_in_a_place_every_sandbox_hides(self):
+    def test_every_run_of_this_user_keeps_its_copies_in_one_place_whatever_its_environment(self):
+        # two run directories under two runtime directories, the second making the first's readable: neither chooses
+        # where copies go, so both use this user's one container, which every sandbox hides and no readable path may
+        # expose; the runtime directories hold no container to expose
         secret = "".join(["sess", "-", os.urandom(16).hex()])
         self._signed_in(secret)
-        first, second = (Path(tempfile.mkdtemp(prefix="xdg-", dir="/tmp")) for _ in range(2))
-        for d in (first, second):
+        runtime_a, runtime_b = (Path(tempfile.mkdtemp(prefix="runtime-", dir="/tmp")) for _ in range(2))
+        for d in (runtime_a, runtime_b):
             self.addCleanup(shutil.rmtree, d, True)
-        self.assertEqual(self.run_plan("signed-in", FAKE_LAUNCHER_MARK=secret, XDG_RUNTIME_DIR=str(first)).returncode, 0)
-        recorded = (self.out / ".copies-root").read_text().strip()
-        self.assertEqual(recorded, str(first / f"trial-copies-{os.getuid()}"))
-        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out), "--repeats", "2", mode="signed-in",
-                         FAKE_LAUNCHER_MARK=secret, XDG_RUNTIME_DIR=str(second))
+        self.assertEqual(self.run_plan("signed-in", FAKE_LAUNCHER_MARK=secret, XDG_RUNTIME_DIR=str(runtime_a)).returncode, 0)
+        plan = json.loads((self.tmp / "plan.json").read_text())
+        plan["arms"]["a"]["readable"] = [str(runtime_a)]
+        write(self.tmp / "plan-b.json", json.dumps(plan))
+        out_b = self.tmp / "out-b"
+        r = self.run_cli("run", str(self.tmp / "plan-b.json"), "--out", str(out_b), mode="signed-in",
+                         FAKE_LAUNCHER_MARK=secret, XDG_RUNTIME_DIR=str(runtime_b))
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual((self.out / ".copies-root").read_text().strip(), recorded)  # every later invocation uses it
-        self.assertFalse((second / f"trial-copies-{os.getuid()}").exists())
-        # a runtime directory no sandbox hides is never where copies go, so no run can read another's there
-        if os.access("/var/tmp", os.W_OK):
-            exposed = Path(tempfile.mkdtemp(prefix="split-xdg-", dir="/var/tmp"))
-            self.addCleanup(shutil.rmtree, exposed, True)
-            out = self.tmp / "out-exposed"
-            r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(out), mode="signed-in",
-                             FAKE_LAUNCHER_MARK=secret, XDG_RUNTIME_DIR=str(exposed))
-            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-            self.assertEqual(list(exposed.iterdir()), [])
-            where = Path((out / ".copies-root").read_text().strip())
-            self.assertTrue(any(where.is_relative_to(d) for d in (Path("/run"), Path("/tmp"))), where)
-        # nor under the home, which a run may be given to read in part
-        out = self.tmp / "out-home"
-        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(out), mode="signed-in",
-                         FAKE_LAUNCHER_MARK=secret, XDG_RUNTIME_DIR=str(self.tmp))
-        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertFalse(Path((out / ".copies-root").read_text().strip()).is_relative_to(Path.home()))
+        for out in (self.out, out_b):
+            self.assertEqual((out / ".copies-root").read_text().strip(), str(self.root))
+        self.assertEqual(list(runtime_a.iterdir()) + list(runtime_b.iterdir()), [])
+        for out in (self.out, out_b):
+            self.out = out
+            self._no_credential_left(secret, r.stdout + r.stderr)
 
     def test_a_rejudge_whose_sign_in_fails_shows_none_of_what_the_launcher_said(self):
         secret = "".join(["sess", "-", os.urandom(16).hex()])
@@ -1085,7 +1133,7 @@ class LauncherTest(unittest.TestCase):
                               "    return {'made_file': run.file('out.txt').strip() == 'hi', 'nothing_held': not held}\n")
         self.plan(arms, judge=judge, sandbox=sandbox)
         env = {"FAKE_SECRET": secrets["secret_env"], "FAKE_COPIES_ROOT": str(root), "FAKE_SIBLING": str(sibling),
-               "XDG_RUNTIME_DIR": str(root.parent), "FAKE_SLOW_FLAG": str(self._flags() / "arm-slow"),
+               "FAKE_SLOW_FLAG": str(self._flags() / "arm-slow"),
                "FAKE_JUDGE_SLOW_FLAG": str(self._flags() / "judge-slow")}
         if key_source == "TRIAL_ENV_FILE":
             env["TRIAL_ENV_FILE"] = str(self.tmp / "shared.env")
@@ -1130,18 +1178,19 @@ class LauncherTest(unittest.TestCase):
         return outputs
 
     def _assert_matrix_clean(self, sets, outputs, root, sibling, sibling_secret, confined):
-        """No secret on disk, in the run directory or the copies' container (but the sibling's own, untouched), no
-        copies' directory left, no journal entry but one for a host job still awaiting its executor, and, confined,
-        nothing of the container visible but a run's own."""
+        """No secret on disk, in the run directory or this user's copies' container (but the sibling's own, untouched),
+        none of the case's copies' directories left, no journal entry but one for a host job still awaiting its
+        executor, and, confined, nothing of the container visible but a run's own."""
         values = [v for secrets in sets for v in secrets.values()]
         for value in values:
             self.assertNotIn(value, outputs)
-        for path in [*self.out.rglob("*"), *root.rglob("*")]:
-            if path.is_file() and not path.is_symlink():
-                data = path.read_bytes()
-                for value in values:
-                    self.assertNotIn(value.encode(), data, path)
-        self.assertEqual(sorted(p.name for p in root.iterdir()), [sibling.parent.name])  # only another run's copies
+        for path in [*self.out.rglob("*"), *root.rglob("*")]:  # the container is every run's: others come and go
+            with contextlib.suppress(OSError):
+                if path.is_file() and not path.is_symlink():
+                    data = path.read_bytes()
+                    for value in values:
+                        self.assertNotIn(value.encode(), data, path)
+        self.assertEqual(self._copies_left(), [])  # none of this case's copies' directories is left
         self.assertEqual(sibling.read_text(), sibling_secret)
         for p in (self.out / ".copies").iterdir() if (self.out / ".copies").exists() else []:
             entry = json.loads(p.read_text())  # kept only while its host has not answered, its home cleared meanwhile
@@ -1235,12 +1284,11 @@ class LauncherTest(unittest.TestCase):
                   for then in ("run", "recheck", "pairwise")]
         for sandbox, source, point, then in cases:
             with self.subTest(sandbox=sandbox, key=source, interrupted=point, recovered_by=then):
-                xdg = Path(tempfile.mkdtemp(prefix="xdg-", dir="/tmp"))
-                self.addCleanup(shutil.rmtree, xdg, True)
-                root = xdg / f"trial-copies-{os.getuid()}"
+                root = self.root
                 sibling_secret = "".join(["sess", "-", "sibling", "-", os.urandom(12).hex()])
-                sibling = root / "zzsiblng" / "0"  # another run's copy, in the same container
+                sibling = root / ("zz" + os.urandom(3).hex()) / "0"  # another run's copy, in this user's one container
                 write(sibling, sibling_secret)
+                self.addCleanup(shutil.rmtree, sibling.parent, True)
                 os.chmod(root, 0o700)
                 subprocess.run(["chmod", "-R", "u+rwx", str(self.out)], capture_output=True)
                 shutil.rmtree(self.out, ignore_errors=True)

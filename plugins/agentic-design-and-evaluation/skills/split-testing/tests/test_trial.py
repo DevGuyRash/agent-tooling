@@ -1779,6 +1779,33 @@ class TrialRunnerTest(unittest.TestCase):
         self.assertNotIn("pruned_build_output", res3[job3])
         self.assertTrue((out3 / "runs" / job3 / "work" / "target" / "CACHEDIR.TAG").exists())
 
+    def test_prune_build_output_keeps_an_artifact_and_a_keep_path_reached_through_links(self):
+        # A scenario's artifact and keep paths are kept where the filesystem takes them: an artifact named through a
+        # link into a Cargo target directory, and a keep path that is a link to a directory inside it, keep that
+        # directory, so a passing run keeps the artifact it was scored on (as origin/main does).
+        write(self.tmp / "scenarios" / "make-file" / "scenario.json", json.dumps({
+            "prompt": "create out.txt", "required": ["made_file", "tool_called"], "artifact": "reports/report.txt",
+            "keep": ["notes"]}))
+        command = ('echo hi > out.txt; faketool x; mkdir -p target/debug target/notes; '
+                   'printf "# This file is a cache directory tag created by cargo.\\n" > target/CACHEDIR.TAG; '
+                   'echo report > target/report.txt; echo note > target/notes/n.txt; echo built > target/debug/binary; '
+                   'ln -s target reports; ln -s target/notes notes')
+        write(self.tmp / "plan.json", json.dumps({
+            "name": "keep-links", "repeats": 1, "sandbox": self.default_sandbox,
+            "arms": {"good": {"executor": "command", "command": command}}, "scenarios": ["scenarios/make-file"]}))
+        r = self.run_cli("run", str(self.tmp / "plan.json"), "--out", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        job, result = next(iter(self.results().items()))
+        self.assertIs(result["passed"], True, result)
+        self.assertNotIn("artifact_missing", result)
+        self.assertNotIn("pruned_build_output", result)
+        work = self.out / "runs" / job / "work"
+        self.assertEqual((work / "reports" / "report.txt").read_text(), "report\n")
+        self.assertEqual((work / "notes" / "n.txt").read_text(), "note\n")
+        r = self.run_cli("recheck", str(self.out))
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertIs(self.results()[job]["passed"], True)
+
     def test_recheck_after_build_output_pruning_still_scores_the_run(self):
         build_command = ('echo hi > out.txt; faketool x; printf "%s" "$TRIAL_PROMPT" > prompt.txt; '
                          'mkdir -p target/debug; '
