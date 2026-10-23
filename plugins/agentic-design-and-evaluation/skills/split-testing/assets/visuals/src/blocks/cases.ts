@@ -6,7 +6,7 @@
 import { count, esc, fmtInt, fmtPct, inline, num, outcomeLabel, outcomeMark, prose, slug } from "../core";
 import { failureCause, failureDetail, oneLine } from "../failure";
 import type { RenderContext } from "../model";
-import { newcombe } from "../stats";
+import { casesWords, newcombe } from "../stats";
 import { judgeFor, outcomeOf, tally, Tally, TrialReport, TrialRun, TrialScenario, trialAxes } from "../trial-model";
 import { empty, frame, FrameInput, pos } from "./frame";
 
@@ -576,7 +576,7 @@ export function cases(input: CasesInput, ctx: RenderContext): string {
   const body = blocks.map(b => {
     const head = b.group ? (() => {
       const cs = b.items.flatMap(([e]) => e.kind === "case" ? [e.m] : e.ms), t = tally(cs.flatMap(m => m.runs));
-      return `<div class="av-cs-group"><h4 class="av-cs-group-label">${esc(b.group.label)}</h4><span class="av-muted">${plural(cs.length, "case")} · ${count(t.pass)}/${count(t.valid)} passed${t.invalid ? ` · ${fmtInt(t.invalid)} invalid` : ""}${b.group.note ? ` · ${esc(b.group.note)}` : ""}</span></div>`;
+      return `<div class="av-cs-group"><h4 class="av-cs-group-label">${esc(b.group.label)}</h4><span class="av-muted">${casesWords(cs.length, false)} · ${count(t.pass)}/${count(t.valid)} passed${t.invalid ? ` · ${fmtInt(t.invalid)} invalid` : ""}${b.group.note ? ` · ${esc(b.group.note)}` : ""}</span></div>`;
     })() : "";
     return head + b.items.map(([e, k]) => dossier(e, k)).join("");
   }).join("");

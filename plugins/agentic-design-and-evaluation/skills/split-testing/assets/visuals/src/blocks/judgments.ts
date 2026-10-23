@@ -11,7 +11,7 @@ import { diffRuns, diffStats, DiffLine, lineDiff, splitLines, wordDiff } from ".
 import { fingerprint } from "../identity";
 import type { Alternative, Comparison, Metric, MetricSummary, Observation } from "../comparison-model";
 import { evidenceAs, groupPath, judgmentMetric, metricOf, observationStatus, ordinalLevels, summarize, winMatrix } from "../comparison-stats";
-import { pooledCases } from "../stats";
+import { caseSplit, casesWords, pooledCases } from "../stats";
 import type { RenderContext } from "../model";
 import { empty, frame, FrameInput, pos } from "./frame";
 
@@ -317,6 +317,8 @@ export function preferences(input: PreferencesInput, ctx: RenderContext): string
   const rate = (c: WinCounts) => c.wins + c.losses > 0 ? c.wins / (c.wins + c.losses) : null;
   // Judgments pooled over cases that each were judged more than once repeat those cases: such a win rate has no interval.
   const spread = (id: string) => pooledCases(m.perCase.get(id)?.values() || []);
+  /** What an alternative's judgments pool, in the shared words: its cases, and evidence naming no case beside them. */
+  const pooledOver = (id: string) => casesWords(...caseSplit(m.perCase.get(id)?.keys() || []));
 
   // Lede.
   const named = judges.size;
@@ -355,7 +357,7 @@ export function preferences(input: PreferencesInput, ctx: RenderContext): string
     const order = judged.slice().sort((x, y) => (rate(counts(y)) ?? -1) - (rate(counts(x)) ?? -1) || ctx.arms.index(x) - ctx.arms.index(y));
     rates = `${subhead("Win rate", "wins ÷ (wins + losses), ties left out; the bar shows a 95% Wilson interval, except where judgments pooled over several cases repeat them; 50% is an even record")}<div class="av-scroll-x av-jv-scroll"><table class="av-jv-table"><thead><tr><th scope="col">Alternative</th><th scope="col" class="av-num">Wins</th><th scope="col" class="av-num">Losses</th><th scope="col" class="av-num">Ties</th><th scope="col">Win rate</th></tr></thead><tbody>${order.map(id => {
       const c = counts(id), n = c.wins + c.losses, p = rate(c), across = spread(id), ci = p === null || across ? null : wilson(c.wins, n);
-      return `<tr data-arm="${esc(id)}"><th scope="row">${ctx.arms.tag(id, { id: false })}</th><td class="av-num" data-label="Wins">${esc(fmtInt(c.wins))}</td><td class="av-num" data-label="Losses">${esc(fmtInt(c.losses))}</td><td class="av-num" data-label="Ties">${esc(fmtInt(c.ties))}</td><td data-label="Win rate">${p === null ? missing("no decisive judgments", "Every judgment of this alternative was a tie.") : `<div class="av-jv-rate"><span class="av-jv-track-wrap">${prefTrack(ctx, id, p, ci)}</span><span class="av-rate">${esc(fmtPct(p))}</span><span class="av-ci-text">${ci ? `${esc(fmtPct(ci[0]))}–${esc(fmtPct(ci[1]))} · ` : ""}${esc(fmtInt(n))} decisive${across ? ` across ${esc(fmtInt(across))} cases, no interval` : ""}</span></div>`}</td></tr>`;
+      return `<tr data-arm="${esc(id)}"><th scope="row">${ctx.arms.tag(id, { id: false })}</th><td class="av-num" data-label="Wins">${esc(fmtInt(c.wins))}</td><td class="av-num" data-label="Losses">${esc(fmtInt(c.losses))}</td><td class="av-num" data-label="Ties">${esc(fmtInt(c.ties))}</td><td data-label="Win rate">${p === null ? missing("no decisive judgments", "Every judgment of this alternative was a tie.") : `<div class="av-jv-rate"><span class="av-jv-track-wrap">${prefTrack(ctx, id, p, ci)}</span><span class="av-rate">${esc(fmtPct(p))}</span><span class="av-ci-text">${ci ? `${esc(fmtPct(ci[0]))}–${esc(fmtPct(ci[1]))} · ` : ""}${esc(fmtInt(n))} decisive${across ? ` across ${esc(pooledOver(id))}, no interval` : ""}</span></div>`}</td></tr>`;
     }).join("")}</tbody></table></div>`;
   }
 
@@ -373,14 +375,14 @@ export function preferences(input: PreferencesInput, ctx: RenderContext): string
       // Rankings of the same case repeat it: pooled over several such cases, the first-place share has no interval.
       const perCase = new Map<string, number>();
       valid.forEach((o, i) => { if (o.includes(id)) perCase.set(validCase[i], (perCase.get(validCase[i]) || 0) + 1); });
-      const across = pooledCases(perCase.values());
-      return { id, n: positions.length, firsts, mean: positions.length ? positions.reduce((s, p) => s + p, 0) / positions.length : null, positions, across, ci: positions.length && !across ? wilson(firsts, positions.length) : null };
+      const across = pooledCases(perCase.values()), over = casesWords(...caseSplit(perCase.keys()));
+      return { id, over, n: positions.length, firsts, mean: positions.length ? positions.reduce((s, p) => s + p, 0) / positions.length : null, positions, across, ci: positions.length && !across ? wilson(firsts, positions.length) : null };
     };
     const rows = alts.map(a => stat(a.id)).filter(s => s.n > 0).sort((x, y) => (x.mean ?? 99) - (y.mean ?? 99) || ctx.arms.index(x.id) - ctx.arms.index(y.id));
     const top = Math.max(1, ...spans);
     if (rows.length) rankings = `${subhead("Rankings", `${plural(valid.length, "full ordering")}; mean rank counts 1 as first place${partial ? "; some rankings list only some alternatives, so each alternative is averaged over the rankings that include it" : ""}`)}<div class="av-scroll-x av-jv-scroll"><table class="av-jv-table"><thead><tr><th scope="col">Alternative</th><th scope="col">First places</th><th scope="col" class="av-num">Mean rank</th><th scope="col">Positions</th></tr></thead><tbody>${rows.map(s => {
       const dist = Array.from({ length: top }, (_, i) => s.positions.filter(p => p === i + 1).length), peak = Math.max(1, ...dist);
-      return `<tr data-arm="${esc(s.id)}"><th scope="row">${ctx.arms.tag(s.id, { id: false })}</th><td data-label="First places"><div class="av-jv-rate"><span class="av-jv-track-wrap">${prefTrack(ctx, s.id, s.firsts / s.n, s.ci, "First-place share")}</span><span class="av-rate">${esc(fmtInt(s.firsts))} of ${esc(fmtInt(s.n))}</span><span class="av-ci-text">${esc(fmtPct(s.firsts / s.n))}${s.ci ? ` (${esc(fmtPct(s.ci[0]))}–${esc(fmtPct(s.ci[1]))})` : ""}${s.across ? ` · across ${esc(fmtInt(s.across))} cases, no interval` : ""}</span></div></td><td class="av-num" data-label="Mean rank">${s.mean === null ? "" : esc(s.mean.toFixed(2))}</td><td data-label="Positions"><span class="av-jv-dist" role="img" aria-label="${esc(`Times placed 1st to ${top}th: ${dist.join(", ")}`)}">${dist.map((c, i) => `<span class="av-jv-dist-cell" style="--h:${pos(c / peak)}" title="${esc(`${plural(c, "time")} in position ${i + 1}`)}"><i></i><b>${esc(fmtInt(c))}</b><small>${i + 1}</small></span>`).join("")}</span></td></tr>`;
+      return `<tr data-arm="${esc(s.id)}"><th scope="row">${ctx.arms.tag(s.id, { id: false })}</th><td data-label="First places"><div class="av-jv-rate"><span class="av-jv-track-wrap">${prefTrack(ctx, s.id, s.firsts / s.n, s.ci, "First-place share")}</span><span class="av-rate">${esc(fmtInt(s.firsts))} of ${esc(fmtInt(s.n))}</span><span class="av-ci-text">${esc(fmtPct(s.firsts / s.n))}${s.ci ? ` (${esc(fmtPct(s.ci[0]))}–${esc(fmtPct(s.ci[1]))})` : ""}${s.across ? ` · across ${esc(s.over)}, no interval` : ""}</span></div></td><td class="av-num" data-label="Mean rank">${s.mean === null ? "" : esc(s.mean.toFixed(2))}</td><td data-label="Positions"><span class="av-jv-dist" role="img" aria-label="${esc(`Times placed 1st to ${top}th: ${dist.join(", ")}`)}">${dist.map((c, i) => `<span class="av-jv-dist-cell" style="--h:${pos(c / peak)}" title="${esc(`${plural(c, "time")} in position ${i + 1}`)}"><i></i><b>${esc(fmtInt(c))}</b><small>${i + 1}</small></span>`).join("")}</span></td></tr>`;
     }).join("")}</tbody></table></div>${bad ? `<p class="av-jv-note">${esc(`${plural(bad, "ranking")} could not be read (fewer than two alternatives, a repeat, or an alternative that is not in this comparison) and ${bad === 1 ? "is" : "are"} left out.`)}</p>` : ""}`;
   }
 

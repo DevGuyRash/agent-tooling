@@ -5,7 +5,7 @@
  * out of both sides and counted beside them, never as failures. */
 import { esc, fmtInt, fmtPct, isNum, outcomeMark } from "../core";
 import type { RenderContext } from "../model";
-import { countPooling, newcombe, placement, Placement } from "../stats";
+import { casesWords, countPooling, newcombe, placement, Placement } from "../stats";
 import { armCases, tally, TrialReport, TrialRun, trialAxes } from "../trial-model";
 import { empty, frame, FrameInput, pos } from "./frame";
 
@@ -58,8 +58,11 @@ interface Row { kind: Kind; head?: string; a: Side; b: Side; note?: string; unev
 interface Computed { d: number; ci: [number, number] | null }
 /** How many cases the row's more pooled side spans. */
 const across = (r: Row) => Math.max(r.a.cases ?? 1, r.b.cases ?? 1);
+/** What the difference pools, from both sides, in the shared words: one count when both sides pool as many cases, else
+ * each side's own. */
+const acrossWords = (r: Row) => (r.a.cases ?? 1) === (r.b.cases ?? 1) ? casesWords(r.a.cases ?? 1, false) : `${casesWords(r.a.cases ?? 1, false)} (${r.a.text}) and ${casesWords(r.b.cases ?? 1, false)} (${r.b.text})`;
 /** Why a difference that has a value has no interval, in a few words. */
-const noCi = (r: Row) => across(r) > 1 ? `across ${across(r)} cases, no interval` : "no interval";
+const noCi = (r: Row) => across(r) > 1 ? `across ${acrossWords(r)}, no interval` : "no interval";
 
 const own = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 const strings = (v: unknown): string[] | null => Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : typeof v === "string" ? [v] : null;
@@ -227,7 +230,7 @@ export function contrast(input: ContrastInput, ctx: RenderContext): string {
       const holds = (arms: string[] | null, keep: string[] | null, name: string) => {
         const parts = [
           arms && arms.length < axes.arms.length ? arms.map(a => ctx.arms.label(a)).join(", ") : "",
-          keep && keep.length < axes.cases.length ? (keep.length <= 3 ? keep.join(", ") : `${keep.length} cases`) : "",
+          keep && keep.length < axes.cases.length ? (keep.length <= 3 ? keep.join(", ") : casesWords(keep.length, false)) : "",
         ].filter(Boolean);
         const text = parts.join(" · ");
         return text && text !== name ? `<span class="av-contrast-side-detail"${keep && keep.length > 3 ? ` title="${esc(keep.join(", "))}"` : ""}>${esc(text)}</span>` : "";
@@ -297,8 +300,8 @@ export function contrast(input: ContrastInput, ctx: RenderContext): string {
     const A = esc(r.a.text), B = esc(r.b.text);
     if (!c.ci && across(r) <= 1) return `<strong>No interval:</strong> how these counts were sampled is not given, so nothing says their runs are independent samples.` + (bar && r.kind !== "noise" ? ` The observed ${esc(fmtPoints(c.d))} ${c.d >= bar.value ? "meets" : "falls short of"} ${esc(barText)}.` : "");
     if (!c.ci) {
-      const pooled = r.kind === "noise" ? `<strong>Identical material,</strong> so this gap of ${esc(fmtPoints(Math.abs(c.d)).replace(/^\+/, ""))} points, pooled over ${across(r)} cases, is chance alone.`
-        : `<strong>Pooled over ${across(r)} cases, so no interval:</strong> runs on one case repeat that case rather than sample new cases. ${r.children?.length && by === "case" ? "Each case's own difference and 95% interval are listed under it." : "Each case's own difference and interval are in the per-case view."}`;
+      const pooled = r.kind === "noise" ? `<strong>Identical material,</strong> so this gap of ${esc(fmtPoints(Math.abs(c.d)).replace(/^\+/, ""))} points, pooled over ${esc(acrossWords(r))}, is chance alone.`
+        : `<strong>Pooled over ${esc(acrossWords(r))}, so no interval:</strong> runs on one case repeat that case rather than sample new cases. ${r.children?.length && by === "case" ? "Each case's own difference and 95% interval are listed under it." : "Each case's own difference and interval are in the per-case view."}`;
       return pooled + (bar && r.kind !== "noise" ? ` The observed ${esc(fmtPoints(c.d))} ${c.d >= bar.value ? "meets" : "falls short of"} ${esc(barText)}.` : "");
     }
     const place: Placement = placement(c.ci, 0);
@@ -328,7 +331,7 @@ export function contrast(input: ContrastInput, ctx: RenderContext): string {
       ? `<span class="av-contrast-passes" title="${esc(`${r.a.k} against ${r.b.k} passes, of ${r.a.n} valid runs each`)}">${r.a.k - r.b.k > 0 ? "+" : r.a.k - r.b.k < 0 ? "−" : "±"}${Math.abs(r.a.k - r.b.k)} ${Math.abs(r.a.k - r.b.k) === 1 ? "pass" : "passes"}</span>` : "";
     const place = c && c.ci ? placement(c.ci, 0) : null;
     const chip = compact && place ? `<span class="av-contrast-place av-contrast-place--${place}">${place === "spans" ? "includes 0" : `${place} 0`}</span>` : "";
-    const num = `<div class="av-contrast-num">${c ? `<span class="av-contrast-d">${esc(fmtPoints(c.d))}<span class="av-contrast-unit">pts</span></span><span class="av-contrast-ci-text">${c.ci ? `${esc(fmtPoints(c.ci[0]))} to ${esc(fmtPoints(c.ci[1]))}` : noCi(r)}</span>${passes}${chip}` : '<span class="av-contrast-d av-contrast-d--none">—</span>'}</div>`;
+    const num = `<div class="av-contrast-num">${c ? `<span class="av-contrast-d">${esc(fmtPoints(c.d))}<span class="av-contrast-unit">pts</span></span><span class="av-contrast-ci-text">${c.ci ? `${esc(fmtPoints(c.ci[0]))} to ${esc(fmtPoints(c.ci[1]))}` : esc(noCi(r))}</span>${passes}${chip}` : '<span class="av-contrast-d av-contrast-d--none">—</span>'}</div>`;
     const flags = `${r.uneven ? '<span class="av-chip av-chip--warn" title="One side has its valid runs spread over the cases very differently (a share more than 10 points apart, or a case with valid runs on one side only), so its pooled rate weights the cases differently. Read the per-case rows.">uneven case mix</span>' : ""}`;
     const label = compact
       ? `<div class="av-contrast-label">${r.head ? `<div class="av-contrast-head">${r.head}</div>` : ""}<div class="av-contrast-minis">${sideLine(r.a, true, r.a.arm !== r.b.arm)}<span class="av-contrast-vs">vs</span>${sideLine(r.b, true, r.a.arm !== r.b.arm)}</div></div>`

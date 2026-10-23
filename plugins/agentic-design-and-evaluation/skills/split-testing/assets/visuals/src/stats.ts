@@ -1,6 +1,6 @@
 /** Interval arithmetic beyond a single proportion: the difference between two
  * independent pass rates, and where its interval lies relative to a value. */
-import { isNum, wilson } from "./core";
+import { fmtInt, isNum, wilson } from "./core";
 
 /** The two-sided 95% normal quantile to the precision Newcombe's published
  * tables use; 1.96 moves some fourth decimals (6/7 − 2/7 gives 0.8063, not 0.8062). */
@@ -54,3 +54,27 @@ export function placement(interval: [number, number], at = 0): Placement {
   const eps = 1e-9;
   return interval[0] > at + eps ? "above" : interval[1] < at - eps ? "below" : "spans";
 }
+
+// ------------------------------------------------------------------ cases in words
+
+/** The stand-in id views give evidence naming no case, to filter it as a group of its own. */
+export const NO_CASE = "\u0000no case";
+/** Evidence naming no case, in words: a group weighed beside the cases, never counted as one. */
+export const NO_CASE_WORDS = "evidence naming no case";
+/** How many named cases a list of case ids holds, and whether evidence naming no case ("" or NO_CASE) is among them. */
+export function caseSplit(ids: Iterable<string>): [number, boolean] {
+  const all = [...new Set(ids)], none = all.filter(id => id === "" || id === NO_CASE);
+  return [all.length - none.length, none.length > 0];
+}
+/** The one wording of what a value, an average or a coverage statement is taken over: the named cases, `where` after
+ * them, then evidence naming no case beside them ("1 case in both, plus evidence naming no case"). `bare` leaves out the
+ * noun ("2 both ran"). Every statement of what was pooled, averaged or covered builds its count here, so none can count
+ * that evidence as a case. */
+export function casesWords(named: number, noCase: boolean, where = "", bare = false): string {
+  const at = where ? ` ${where}` : "";
+  if (!named && noCase) return `${NO_CASE_WORDS}${at}`;
+  const count = `${fmtInt(named)}${bare ? "" : named === 1 ? " case" : " cases"}${at}`;
+  return noCase ? `${count}, plus ${NO_CASE_WORDS}` : count;
+}
+/** How an average weighs its parts: every case equally, or, with evidence naming no case among them, each part equally. */
+export const eachWeighted = (noCase: boolean) => noCase ? "each weighted equally" : "each case weighted equally";

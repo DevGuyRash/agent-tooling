@@ -5,7 +5,7 @@ import { attrs, count, esc, fmtInt, fmtNum, fmtPct, inline, isNum, isOutcome, ni
 import { mermaidDiagram } from "../figures";
 import type { RenderContext } from "../model";
 import { empty, frame, FrameInput, pos } from "./frame";
-import { countPooling } from "../stats";
+import { casesWords, countPooling } from "../stats";
 import { armCases } from "../trial-model";
 
 type Tone = "neutral" | "pass" | "fail" | "invalid" | "warn" | "accent";
@@ -100,7 +100,7 @@ function counted(k0: number, n0: number, pooling: number | null) {
   return { k, n, value: n ? k / n : null, lo: ci?.[0] ?? null, hi: ci?.[1] ?? null, pooled: pooling };
 }
 /** How a pooled or unsampled count reads in place of its interval. */
-const noInterval = (pooled: number | null | undefined) => pooled ? `across ${fmtInt(pooled)} cases, no interval` : "no interval";
+const noInterval = (pooled: number | null | undefined) => pooled ? `across ${casesWords(pooled, false)}, no interval` : "no interval";
 
 export function intervals(input: IntervalsInput, ctx: RenderContext): string {
   const rows = (input.rows || []).map(r => {

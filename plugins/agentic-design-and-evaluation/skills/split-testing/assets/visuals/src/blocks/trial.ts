@@ -6,7 +6,7 @@
 import { attrs, axisTicks, count, esc, fmtDelta, fmtInt, fmtNum, fmtPct, fmtSeconds, fmtUsd, inline, isNum, logTicks, median, num, Outcome, secondsUnit, outcomeBadge, outcomeLabel, outcomeMark, prose, quantile, wilson } from "../core";
 import type { RenderContext } from "../model";
 import { failureCause } from "../failure";
-import { countPooling } from "../stats";
+import { casesWords, countPooling } from "../stats";
 import { armCases, armTally, CasePair, caseChecks, checkTable, costMeasures, displayPath, invalidReason, judgePassWhen, judgeQuestion, outcomeOf, pairedOrder, scenarioOf, tally, TrialReport, TrialRun, trialAxes } from "../trial-model";
 import { empty, frame, FrameInput, pos } from "./frame";
 
@@ -107,7 +107,7 @@ function mentionsHtml(ids: string[], pairs: CasePair[], ctx: RenderContext): str
   const rest = axes.cases.filter(c => !covered.has(c) && !isVariant.has(c));
   const restVariants = pairs.filter(p => rest.includes(p.base) && !covered.has(p.variant)).map(p => p.variant);
   const restItem = named.length && rest.length
-    ? `<li class="av-mention av-mention--rest"><span class="av-mention-name"${attrs({ title: rest.join(", ") })}>${rest.length === 1 ? `The one case the rule does not name, <code>${esc(rest[0])}</code>` : `The other ${rest.length} cases together`}</span>${counts(rest)}${restVariants.length ? `<span class="av-mention-variant"><span class="av-mention-vlabel">↳ their variants</span>${counts(restVariants)}</span>` : ""}</li>`
+    ? `<li class="av-mention av-mention--rest"><span class="av-mention-name"${attrs({ title: rest.join(", ") })}>${rest.length === 1 ? `The one case the rule does not name, <code>${esc(rest[0])}</code>` : `The other ${casesWords(rest.length, false)} together`}</span>${counts(rest)}${restVariants.length ? `<span class="av-mention-variant"><span class="av-mention-vlabel">↳ their variants</span>${counts(restVariants)}</span>` : ""}</li>`
     : "";
   const key = arms.length > 1 && arms.length <= 8 ? `<p class="av-mention-key">${arms.map(a => ctx.arms.tag(a, { id: false })).join("")}</p>` : "";
   return `<div class="av-mentions"><h4 class="av-eyebrow">Named in the rule · passed / valid runs</h4>${key}<ul class="av-mention-list">${items}${restItem}</ul><p class="av-mention-note">Counts only: the report does not apply the rule; reading these counts against it is left to the reader.</p></div>`;
@@ -257,7 +257,7 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
     const thin = r.n > 0 && r.n < 5 && !bad ? `<span class="av-chip av-chip--warn" title="Too few valid runs for a reliable rate">n = ${r.n}</span>` : "";
     const badChip = bad ? `<span class="av-chip av-chip--warn" title="More passes than valid runs: these counts cannot be a rate">counts invalid</span>` : "";
     const isBase = !byCase && r.arm === input.baseline;
-    const label = `${bad ? `counts invalid: ${r.k} of ${r.n}` : p === null ? "no valid runs" : pooled ? `${r.k} of ${r.n} valid runs passed across ${across} cases, pooled counts with no interval` : `${r.k} of ${r.n} valid runs passed, ${fmtPct(p)}`}${ci ? `, 95% interval ${fmtPct(ci[0])} to ${fmtPct(ci[1])}` : r.unstated && !pooled && p !== null ? ", no interval: how these counts were sampled is not given" : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
+    const label = `${bad ? `counts invalid: ${r.k} of ${r.n}` : p === null ? "no valid runs" : pooled ? `${r.k} of ${r.n} valid runs passed across ${casesWords(across, false)}, pooled counts with no interval` : `${r.k} of ${r.n} valid runs passed, ${fmtPct(p)}`}${ci ? `, 95% interval ${fmtPct(ci[0])} to ${fmtPct(ci[1])}` : r.unstated && !pooled && p !== null ? ", no interval: how these counts were sampled is not given" : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
     const variant = byCase ? variantOf.get(r.case!) : undefined;
     const note = r.note ?? (byCase ? undefined : ctx.arms.note(r.arm!));
     const name = byCase
@@ -268,7 +268,7 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
     return `<div class="av-ladder-row${variant ? " av-ladder-row--variant" : ""}" role="row"${attrs(byCase ? { "data-case": r.case } : { "data-arm": r.arm })}>
 <div class="av-ladder-label" role="rowheader">${name}${note ? `<span class="av-ladder-note">${esc(note)}</span>` : ""}${flags}</div>
 <div class="av-ladder-track${p === null ? " av-ladder-track--empty" : ""}" role="cell" style="${style}" aria-label="${esc(label)}">${seg}${ci ? '<span class="av-ci"></span>' : ""}${p === null ? `<span class="av-ladder-none">${bad ? "counts invalid" : "no valid runs"}</span>` : pooled ? '<span class="av-share"></span>' : '<span class="av-pt"></span>'}</div>
-<div class="av-ladder-num" role="cell"><span class="av-frac${bad ? " av-frac--bad" : ""}"><b>${r.k}</b>/${r.n}</span>${pooled && !bad ? `<span class="av-across">across ${across} cases</span>` : `<span class="av-rate">${bad ? "—" : fmtPct(p)}</span>`}${ci ? `<span class="av-ci-text">${fmtPct(ci[0])}–${fmtPct(ci[1])}</span>` : r.unstated && !pooled && !bad && p !== null ? '<span class="av-across">no interval</span>' : ""}</div>
+<div class="av-ladder-num" role="cell"><span class="av-frac${bad ? " av-frac--bad" : ""}"><b>${r.k}</b>/${r.n}</span>${pooled && !bad ? `<span class="av-across">across ${casesWords(across, false)}</span>` : `<span class="av-rate">${bad ? "—" : fmtPct(p)}</span>`}${ci ? `<span class="av-ci-text">${fmtPct(ci[0])}–${fmtPct(ci[1])}</span>` : r.unstated && !pooled && !bad && p !== null ? '<span class="av-across">no interval</span>' : ""}</div>
 </div>`;
   };
   const body = ordered.map(item => {
@@ -341,7 +341,7 @@ export function tapestry(input: TapestryInput, ctx: RenderContext): string {
     const groups = [...groupsIn.map(g => ({ ...g, cases: rows.filter(c => g.cases.includes(c)) })), { label: "Other cases", note: undefined, cases: rows.filter(c => !groupsIn.some(g => g.cases.includes(c))) }].filter(g => g.cases.length);
     for (const g of groups) {
       const t = tally(data.runs.filter(r => g.cases.includes(r.scenario) && arms.includes(r.arm)));
-      body += `<div class="av-tap-row av-tap-row--group" role="row"><div class="av-tap-group" role="rowheader"><span class="av-tap-group-label">${esc(g.label)}</span><span class="av-muted">${plural(g.cases.length, "case")} · ${t.pass}/${t.valid} passed${t.invalid ? ` · ${t.invalid} invalid` : ""}${g.note ? ` · ${esc(g.note)}` : ""}</span></div></div>`;
+      body += `<div class="av-tap-row av-tap-row--group" role="row"><div class="av-tap-group" role="rowheader"><span class="av-tap-group-label">${esc(g.label)}</span><span class="av-muted">${casesWords(g.cases.length, false)} · ${t.pass}/${t.valid} passed${t.invalid ? ` · ${t.invalid} invalid` : ""}${g.note ? ` · ${esc(g.note)}` : ""}</span></div></div>`;
       body += g.cases.filter(c => !placed.has(c)).map(c => { placed.add(c); return line(c); }).join("");
     }
   } else body = rows.map(line).join("");
@@ -425,7 +425,7 @@ function checksByCheck(input: ChecksInput, ctx: RenderContext, data: TrialReport
   if (!rows.length && !judged.length) return frame("checks", input, empty("No pass/fail checks were recorded."));
   const head = `<thead><tr><th scope="col" class="av-heat-corner">Check</th>${arms.map(a => `<th scope="col">${ctx.arms.tag(a, { id: false })}</th>`).join("")}</tr></thead>`;
   const caseCount = new Set(data.runs.map(r => r.scenario)).size;
-  const line = (r: typeof rows[number]) => `<tr><th scope="row">${checkName(r.name)}${r.required && r.requiredIn.length < caseCount ? ` <span class="av-chip av-chip--req" title="${esc(r.requiredIn.join(", "))}">in ${r.requiredIn.length} of ${caseCount} cases</span>` : ""}</th>${arms.map(a => heat(r.cells[a].k, r.cells[a].n, !r.required)).join("")}</tr>`;
+  const line = (r: typeof rows[number]) => `<tr><th scope="row">${checkName(r.name)}${r.required && r.requiredIn.length < caseCount ? ` <span class="av-chip av-chip--req" title="${esc(r.requiredIn.join(", "))}">in ${r.requiredIn.length} of ${casesWords(caseCount, false)}</span>` : ""}</th>${arms.map(a => heat(r.cells[a].k, r.cells[a].n, !r.required)).join("")}</tr>`;
   const span = arms.length + 1;
   const fold = (summary: string, names: string[]) => names.length ? `<tr class="av-ck-fold"><td colspan="${span}"><details><summary>${esc(summary)}</summary>${chipList(names)}</details></td></tr>` : "";
   const group = (label: string, note: string, items: typeof rows, folded = "") => items.length || folded ? `<tr class="av-heat-group"><th scope="rowgroup" colspan="${span}">${esc(label)} <span class="av-muted">· ${esc(note)}</span></th></tr>${items.map(line).join("")}${folded}` : "";
@@ -507,7 +507,7 @@ export function pairwise(input: PairwiseInput, ctx: RenderContext): string {
       const bar = segs.map(k => s[k] ? `<span class="av-duel-seg av-duel-seg--${k}" style="flex:${s[k]}" title="${esc(`${words[k]}: ${s[k]}`)}">${s[k] / total > .1 && k !== "inconsistent" ? s[k] : ""}</span>` : "").join("");
       const decisive = s.a_wins + s.b_wins;
       const rate = !decisive ? '<span class="av-muted">no decisive pairs</span>'
-        : pooledCases ? `<span class="av-frac"><b>${s.a_wins}</b>/${decisive}</span> <span class="av-across">decisive pairs won, across ${pooledCases} cases</span>`
+        : pooledCases ? `<span class="av-frac"><b>${s.a_wins}</b>/${decisive}</span> <span class="av-across">decisive pairs won, across ${casesWords(pooledCases, false)}</span>`
         : s.rate !== null ? `${fmtPct(s.rate)}${s.interval ? ` <span class="av-ci-text">${fmtPct(s.interval[0])}–${fmtPct(s.interval[1])}</span>` : ""}` : `<span class="av-frac"><b>${s.a_wins}</b>/${decisive}</span>`;
       return `<div class="av-duel-row${strong ? " av-duel-row--overall" : ""}"><span class="av-duel-label">${esc(label)}<span class="av-muted"> · ${plural(s.total, "pair")}</span></span><div class="av-duel-track"><div class="av-duel-bar" style="width:${pos(s.total / maxTotal)}" role="img" aria-label="${esc(`${label}: ${ctx.arms.label(a)} preferred ${s.a_wins}, ties ${s.tie}, ${ctx.arms.label(b)} preferred ${s.b_wins}, order-inconsistent ${s.inconsistent}, invalid ${s.invalid}`)}">${bar}</div>${s.inconsistent ? `<span class="av-duel-split" title="the two orders disagree">${s.inconsistent} split</span>` : ""}</div><span class="av-duel-rate">${rate}</span></div>`;
     };

@@ -1,7 +1,7 @@
 /** The document `trial.py report RUN_DIR` writes, and derivations from it.
  * Fields are read defensively: older run directories omit some of them. */
 import { isNum, median, Outcome, wilson } from "./core";
-import { pooledCases } from "./stats";
+import { caseSplit, casesWords, pooledCases } from "./stats";
 
 export interface TrialRun {
   job?: string; scenario: string; arm: string; repeat?: number; status?: string;
@@ -54,17 +54,20 @@ export function outcomeOf(run: TrialRun): Outcome {
 }
 
 /** Counts of a set of runs. `cases` is how many cases (scenarios) its valid runs come from. */
-export interface Tally { pass: number; fail: number; invalid: number; runs: number; valid: number; rate: number | null; interval: [number, number] | null; cases: number }
+export interface Tally { pass: number; fail: number; invalid: number; runs: number; valid: number; rate: number | null; interval: [number, number] | null; cases: number;
+  /** The cases its valid runs come from, in the shared words (casesWords). */
+  over: string }
 /** Counts with a 95% Wilson interval only when the valid runs come from one case. Runs on one case repeat that
  * case rather than sample new cases, so an interval over several cases' runs would overstate certainty: pooled
  * counts are reported as counts ("3 of 6 runs passed across 2 cases"), and each case keeps its own interval. */
 export function tally(runs: TrialRun[]): Tally {
   let pass = 0, fail = 0, invalid = 0;
   const perCase = new Map<string, number>();
-  for (const r of runs) { const o = outcomeOf(r); if (o === "pass") pass++; else if (o === "fail") fail++; else invalid++; if (o !== "invalid") perCase.set(String(r.scenario), (perCase.get(String(r.scenario)) || 0) + 1); }
+  const key = (r: TrialRun) => r.scenario === undefined || r.scenario === null ? "" : String(r.scenario);
+  for (const r of runs) { const o = outcomeOf(r); if (o === "pass") pass++; else if (o === "fail") fail++; else invalid++; if (o !== "invalid") perCase.set(key(r), (perCase.get(key(r)) || 0) + 1); }
   const valid = pass + fail;
   // A trial's runs repeat their case by design: the shared rule withholds an interval over several cases.
-  return { pass, fail, invalid, runs: runs.length, valid, rate: valid ? pass / valid : null, interval: pooledCases(perCase.values(), true) ? null : wilson(pass, valid), cases: perCase.size };
+  return { pass, fail, invalid, runs: runs.length, valid, rate: valid ? pass / valid : null, interval: pooledCases(perCase.values(), true) ? null : wilson(pass, valid), cases: perCase.size, over: casesWords(...caseSplit(perCase.keys())) };
 }
 /** Every run of one arm, counted, with the runtime's word on its interval taken as final: `trial.py report`
  * gives an arm's interval as null when its runs span more than one case. */
@@ -85,7 +88,7 @@ export function armCases(data: TrialReport | undefined, arm: unknown): Map<strin
 /** Pooled counts in words: "3 of 6 runs passed across 2 cases", or the rate when one case holds them. */
 export function countsText(t: Tally): string {
   if (!t.valid) return "no valid runs";
-  return t.cases > 1 ? `${t.pass} of ${t.valid} runs passed across ${t.cases} cases` : `${t.pass} of ${t.valid} runs passed`;
+  return t.cases > 1 ? `${t.pass} of ${t.valid} runs passed across ${t.over}` : `${t.pass} of ${t.valid} runs passed`;
 }
 
 /** Arms and cases in a reading order: the plan's order where it has one. */

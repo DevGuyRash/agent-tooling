@@ -1046,4 +1046,63 @@ test("evidence naming no case is one group beside the cases, worded alike by eve
   H.includes(render({ type: "shifts" }, pair), "50% with each weighted equally", "the shifts' words");
 });
 
+test("round 16: the judgment tables and a difference word their cases as the shared builder does, a difference from both sides", () => {
+  // 1. Four judgments of x against y, two on shared and two naming no case: each alternative's four decisive judgments
+  // pool one case and that evidence.
+  const judged = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "p", kind: "preference", primary: true }],
+    preferences: [["shared", "x"], ["shared", "y"], [null, "x"], [null, "y"]].map(([c, winner]) => ({ a: "x", b: "y", winner, ...(c ? { case: c } : {}) })) };
+  const prefs = text(V.renderBlock({ type: "preferences", metric: "p" }, V.createContext({ comparison: judged })));
+  H.includes(prefs, "across 1 case, plus evidence naming no case, no interval", "the win-rate table"); H.excludes(prefs, "across 2 cases", "never two cases");
+  // The same with four rankings: the win-rate table and the first-place table.
+  const ranked = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "p", kind: "preference", primary: true }],
+    rankings: [["shared", ["x", "y"]], ["shared", ["y", "x"]], [null, ["x", "y"]], [null, ["y", "x"]]].map(([c, order]) => ({ order, ...(c ? { case: c } : {}) })) };
+  const ranks = text(V.renderBlock({ type: "preferences", metric: "p" }, V.createContext({ comparison: ranked })));
+  H.equal((ranks.match(/across 1 case, plus evidence naming no case, no interval/g) || []).length >= 2, true, "both tables say one case, plus that evidence");
+  H.excludes(ranks, "across 2 cases", "never two cases");
+  // 2. x has two binary observations on each of c1 and c2; y two on c1 and two naming no case. Either way round, the
+  // difference says what both sides pooled: c1 in both, c2 only in x, and evidence naming no case only in y.
+  const obs = (alternative, c, value) => ({ alternative, ...(c ? { case: c } : {}), metric: "ok", value });
+  const sided = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "ok", kind: "binary" }],
+    observations: [obs("x", "c1", true), obs("x", "c1", false), obs("x", "c2", true), obs("x", "c2", false), obs("y", "c1", true), obs("y", "c1", false), obs("y", null, true), obs("y", null, false)] };
+  H.includes(V.difference(sided, "ok", "x", "y").method, "pooled over 1 case both have; 1 case only the first has; evidence naming no case only the second has", "x minus y");
+  H.includes(V.difference(sided, "ok", "y", "x").method, "pooled over 1 case both have; evidence naming no case only the first has; 1 case only the second has", "y minus x");
+});
+
+test("sweep (a selected matrix): on every page, each count of cases a value, average or coverage states is the shared builder's for that evidence", () => {
+  // Every alternative's evidence holds one named case and evidence naming no case, with repeats, so every pooled value,
+  // average and coverage statement must say "1 case …, plus evidence naming no case" and none may count two cases.
+  const named = (c, rows) => rows.map(r => ({ ...r, ...(c ? { case: c } : {}) }));
+  const pair = (a, b) => [a, b];
+  const observations = (metric, values) => ["x", "y"].flatMap(alternative => ["c1", null].flatMap(c => named(c, values.map(value => ({ alternative, metric, value, ...(metric === "n" ? { n: 2 } : {}) })))));
+  const kinds = {
+    binary: { metrics: [{ id: "m", kind: "binary", primary: true, better: "higher" }], observations: observations("m", [true, false]) },
+    count: { metrics: [{ id: "n", kind: "count", primary: true, better: "higher" }], observations: observations("n", [1, 2]) },
+    numeric: { metrics: [{ id: "m", kind: "numeric", primary: true, better: "higher" }], observations: observations("m", [1, 3]) },
+    ordinal: { metrics: [{ id: "m", kind: "ordinal", levels: ["bad", "good"], primary: true, better: "higher" }], observations: observations("m", ["bad", "good"]) },
+    "rank observations": { metrics: [{ id: "m", kind: "rank", primary: true }], observations: ["c1", null].flatMap(c => named(c, [{ alternative: "x", metric: "m", value: 1 }, { alternative: "y", metric: "m", value: 2 }, { alternative: "x", metric: "m", value: 2 }, { alternative: "y", metric: "m", value: 1 }])) },
+    judgments: { metrics: [{ id: "m", kind: "preference", primary: true }], preferences: ["c1", null].flatMap(c => named(c, [{ a: "x", b: "y", winner: "x" }, { a: "x", b: "y", winner: "y" }])) },
+    rankings: { metrics: [{ id: "m", kind: "rank", primary: true }, { id: "p", kind: "preference" }], rankings: ["c1", null].flatMap(c => named(c, [{ order: ["x", "y"] }, { order: ["y", "x"] }])) },
+  };
+  const counted = /(across|pooled over|averaged over|balanced over|covers only)( the)? (\d+) (cases?)([^.;:)]*)/g;
+  for (const [kind, extra] of Object.entries(kinds)) {
+    const data = { alternatives: [{ id: "x" }, { id: "y" }], baseline: "x", ...extra };
+    const pages = {
+      report: V.renderReport(V.comparisonReport(data, {})),
+      collection: V.renderReport(V.collectionReport({ members: [{ id: "a", comparison: data }, { id: "b", comparison: data }], pairs: [{ a: "a", b: "b" }] })),
+      pair: V.renderReport(V.compareReport({ members: [{ id: "a", comparison: data }, { id: "b", comparison: data }] }, "a", "b")),
+    };
+    for (const [page, html] of Object.entries(pages)) {
+      const said = text(html).replace(/&quot;/g, '"');
+      H.ok([...said.matchAll(counted)].length > 0, `${kind} (${page}): the page states what its values pool`);
+      for (const m of said.matchAll(counted)) {
+        H.equal(m[3], "1", `${kind} (${page}): "${m[0].trim()}" counts the named cases only`);
+        H.ok(/, plus evidence naming no case/.test(m[5]), `${kind} (${page}): "${m[0].trim()}" says the evidence naming no case beside them`);
+      }
+      H.excludes(said, "2 cases", `${kind} (${page}): nothing counts two cases`);
+      const cases = said.match(/Cases: [^.]*\./);
+      if (cases) H.equal(cases[0], "Cases: 1 case in both, plus evidence naming no case.", `${kind} (${page}): the Cases line`);
+    }
+  }
+});
+
 H.report();

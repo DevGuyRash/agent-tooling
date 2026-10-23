@@ -326,12 +326,14 @@ define("core", ["require", "exports"], function (require, exports) {
 define("stats", ["require", "exports", "core"], function (require, exports, core_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.Z95 = void 0;
+    exports.eachWeighted = exports.NO_CASE_WORDS = exports.NO_CASE = exports.Z95 = void 0;
     exports.validCount = validCount;
     exports.pooledCases = pooledCases;
     exports.countPooling = countPooling;
     exports.newcombe = newcombe;
     exports.placement = placement;
+    exports.caseSplit = caseSplit;
+    exports.casesWords = casesWords;
     /** The two-sided 95% normal quantile to the precision Newcombe's published
      * tables use; 1.96 moves some fourth decimals (6/7 − 2/7 gives 0.8063, not 0.8062). */
     exports.Z95 = 1.959963984540054;
@@ -380,6 +382,30 @@ define("stats", ["require", "exports", "core"], function (require, exports, core
         const eps = 1e-9;
         return interval[0] > at + eps ? "above" : interval[1] < at - eps ? "below" : "spans";
     }
+    // ------------------------------------------------------------------ cases in words
+    /** The stand-in id views give evidence naming no case, to filter it as a group of its own. */
+    exports.NO_CASE = "\u0000no case";
+    /** Evidence naming no case, in words: a group weighed beside the cases, never counted as one. */
+    exports.NO_CASE_WORDS = "evidence naming no case";
+    /** How many named cases a list of case ids holds, and whether evidence naming no case ("" or NO_CASE) is among them. */
+    function caseSplit(ids) {
+        const all = [...new Set(ids)], none = all.filter(id => id === "" || id === exports.NO_CASE);
+        return [all.length - none.length, none.length > 0];
+    }
+    /** The one wording of what a value, an average or a coverage statement is taken over: the named cases, `where` after
+     * them, then evidence naming no case beside them ("1 case in both, plus evidence naming no case"). `bare` leaves out the
+     * noun ("2 both ran"). Every statement of what was pooled, averaged or covered builds its count here, so none can count
+     * that evidence as a case. */
+    function casesWords(named, noCase, where = "", bare = false) {
+        const at = where ? ` ${where}` : "";
+        if (!named && noCase)
+            return `${exports.NO_CASE_WORDS}${at}`;
+        const count = `${(0, core_1.fmtInt)(named)}${bare ? "" : named === 1 ? " case" : " cases"}${at}`;
+        return noCase ? `${count}, plus ${exports.NO_CASE_WORDS}` : count;
+    }
+    /** How an average weighs its parts: every case equally, or, with evidence naming no case among them, each part equally. */
+    const eachWeighted = (noCase) => noCase ? "each weighted equally" : "each case weighted equally";
+    exports.eachWeighted = eachWeighted;
 });
 define("trial-model", ["require", "exports", "core", "stats"], function (require, exports, core_2, stats_1) {
     "use strict";
@@ -418,6 +444,7 @@ define("trial-model", ["require", "exports", "core", "stats"], function (require
     function tally(runs) {
         let pass = 0, fail = 0, invalid = 0;
         const perCase = new Map();
+        const key = (r) => r.scenario === undefined || r.scenario === null ? "" : String(r.scenario);
         for (const r of runs) {
             const o = outcomeOf(r);
             if (o === "pass")
@@ -427,11 +454,11 @@ define("trial-model", ["require", "exports", "core", "stats"], function (require
             else
                 invalid++;
             if (o !== "invalid")
-                perCase.set(String(r.scenario), (perCase.get(String(r.scenario)) || 0) + 1);
+                perCase.set(key(r), (perCase.get(key(r)) || 0) + 1);
         }
         const valid = pass + fail;
         // A trial's runs repeat their case by design: the shared rule withholds an interval over several cases.
-        return { pass, fail, invalid, runs: runs.length, valid, rate: valid ? pass / valid : null, interval: (0, stats_1.pooledCases)(perCase.values(), true) ? null : (0, core_2.wilson)(pass, valid), cases: perCase.size };
+        return { pass, fail, invalid, runs: runs.length, valid, rate: valid ? pass / valid : null, interval: (0, stats_1.pooledCases)(perCase.values(), true) ? null : (0, core_2.wilson)(pass, valid), cases: perCase.size, over: (0, stats_1.casesWords)(...(0, stats_1.caseSplit)(perCase.keys())) };
     }
     /** Every run of one arm, counted, with the runtime's word on its interval taken as final: `trial.py report`
      * gives an arm's interval as null when its runs span more than one case. */
@@ -457,7 +484,7 @@ define("trial-model", ["require", "exports", "core", "stats"], function (require
     function countsText(t) {
         if (!t.valid)
             return "no valid runs";
-        return t.cases > 1 ? `${t.pass} of ${t.valid} runs passed across ${t.cases} cases` : `${t.pass} of ${t.valid} runs passed`;
+        return t.cases > 1 ? `${t.pass} of ${t.valid} runs passed across ${t.over}` : `${t.pass} of ${t.valid} runs passed`;
     }
     /** Arms and cases in a reading order: the plan's order where it has one. */
     function trialAxes(data) {
@@ -2680,7 +2707,7 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
         const rest = axes.cases.filter(c => !covered.has(c) && !isVariant.has(c));
         const restVariants = pairs.filter(p => rest.includes(p.base) && !covered.has(p.variant)).map(p => p.variant);
         const restItem = named.length && rest.length
-            ? `<li class="av-mention av-mention--rest"><span class="av-mention-name"${(0, core_6.attrs)({ title: rest.join(", ") })}>${rest.length === 1 ? `The one case the rule does not name, <code>${(0, core_6.esc)(rest[0])}</code>` : `The other ${rest.length} cases together`}</span>${counts(rest)}${restVariants.length ? `<span class="av-mention-variant"><span class="av-mention-vlabel">↳ their variants</span>${counts(restVariants)}</span>` : ""}</li>`
+            ? `<li class="av-mention av-mention--rest"><span class="av-mention-name"${(0, core_6.attrs)({ title: rest.join(", ") })}>${rest.length === 1 ? `The one case the rule does not name, <code>${(0, core_6.esc)(rest[0])}</code>` : `The other ${(0, stats_2.casesWords)(rest.length, false)} together`}</span>${counts(rest)}${restVariants.length ? `<span class="av-mention-variant"><span class="av-mention-vlabel">↳ their variants</span>${counts(restVariants)}</span>` : ""}</li>`
             : "";
         const key = arms.length > 1 && arms.length <= 8 ? `<p class="av-mention-key">${arms.map(a => ctx.arms.tag(a, { id: false })).join("")}</p>` : "";
         return `<div class="av-mentions"><h4 class="av-eyebrow">Named in the rule · passed / valid runs</h4>${key}<ul class="av-mention-list">${items}${restItem}</ul><p class="av-mention-note">Counts only: the report does not apply the rule; reading these counts against it is left to the reader.</p></div>`;
@@ -2797,7 +2824,7 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
             const thin = r.n > 0 && r.n < 5 && !bad ? `<span class="av-chip av-chip--warn" title="Too few valid runs for a reliable rate">n = ${r.n}</span>` : "";
             const badChip = bad ? `<span class="av-chip av-chip--warn" title="More passes than valid runs: these counts cannot be a rate">counts invalid</span>` : "";
             const isBase = !byCase && r.arm === input.baseline;
-            const label = `${bad ? `counts invalid: ${r.k} of ${r.n}` : p === null ? "no valid runs" : pooled ? `${r.k} of ${r.n} valid runs passed across ${across} cases, pooled counts with no interval` : `${r.k} of ${r.n} valid runs passed, ${(0, core_6.fmtPct)(p)}`}${ci ? `, 95% interval ${(0, core_6.fmtPct)(ci[0])} to ${(0, core_6.fmtPct)(ci[1])}` : r.unstated && !pooled && p !== null ? ", no interval: how these counts were sampled is not given" : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
+            const label = `${bad ? `counts invalid: ${r.k} of ${r.n}` : p === null ? "no valid runs" : pooled ? `${r.k} of ${r.n} valid runs passed across ${(0, stats_2.casesWords)(across, false)}, pooled counts with no interval` : `${r.k} of ${r.n} valid runs passed, ${(0, core_6.fmtPct)(p)}`}${ci ? `, 95% interval ${(0, core_6.fmtPct)(ci[0])} to ${(0, core_6.fmtPct)(ci[1])}` : r.unstated && !pooled && p !== null ? ", no interval: how these counts were sampled is not given" : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
             const variant = byCase ? variantOf.get(r.case) : undefined;
             const note = r.note ?? (byCase ? undefined : ctx.arms.note(r.arm));
             const name = byCase
@@ -2808,7 +2835,7 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
             return `<div class="av-ladder-row${variant ? " av-ladder-row--variant" : ""}" role="row"${(0, core_6.attrs)(byCase ? { "data-case": r.case } : { "data-arm": r.arm })}>
 <div class="av-ladder-label" role="rowheader">${name}${note ? `<span class="av-ladder-note">${(0, core_6.esc)(note)}</span>` : ""}${flags}</div>
 <div class="av-ladder-track${p === null ? " av-ladder-track--empty" : ""}" role="cell" style="${style}" aria-label="${(0, core_6.esc)(label)}">${seg}${ci ? '<span class="av-ci"></span>' : ""}${p === null ? `<span class="av-ladder-none">${bad ? "counts invalid" : "no valid runs"}</span>` : pooled ? '<span class="av-share"></span>' : '<span class="av-pt"></span>'}</div>
-<div class="av-ladder-num" role="cell"><span class="av-frac${bad ? " av-frac--bad" : ""}"><b>${r.k}</b>/${r.n}</span>${pooled && !bad ? `<span class="av-across">across ${across} cases</span>` : `<span class="av-rate">${bad ? "—" : (0, core_6.fmtPct)(p)}</span>`}${ci ? `<span class="av-ci-text">${(0, core_6.fmtPct)(ci[0])}–${(0, core_6.fmtPct)(ci[1])}</span>` : r.unstated && !pooled && !bad && p !== null ? '<span class="av-across">no interval</span>' : ""}</div>
+<div class="av-ladder-num" role="cell"><span class="av-frac${bad ? " av-frac--bad" : ""}"><b>${r.k}</b>/${r.n}</span>${pooled && !bad ? `<span class="av-across">across ${(0, stats_2.casesWords)(across, false)}</span>` : `<span class="av-rate">${bad ? "—" : (0, core_6.fmtPct)(p)}</span>`}${ci ? `<span class="av-ci-text">${(0, core_6.fmtPct)(ci[0])}–${(0, core_6.fmtPct)(ci[1])}</span>` : r.unstated && !pooled && !bad && p !== null ? '<span class="av-across">no interval</span>' : ""}</div>
 </div>`;
         };
         const body = ordered.map(item => {
@@ -2877,7 +2904,7 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
             const groups = [...groupsIn.map(g => ({ ...g, cases: rows.filter(c => g.cases.includes(c)) })), { label: "Other cases", note: undefined, cases: rows.filter(c => !groupsIn.some(g => g.cases.includes(c))) }].filter(g => g.cases.length);
             for (const g of groups) {
                 const t = (0, trial_model_3.tally)(data.runs.filter(r => g.cases.includes(r.scenario) && arms.includes(r.arm)));
-                body += `<div class="av-tap-row av-tap-row--group" role="row"><div class="av-tap-group" role="rowheader"><span class="av-tap-group-label">${(0, core_6.esc)(g.label)}</span><span class="av-muted">${plural(g.cases.length, "case")} · ${t.pass}/${t.valid} passed${t.invalid ? ` · ${t.invalid} invalid` : ""}${g.note ? ` · ${(0, core_6.esc)(g.note)}` : ""}</span></div></div>`;
+                body += `<div class="av-tap-row av-tap-row--group" role="row"><div class="av-tap-group" role="rowheader"><span class="av-tap-group-label">${(0, core_6.esc)(g.label)}</span><span class="av-muted">${(0, stats_2.casesWords)(g.cases.length, false)} · ${t.pass}/${t.valid} passed${t.invalid ? ` · ${t.invalid} invalid` : ""}${g.note ? ` · ${(0, core_6.esc)(g.note)}` : ""}</span></div></div>`;
                 body += g.cases.filter(c => !placed.has(c)).map(c => { placed.add(c); return line(c); }).join("");
             }
         }
@@ -2955,7 +2982,7 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
             return (0, frame_1.frame)("checks", input, (0, frame_1.empty)("No pass/fail checks were recorded."));
         const head = `<thead><tr><th scope="col" class="av-heat-corner">Check</th>${arms.map(a => `<th scope="col">${ctx.arms.tag(a, { id: false })}</th>`).join("")}</tr></thead>`;
         const caseCount = new Set(data.runs.map(r => r.scenario)).size;
-        const line = (r) => `<tr><th scope="row">${checkName(r.name)}${r.required && r.requiredIn.length < caseCount ? ` <span class="av-chip av-chip--req" title="${(0, core_6.esc)(r.requiredIn.join(", "))}">in ${r.requiredIn.length} of ${caseCount} cases</span>` : ""}</th>${arms.map(a => heat(r.cells[a].k, r.cells[a].n, !r.required)).join("")}</tr>`;
+        const line = (r) => `<tr><th scope="row">${checkName(r.name)}${r.required && r.requiredIn.length < caseCount ? ` <span class="av-chip av-chip--req" title="${(0, core_6.esc)(r.requiredIn.join(", "))}">in ${r.requiredIn.length} of ${(0, stats_2.casesWords)(caseCount, false)}</span>` : ""}</th>${arms.map(a => heat(r.cells[a].k, r.cells[a].n, !r.required)).join("")}</tr>`;
         const span = arms.length + 1;
         const fold = (summary, names) => names.length ? `<tr class="av-ck-fold"><td colspan="${span}"><details><summary>${(0, core_6.esc)(summary)}</summary>${chipList(names)}</details></td></tr>` : "";
         const group = (label, note, items, folded = "") => items.length || folded ? `<tr class="av-heat-group"><th scope="rowgroup" colspan="${span}">${(0, core_6.esc)(label)} <span class="av-muted">· ${(0, core_6.esc)(note)}</span></th></tr>${items.map(line).join("")}${folded}` : "";
@@ -3041,7 +3068,7 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
                 const bar = segs.map(k => s[k] ? `<span class="av-duel-seg av-duel-seg--${k}" style="flex:${s[k]}" title="${(0, core_6.esc)(`${words[k]}: ${s[k]}`)}">${s[k] / total > .1 && k !== "inconsistent" ? s[k] : ""}</span>` : "").join("");
                 const decisive = s.a_wins + s.b_wins;
                 const rate = !decisive ? '<span class="av-muted">no decisive pairs</span>'
-                    : pooledCases ? `<span class="av-frac"><b>${s.a_wins}</b>/${decisive}</span> <span class="av-across">decisive pairs won, across ${pooledCases} cases</span>`
+                    : pooledCases ? `<span class="av-frac"><b>${s.a_wins}</b>/${decisive}</span> <span class="av-across">decisive pairs won, across ${(0, stats_2.casesWords)(pooledCases, false)}</span>`
                         : s.rate !== null ? `${(0, core_6.fmtPct)(s.rate)}${s.interval ? ` <span class="av-ci-text">${(0, core_6.fmtPct)(s.interval[0])}–${(0, core_6.fmtPct)(s.interval[1])}</span>` : ""}` : `<span class="av-frac"><b>${s.a_wins}</b>/${decisive}</span>`;
                 return `<div class="av-duel-row${strong ? " av-duel-row--overall" : ""}"><span class="av-duel-label">${(0, core_6.esc)(label)}<span class="av-muted"> · ${plural(s.total, "pair")}</span></span><div class="av-duel-track"><div class="av-duel-bar" style="width:${(0, frame_1.pos)(s.total / maxTotal)}" role="img" aria-label="${(0, core_6.esc)(`${label}: ${ctx.arms.label(a)} preferred ${s.a_wins}, ties ${s.tie}, ${ctx.arms.label(b)} preferred ${s.b_wins}, order-inconsistent ${s.inconsistent}, invalid ${s.invalid}`)}">${bar}</div>${s.inconsistent ? `<span class="av-duel-split" title="the two orders disagree">${s.inconsistent} split</span>` : ""}</div><span class="av-duel-rate">${rate}</span></div>`;
             };
@@ -3285,7 +3312,7 @@ define("blocks/general", ["require", "exports", "core", "figures", "blocks/frame
         return { k, n, value: n ? k / n : null, lo: ci?.[0] ?? null, hi: ci?.[1] ?? null, pooled: pooling };
     }
     /** How a pooled or unsampled count reads in place of its interval. */
-    const noInterval = (pooled) => pooled ? `across ${(0, core_7.fmtInt)(pooled)} cases, no interval` : "no interval";
+    const noInterval = (pooled) => pooled ? `across ${(0, stats_3.casesWords)(pooled, false)}, no interval` : "no interval";
     function intervals(input, ctx) {
         const rows = (input.rows || []).map(r => {
             if ((0, core_7.isNum)(r.k) && (0, core_7.isNum)(r.n))
@@ -3573,7 +3600,7 @@ define("diff", ["require", "exports"], function (require, exports) {
         return { before: pieces("before"), after: pieces("after") };
     }
 });
-define("blocks/setup", ["require", "exports", "core", "diff", "identity", "trial-model", "blocks/frame"], function (require, exports, core_8, diff_1, identity_2, trial_model_5, frame_3) {
+define("blocks/setup", ["require", "exports", "core", "stats", "diff", "identity", "trial-model", "blocks/frame"], function (require, exports, core_8, stats_4, diff_1, identity_2, trial_model_5, frame_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.setup = setup;
@@ -3839,7 +3866,7 @@ define("blocks/setup", ["require", "exports", "core", "diff", "identity", "trial
         }).join("");
         const other = v.other.length ? `<p class="av-setup-textnote">${(0, core_8.esc)(`${v.other.length === 1 ? "This pair was named as a variant but differs" : "These pairs were named as variants but differ"} from the base case in more than added turns:`)}</p>${pairList(v.other)}` : "";
         const n = v.added.reduce((k, g) => k + g.pairs.length, 0);
-        const note = n ? `${plural(n, "case")} also ran as a variant with ${v.added.every(g => g.turns.length === 1) ? "one follow-up turn" : "follow-up turns"} added${many || n === 1 ? "" : `, the same ${v.added[0].turns.length === 1 ? "turn" : "turns"} in every variant`}` : `${plural(v.other.length, "named variant")}`;
+        const note = n ? `${(0, stats_4.casesWords)(n, false)} also ran as a variant with ${v.added.every(g => g.turns.length === 1) ? "one follow-up turn" : "follow-up turns"} added${many || n === 1 ? "" : `, the same ${v.added[0].turns.length === 1 ? "turn" : "turns"} in every variant`}` : `${plural(v.other.length, "named variant")}`;
         return `<div class="av-setup-materials av-setup-variants"><h4 class="av-setup-subhead"><span class="av-eyebrow">Case variants</span><span class="av-setup-subnote">${(0, core_8.esc)(note)}</span></h4><div class="av-setup-texts">${items}</div>${other}</div>`;
     }
     // ------------------------------------------------------------------ the view
@@ -3927,7 +3954,7 @@ define("blocks/setup", ["require", "exports", "core", "diff", "identity", "trial
             ? `The plan records no settings for ${n === 1 ? "this arm" : "these arms"}, so this view cannot show what ${n === 1 ? "it" : "they"} received.`
             : n === 1
                 ? varied
-                    ? `One arm ran, so no arms are compared: the comparison is between ${varied === 1 ? "one case and its variant, which adds" : `${(0, core_8.esc)((0, core_8.fmtInt)(varied))} cases and their variants, which add`} ${variants.added.every(g => g.turns.length === 1) ? "a follow-up turn" : "follow-up turns"}.`
+                    ? `One arm ran, so no arms are compared: the comparison is between ${varied === 1 ? "one case and its variant, which adds" : `${(0, core_8.esc)((0, stats_4.casesWords)(varied, false))} and their variants, which add`} ${variants.added.every(g => g.turns.length === 1) ? "a follow-up turn" : "follow-up turns"}.`
                     : `One arm ran, so no arms are compared: each case’s runs are measured against that case’s own pass criteria.`
                 : r === 1
                     ? `Only one of the ${(0, core_8.esc)((0, core_8.fmtInt)(n))} arms has recorded settings, so this view cannot show how they differ.${missingNote}`
@@ -3936,7 +3963,7 @@ define("blocks/setup", ["require", "exports", "core", "diff", "identity", "trial
                         : `The ${(0, core_8.esc)((0, core_8.fmtInt)(r))} arms${r === n ? "" : " with recorded settings"} differ ${shared.length ? "only " : ""}in ${joinWords(differs.map(phrase))}${shared.length ? "; every other recorded setting is the same" : ""}.${missingNote}`;
         // With several arms and case variants, the variants are a comparison of their own: it leads, and the arms are where it ran.
         const variantLede = n > 1 && varied
-            ? `Each ${varied === 1 ? "case with a variant" : `of the ${(0, core_8.esc)((0, core_8.fmtInt)(varied))} cases`} ran as written and with ${variants.added.every(g => g.turns.length === 1) ? "a follow-up turn" : "follow-up turns"} added (the case variants, first below), on every arm. `
+            ? `Each ${varied === 1 ? "case with a variant" : `of the ${(0, core_8.esc)((0, stats_4.casesWords)(varied, false))}`} ran as written and with ${variants.added.every(g => g.turns.length === 1) ? "a follow-up turn" : "follow-up turns"} added (the case variants, first below), on every arm. `
             : "";
         // Whether the arms faced the same cases: a comparison across different cases is not like for like.
         let scope = "";
@@ -3952,7 +3979,7 @@ define("blocks/setup", ["require", "exports", "core", "diff", "identity", "trial
             // Repeats that differ only between arms are said per arm, plainly.
             const perArm = arms.map(a => { const v = runs.filter(x => x.arm === a).length ? [...cells.entries()].filter(([k]) => k.startsWith(`${a}\u0000`)).map(([, c]) => c) : [0]; return { a, lo: Math.min(...v), hi: Math.max(...v) }; });
             const byArm = lo !== hi && perArm.every(x => x.lo === x.hi);
-            const versions = variants.count ? `${plural(all.size - variants.count, "case")}, as written and as variants (${(0, core_8.fmtInt)(all.size)} case versions)` : plural(all.size, "case");
+            const versions = variants.count ? `${(0, stats_4.casesWords)(all.size - variants.count, false)}, as written and as variants (${(0, core_8.fmtInt)(all.size)} case versions)` : (0, stats_4.casesWords)(all.size, false);
             if (all.size && n > 1)
                 scope = short.length
                     ? `<p class="av-setup-scope av-setup-scope--warn">Not every arm ran every case: ${short.map(a => `${ctx.arms.tag(a, { id: false })} ${(0, core_8.esc)(`ran ${casesOf.get(a).size} of ${all.size}`)}`).join(", ")}. Compare arms within the cases they share.</p>`
@@ -3983,7 +4010,7 @@ define("blocks/setup", ["require", "exports", "core", "diff", "identity", "trial
         return (0, frame_3.frame)("setup", input, `<p class="av-setup-lede">${variantLede}${lede}</p>${scope}${variantsFirst ? variantHtml : ""}${singleHead}${sharedHtml}${table}${judge}${texts}${variantsFirst ? "" : variantHtml}${foot}`);
     }
 });
-define("blocks/cases", ["require", "exports", "core", "failure", "stats", "trial-model", "blocks/frame"], function (require, exports, core_9, failure_2, stats_4, trial_model_6, frame_4) {
+define("blocks/cases", ["require", "exports", "core", "failure", "stats", "trial-model", "blocks/frame"], function (require, exports, core_9, failure_2, stats_5, trial_model_6, frame_4) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.caseAnchor = caseAnchor;
@@ -4379,7 +4406,7 @@ define("blocks/cases", ["require", "exports", "core", "failure", "stats", "trial
     function deltaHtml(b, v) {
         if (!b.valid || !v.valid)
             return `<span class="av-cs-delta av-cs-delta--none">no difference measurable</span>`;
-        const d = Math.round((v.pass / v.valid - b.pass / b.valid) * 100), iv = (0, stats_4.newcombe)(v.pass, v.valid, b.pass, b.valid);
+        const d = Math.round((v.pass / v.valid - b.pass / b.valid) * 100), iv = (0, stats_5.newcombe)(v.pass, v.valid, b.pass, b.valid);
         const gained = v.pass - b.pass;
         const runs = b.valid === v.valid ? `${signed(gained)} ${Math.abs(gained) === 1 ? "pass" : "passes"} of ${(0, core_9.fmtInt)(v.valid)} · ` : "";
         const ci = iv ? `${signed(Math.round(iv[0] * 100))} to ${signed(Math.round(iv[1] * 100))} pts` : "";
@@ -4593,7 +4620,7 @@ define("blocks/cases", ["require", "exports", "core", "failure", "stats", "trial
         const body = blocks.map(b => {
             const head = b.group ? (() => {
                 const cs = b.items.flatMap(([e]) => e.kind === "case" ? [e.m] : e.ms), t = (0, trial_model_6.tally)(cs.flatMap(m => m.runs));
-                return `<div class="av-cs-group"><h4 class="av-cs-group-label">${(0, core_9.esc)(b.group.label)}</h4><span class="av-muted">${plural(cs.length, "case")} · ${(0, core_9.count)(t.pass)}/${(0, core_9.count)(t.valid)} passed${t.invalid ? ` · ${(0, core_9.fmtInt)(t.invalid)} invalid` : ""}${b.group.note ? ` · ${(0, core_9.esc)(b.group.note)}` : ""}</span></div>`;
+                return `<div class="av-cs-group"><h4 class="av-cs-group-label">${(0, core_9.esc)(b.group.label)}</h4><span class="av-muted">${(0, stats_5.casesWords)(cs.length, false)} · ${(0, core_9.count)(t.pass)}/${(0, core_9.count)(t.valid)} passed${t.invalid ? ` · ${(0, core_9.fmtInt)(t.invalid)} invalid` : ""}${b.group.note ? ` · ${(0, core_9.esc)(b.group.note)}` : ""}</span></div>`;
             })() : "";
             return head + b.items.map(([e, k]) => dossier(e, k)).join("");
         }).join("");
@@ -4604,7 +4631,7 @@ define("blocks/cases", ["require", "exports", "core", "failure", "stats", "trial
         return (0, frame_4.frame)("cases", { ...input, description }, `${legend}${notice}${index}<div class="av-cs-list">${body}</div>`);
     }
 });
-define("blocks/failures", ["require", "exports", "core", "trial-model", "failure", "blocks/frame"], function (require, exports, core_10, trial_model_7, failure_3, frame_5) {
+define("blocks/failures", ["require", "exports", "core", "stats", "trial-model", "failure", "blocks/frame"], function (require, exports, core_10, stats_6, trial_model_7, failure_3, frame_5) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.failures = failures;
@@ -4809,7 +4836,7 @@ define("blocks/failures", ["require", "exports", "core", "trial-model", "failure
                 // Cases with at least one valid run that could have failed this way.
                 const applicable = cases.filter(c => valid.some(r => r.scenario === c && applies(m, r)));
                 const scopeText = m.kind === "check"
-                    ? `valid runs in the ${applicable.length === 1 ? "case that requires" : `${applicable.length} cases that require`} it`
+                    ? `valid runs in the ${applicable.length === 1 ? "case that requires" : (0, stats_6.casesWords)(applicable.length, false, "that require")} it`
                     : m.kind === "judge" ? "valid runs the judge decides" : "valid runs";
                 const rows = where.map(({ c, runs }) => {
                     const k = runs.length, cn = among(m, r => r.scenario === c);
@@ -4832,14 +4859,14 @@ define("blocks/failures", ["require", "exports", "core", "trial-model", "failure
                 return `<li class="av-fx-mode av-fx-mode--case"><div class="av-fx-head"><span class="av-fx-count"><b>${runs.length}</b><span>of ${n}</span></span><div class="av-fx-title-wrap"><span class="av-eyebrow">Case</span><${hx} class="av-fx-title">${(0, core_10.esc)(caseLabel(c))}${caseLabel(c) !== c ? ` <code class="av-fx-id">${(0, core_10.esc)(c)}</code>` : ""}</${hx}><p class="av-fx-scope">${(0, core_10.esc)(`${runs.length} of ${n} valid ${n === 1 ? "run" : "runs"} failed, from ${plural(local.length, "cause")}`)}</p>${armCounts(null, runs, r => r.scenario === c)}</div></div><div class="av-fx-body"><ul class="av-fx-rows">${rows}</ul></div></li>`;
             }).join("");
             const clean = cases.filter(c => !failedCases.has(c) && valid.some(r => r.scenario === c));
-            const cleanNote = clean.length ? `<p class="av-fx-clean"><span class="av-mark av-mark--pass" aria-hidden="true"></span><span>${(0, core_10.esc)(plural(clean.length, "case"))} had no failed run: ${list(clean.slice(0, 8).map(c => (0, core_10.esc)(caseLabel(c))))}${clean.length > 8 ? ` and ${clean.length - 8} more` : ""}.</span></p>` : "";
+            const cleanNote = clean.length ? `<p class="av-fx-clean"><span class="av-mark av-mark--pass" aria-hidden="true"></span><span>${(0, core_10.esc)((0, stats_6.casesWords)(clean.length, false))} had no failed run: ${list(clean.slice(0, 8).map(c => (0, core_10.esc)(caseLabel(c))))}${clean.length > 8 ? ` and ${clean.length - 8} more` : ""}.</span></p>` : "";
             return `<ol class="av-fx-modes">${groups}</ol>${cleanNote}`;
         };
         const by = input.by === "case" ? "case" : "cause";
         return (0, frame_5.frame)("failures", input, `${lede}${legend}${by === "case" ? byCase() : byCause()}`, { "data-by": by });
     }
 });
-define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model", "blocks/frame"], function (require, exports, core_11, stats_5, trial_model_8, frame_6) {
+define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model", "blocks/frame"], function (require, exports, core_11, stats_7, trial_model_8, frame_6) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.fmtPoints = fmtPoints;
@@ -4847,8 +4874,11 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
     exports.variantSuffix = variantSuffix;
     /** How many cases the row's more pooled side spans. */
     const across = (r) => Math.max(r.a.cases ?? 1, r.b.cases ?? 1);
+    /** What the difference pools, from both sides, in the shared words: one count when both sides pool as many cases, else
+     * each side's own. */
+    const acrossWords = (r) => (r.a.cases ?? 1) === (r.b.cases ?? 1) ? (0, stats_7.casesWords)(r.a.cases ?? 1, false) : `${(0, stats_7.casesWords)(r.a.cases ?? 1, false)} (${r.a.text}) and ${(0, stats_7.casesWords)(r.b.cases ?? 1, false)} (${r.b.text})`;
     /** Why a difference that has a value has no interval, in a few words. */
-    const noCi = (r) => across(r) > 1 ? `across ${across(r)} cases, no interval` : "no interval";
+    const noCi = (r) => across(r) > 1 ? `across ${acrossWords(r)}, no interval` : "no interval";
     const own = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
     const strings = (v) => Array.isArray(v) ? v.filter((x) => typeof x === "string") : typeof v === "string" ? [v] : null;
     /** k for a count field: a non-negative whole number, or null when missing or unusable. */
@@ -4872,7 +4902,7 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
         // Runs on one case repeat that case rather than sample new cases: pooled over several, the difference stands without an interval.
         if (across(r) > 1 || r.a.unstated || r.b.unstated)
             return { d: k1 / n1 - k2 / n2, ci: null };
-        const ci = (0, stats_5.newcombe)(k1, n1, k2, n2);
+        const ci = (0, stats_7.newcombe)(k1, n1, k2, n2);
         return ci ? { d: k1 / n1 - k2 / n2, ci } : null;
     }
     /** Why a row has no interval, in words; null when it has one. */
@@ -4919,7 +4949,7 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
                 };
                 // Counts written by hand: how each side was sampled decides the interval, as for every count (countPooling).
                 for (const s of [row.a, row.b]) {
-                    const pooling = (0, stats_5.countPooling)((0, trial_model_8.armCases)(ctx.trial, s.arm)?.values() ?? null, raw.cases, input.independent);
+                    const pooling = (0, stats_7.countPooling)((0, trial_model_8.armCases)(ctx.trial, s.arm)?.values() ?? null, raw.cases, input.independent);
                     s.cases = pooling || 1;
                     if (pooling === null)
                         s.unstated = true;
@@ -5044,7 +5074,7 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
                 const holds = (arms, keep, name) => {
                     const parts = [
                         arms && arms.length < axes.arms.length ? arms.map(a => ctx.arms.label(a)).join(", ") : "",
-                        keep && keep.length < axes.cases.length ? (keep.length <= 3 ? keep.join(", ") : `${keep.length} cases`) : "",
+                        keep && keep.length < axes.cases.length ? (keep.length <= 3 ? keep.join(", ") : (0, stats_7.casesWords)(keep.length, false)) : "",
                     ].filter(Boolean);
                     const text = parts.join(" · ");
                     return text && text !== name ? `<span class="av-contrast-side-detail"${keep && keep.length > 3 ? ` title="${(0, core_11.esc)(keep.join(", "))}"` : ""}>${(0, core_11.esc)(text)}</span>` : "";
@@ -5124,18 +5154,18 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
             if (!c.ci && across(r) <= 1)
                 return `<strong>No interval:</strong> how these counts were sampled is not given, so nothing says their runs are independent samples.` + (bar && r.kind !== "noise" ? ` The observed ${(0, core_11.esc)(fmtPoints(c.d))} ${c.d >= bar.value ? "meets" : "falls short of"} ${(0, core_11.esc)(barText)}.` : "");
             if (!c.ci) {
-                const pooled = r.kind === "noise" ? `<strong>Identical material,</strong> so this gap of ${(0, core_11.esc)(fmtPoints(Math.abs(c.d)).replace(/^\+/, ""))} points, pooled over ${across(r)} cases, is chance alone.`
-                    : `<strong>Pooled over ${across(r)} cases, so no interval:</strong> runs on one case repeat that case rather than sample new cases. ${r.children?.length && by === "case" ? "Each case's own difference and 95% interval are listed under it." : "Each case's own difference and interval are in the per-case view."}`;
+                const pooled = r.kind === "noise" ? `<strong>Identical material,</strong> so this gap of ${(0, core_11.esc)(fmtPoints(Math.abs(c.d)).replace(/^\+/, ""))} points, pooled over ${(0, core_11.esc)(acrossWords(r))}, is chance alone.`
+                    : `<strong>Pooled over ${(0, core_11.esc)(acrossWords(r))}, so no interval:</strong> runs on one case repeat that case rather than sample new cases. ${r.children?.length && by === "case" ? "Each case's own difference and 95% interval are listed under it." : "Each case's own difference and interval are in the per-case view."}`;
                 return pooled + (bar && r.kind !== "noise" ? ` The observed ${(0, core_11.esc)(fmtPoints(c.d))} ${c.d >= bar.value ? "meets" : "falls short of"} ${(0, core_11.esc)(barText)}.` : "");
             }
-            const place = (0, stats_5.placement)(c.ci, 0);
+            const place = (0, stats_7.placement)(c.ci, 0);
             let out = r.kind === "noise"
                 ? (Math.abs(c.d) < 0.0005 ? "<strong>Identical material.</strong> These copies passed at the same rate this time." : `<strong>Identical material,</strong> so this gap of ${(0, core_11.esc)(fmtPoints(Math.abs(c.d)).replace(/^\+/, ""))} points is chance alone.`)
                 : place === "above" ? `<strong>The 95% interval lies above zero:</strong> these runs fit only a higher pass rate for ${A} than for ${B}.`
                     : place === "below" ? `<strong>The 95% interval lies below zero:</strong> these runs fit only a lower pass rate for ${A} than for ${B}.`
                         : `<strong>The 95% interval includes zero:</strong> these runs cannot tell ${A} and ${B} apart.`;
             if (bar && r.kind !== "noise") {
-                const t = (0, stats_5.placement)(c.ci, bar.value), d = (0, core_11.esc)(fmtPoints(c.d));
+                const t = (0, stats_7.placement)(c.ci, bar.value), d = (0, core_11.esc)(fmtPoints(c.d));
                 out += " " + (t === "above" ? `All of it is above ${(0, core_11.esc)(barText)}.`
                     : t === "below" ? `All of it is below ${(0, core_11.esc)(barText)}.`
                         : c.d >= bar.value ? `The observed ${d} meets ${(0, core_11.esc)(barText)}, but the interval reaches down to ${(0, core_11.esc)(fmtPoints(c.ci[0]))}.`
@@ -5152,9 +5182,9 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
             const track = `<div class="av-contrast-track${c ? "" : " av-contrast-track--empty"}" role="img" aria-label="${(0, core_11.esc)(aria)}" style="${style}">${band && r.kind === "main" && c ? '<span class="av-contrast-band"></span>' : ""}<span class="av-contrast-zero"></span>${bar && r.kind !== "noise" ? '<span class="av-contrast-bar"></span>' : ""}${c ? `${c.ci ? '<span class="av-contrast-ci"></span>' : ""}<span class="av-contrast-pt${c.ci ? "" : " av-contrast-pt--pooled"}"></span>` : `<span class="av-contrast-none"><span>${(0, core_11.esc)(compact ? "no interval" : "no interval: see below")}</span></span>`}</div>`;
             const passes = c && r.a.n === r.b.n && r.a.k !== null && r.b.k !== null
                 ? `<span class="av-contrast-passes" title="${(0, core_11.esc)(`${r.a.k} against ${r.b.k} passes, of ${r.a.n} valid runs each`)}">${r.a.k - r.b.k > 0 ? "+" : r.a.k - r.b.k < 0 ? "−" : "±"}${Math.abs(r.a.k - r.b.k)} ${Math.abs(r.a.k - r.b.k) === 1 ? "pass" : "passes"}</span>` : "";
-            const place = c && c.ci ? (0, stats_5.placement)(c.ci, 0) : null;
+            const place = c && c.ci ? (0, stats_7.placement)(c.ci, 0) : null;
             const chip = compact && place ? `<span class="av-contrast-place av-contrast-place--${place}">${place === "spans" ? "includes 0" : `${place} 0`}</span>` : "";
-            const num = `<div class="av-contrast-num">${c ? `<span class="av-contrast-d">${(0, core_11.esc)(fmtPoints(c.d))}<span class="av-contrast-unit">pts</span></span><span class="av-contrast-ci-text">${c.ci ? `${(0, core_11.esc)(fmtPoints(c.ci[0]))} to ${(0, core_11.esc)(fmtPoints(c.ci[1]))}` : noCi(r)}</span>${passes}${chip}` : '<span class="av-contrast-d av-contrast-d--none">—</span>'}</div>`;
+            const num = `<div class="av-contrast-num">${c ? `<span class="av-contrast-d">${(0, core_11.esc)(fmtPoints(c.d))}<span class="av-contrast-unit">pts</span></span><span class="av-contrast-ci-text">${c.ci ? `${(0, core_11.esc)(fmtPoints(c.ci[0]))} to ${(0, core_11.esc)(fmtPoints(c.ci[1]))}` : (0, core_11.esc)(noCi(r))}</span>${passes}${chip}` : '<span class="av-contrast-d av-contrast-d--none">—</span>'}</div>`;
             const flags = `${r.uneven ? '<span class="av-chip av-chip--warn" title="One side has its valid runs spread over the cases very differently (a share more than 10 points apart, or a case with valid runs on one side only), so its pooled rate weights the cases differently. Read the per-case rows.">uneven case mix</span>' : ""}`;
             const label = compact
                 ? `<div class="av-contrast-label">${r.head ? `<div class="av-contrast-head">${r.head}</div>` : ""}<div class="av-contrast-minis">${sideLine(r.a, true, r.a.arm !== r.b.arm)}<span class="av-contrast-vs">vs</span>${sideLine(r.b, true, r.a.arm !== r.b.arm)}</div></div>`
@@ -5225,10 +5255,10 @@ define("blocks/contrast", ["require", "exports", "core", "stats", "trial-model",
         return suffix;
     }
 });
-define("comparison-stats", ["require", "exports", "core", "stats"], function (require, exports, core_12, stats_6) {
+define("comparison-stats", ["require", "exports", "core", "stats", "stats"], function (require, exports, core_12, stats_8, stats_9) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
-    exports.pooledWords = exports.eachWeighted = exports.NO_CASE_WORDS = exports.NO_CASE = void 0;
+    exports.pooledWords = exports.NO_CASE_WORDS = exports.NO_CASE = exports.eachWeighted = exports.casesWords = exports.caseSplit = void 0;
     exports.groupPath = groupPath;
     exports.metricOf = metricOf;
     exports.alternativeIds = alternativeIds;
@@ -5239,8 +5269,6 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
     exports.welch = welch;
     exports.superiority = superiority;
     exports.bootstrap = bootstrap;
-    exports.caseSplit = caseSplit;
-    exports.casesWords = casesWords;
     exports.ordinalLevels = ordinalLevels;
     exports.observationStatus = observationStatus;
     exports.poolMoments = poolMoments;
@@ -5251,6 +5279,11 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
     exports.summarizeGroups = summarizeGroups;
     exports.winMatrix = winMatrix;
     exports.invalidJudgments = invalidJudgments;
+    Object.defineProperty(exports, "caseSplit", { enumerable: true, get: function () { return stats_9.caseSplit; } });
+    Object.defineProperty(exports, "casesWords", { enumerable: true, get: function () { return stats_9.casesWords; } });
+    Object.defineProperty(exports, "eachWeighted", { enumerable: true, get: function () { return stats_9.eachWeighted; } });
+    Object.defineProperty(exports, "NO_CASE", { enumerable: true, get: function () { return stats_9.NO_CASE; } });
+    Object.defineProperty(exports, "NO_CASE_WORDS", { enumerable: true, get: function () { return stats_9.NO_CASE_WORDS; } });
     const isObj = (v) => !!v && typeof v === "object" && !Array.isArray(v);
     const KINDS = ["binary", "numeric", "ordinal", "count", "rank", "preference"];
     const BOOT = 2000;
@@ -5366,7 +5399,7 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         if (!(0, core_12.isNum)(p) || !(0, core_12.isNum)(df) || df <= 0 || p <= 0.5 || p >= 1)
             return null;
         if (df > 1e5 && Math.abs(p - 0.975) < 1e-12)
-            return stats_6.Z95;
+            return stats_8.Z95;
         let lo = 0, hi = 2;
         while (tCdf(hi, df) < p && hi < 1e12)
             hi *= 2;
@@ -5476,32 +5509,8 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
     }
     function reader() { return { valid: new Map(), keyed: new Map(), trials: new Map(), invalid: new Map(), seen: new Set(), order: [], cases: new Map(), ran: new Map() }; }
     const caseKey = (c) => c === undefined || c === null ? "" : String(c);
-    // ------------------------------------------------------------------ cases in words
-    /** The stand-in id views give evidence naming no case, to filter it as a group of its own. */
-    exports.NO_CASE = "\u0000no case";
-    /** Evidence naming no case, in words: a group weighed beside the cases, never counted as one. */
-    exports.NO_CASE_WORDS = "evidence naming no case";
-    /** How many named cases a list of case ids holds, and whether evidence naming no case ("" or NO_CASE) is among them. */
-    function caseSplit(ids) {
-        const all = [...new Set(ids)], none = all.filter(id => id === "" || id === exports.NO_CASE);
-        return [all.length - none.length, none.length > 0];
-    }
-    /** The one wording of what a value, an average or a coverage statement is taken over: the named cases, `where` after
-     * them, then evidence naming no case beside them ("1 case in both, plus evidence naming no case"). `bare` leaves out the
-     * noun ("2 both ran"). Every statement of what was pooled, averaged or covered builds its count here, so none can count
-     * that evidence as a case. */
-    function casesWords(named, noCase, where = "", bare = false) {
-        const at = where ? ` ${where}` : "";
-        if (!named && noCase)
-            return `${exports.NO_CASE_WORDS}${at}`;
-        const count = `${named}${bare ? "" : named === 1 ? " case" : " cases"}${at}`;
-        return noCase ? `${count}, plus ${exports.NO_CASE_WORDS}` : count;
-    }
-    /** How an average weighs its parts: every case equally, or, with evidence naming no case among them, each part equally. */
-    const eachWeighted = (noCase) => noCase ? "each weighted equally" : "each case weighted equally";
-    exports.eachWeighted = eachWeighted;
     /** What a summary's value pools, in words. */
-    const pooledWords = (s) => casesWords(...caseSplit((s.caseWeights || []).filter(e => e[1] > 0).map(e => e[0])));
+    const pooledWords = (s) => (0, stats_8.casesWords)(...(0, stats_8.caseSplit)((s.caseWeights || []).filter(e => e[1] > 0).map(e => e[0])));
     exports.pooledWords = pooledWords;
     function from(r, alt, c, weight = 1) { const m = r.cases.get(alt) || r.cases.set(alt, new Map()).get(alt); m.set(caseKey(c), (m.get(caseKey(c)) || 0) + weight); }
     function ranOn(r, alt, c) { (r.ran.get(alt) || r.ran.set(alt, new Set()).get(alt)).add(caseKey(c)); }
@@ -5730,7 +5739,7 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         const weighed = { ...s, caseWeights: [...perCase].filter(e => e[1] > 0), casesRun: [...ran] };
         if (s.intervalMethod === "as reported by the source")
             return weighed;
-        return pooledOver(weighed, (0, stats_6.pooledCases)(perCase.values()));
+        return pooledOver(weighed, (0, stats_8.pooledCases)(perCase.values()));
     }
     function summaryOf(data, metric, alt, r, filter, levels, judged) {
         const kind = kindOf(metric);
@@ -5753,12 +5762,12 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
             }
             else
                 for (const a of aggs)
-                    if ((0, stats_6.validCount)(a.k, a.n) && Number.isInteger(a.k) && Number.isInteger(a.n)) {
+                    if ((0, stats_8.validCount)(a.k, a.n) && Number.isInteger(a.k) && Number.isInteger(a.n)) {
                         k += a.k;
                         n += a.n;
                     }
             const given = fromObs ? null : supplied(aggs);
-            return { ...base, k, n, rate: n ? k / n : null, interval: given || (0, core_12.wilson)(k, n, stats_6.Z95), ...(n ? { intervalMethod: given ? "as reported by the source" : WILSON } : {}), ...(aggs.length && n ? { fromAggregate: true } : {}) };
+            return { ...base, k, n, rate: n ? k / n : null, interval: given || (0, core_12.wilson)(k, n, stats_8.Z95), ...(n ? { intervalMethod: given ? "as reported by the source" : WILSON } : {}), ...(aggs.length && n ? { fromAggregate: true } : {}) };
         }
         if (kind === "numeric") {
             if (fromObs) {
@@ -5823,7 +5832,7 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         let fromAggregate = false;
         if (!wins && !losses && !ties)
             for (const a of aggregatesFor(data, metric.id, alt, filter))
-                if ((0, stats_6.validCount)(a.k, a.n) && Number.isInteger(a.k) && Number.isInteger(a.n)) {
+                if ((0, stats_8.validCount)(a.k, a.n) && Number.isInteger(a.k) && Number.isInteger(a.n)) {
                     wins += a.k;
                     losses += a.n - a.k;
                     fromAggregate = true;
@@ -5831,7 +5840,7 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         const decisive = wins + losses;
         return {
             ...base, invalid: total(invalid), ...(invalid.size ? { invalidReasons: Object.fromEntries(invalid) } : {}),
-            n: wins + losses + ties, k: wins, wins, losses, ties, rate: decisive ? wins / decisive : null, interval: (0, core_12.wilson)(wins, decisive, stats_6.Z95),
+            n: wins + losses + ties, k: wins, wins, losses, ties, rate: decisive ? wins / decisive : null, interval: (0, core_12.wilson)(wins, decisive, stats_8.Z95),
             ...(decisive ? { intervalMethod: `${WILSON} on wins over decisive judgments` } : {}), ...(fromAggregate ? { fromAggregate } : {}),
         };
     }
@@ -5877,6 +5886,16 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         const judgedOn = (id) => list.filter(d => d.a === id || d.b === id).map(d => caseKey(d.case));
         return ids.map(id => summaryFrom(data, m, id, r, filter, levels, judged?.get(id), judgedPerCase(id), judgedOn(id)));
     }
+    /** What a difference pools, from both sides: the cases both have, then what only the first or only the second has, each
+     * worded by casesWords; one count when both sides pool the same. */
+    function jointWords(sa, sb) {
+        const keys = (x) => (x.caseWeights || []).filter(e => e[1] > 0).map(e => e[0]);
+        const ka = keys(sa), kb = keys(sb);
+        const both = ka.filter(k => kb.includes(k)), onlyA = ka.filter(k => !kb.includes(k)), onlyB = kb.filter(k => !ka.includes(k));
+        if (!onlyA.length && !onlyB.length)
+            return (0, stats_8.casesWords)(...(0, stats_8.caseSplit)(both));
+        return [both.length ? (0, stats_8.casesWords)(...(0, stats_8.caseSplit)(both), "both have") : "", onlyA.length ? (0, stats_8.casesWords)(...(0, stats_8.caseSplit)(onlyA), "only the first has") : "", onlyB.length ? (0, stats_8.casesWords)(...(0, stats_8.caseSplit)(onlyB), "only the second has") : ""].filter(Boolean).join("; ");
+    }
     const pooledMethod = (what, over) => `${what}, pooled over ${over}, each holding repeats, with no interval: observations on one case repeat that case rather than sample new cases; each case's own difference has its interval`;
     /** The comparison as its summaries read it under a filter: each alternative's supplied totals on a metric are kept only
      * where its summary reads them (it has no observations or judgments there within the filter), so no narrower filter (one
@@ -5911,10 +5930,10 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
             for (const d of list)
                 if (d.winner !== "tie")
                     perCase.set(caseKey(d.case), (perCase.get(caseKey(d.case)) || 0) + 1);
-            const spread = (0, stats_6.pooledCases)(perCase.values());
+            const spread = (0, stats_8.pooledCases)(perCase.values());
             if (spread > 1)
-                return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: null, method: pooledMethod(`net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgments`, casesWords(...caseSplit(perCase.keys()))) };
-            const w = (0, core_12.wilson)(aw, n, stats_6.Z95);
+                return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: null, method: pooledMethod(`net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgments`, (0, stats_8.casesWords)(...(0, stats_8.caseSplit)(perCase.keys()))) };
+            const w = (0, core_12.wilson)(aw, n, stats_8.Z95);
             return { metric, a, b, kind, n: [n, n], estimate: (aw - bw) / n, interval: [2 * w[0] - 1, 2 * w[1] - 1], method: `net head-to-head share: (${aw} wins − ${bw} wins) ÷ ${n} decisive judgment${n === 1 ? "" : "s"}${ties ? ` (${ties} tie${ties === 1 ? "" : "s"} set aside)` : ""}; 95% interval 2p − 1 from the Wilson score interval on a's share` };
         }
         const [sa, sb] = [a, b].map(id => summarize(data, metric, { ...filter, alternatives: [id] }).find(s => s.alternative === id));
@@ -5928,12 +5947,12 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
                 : kind === "numeric" ? ((0, core_12.isNum)(sa.mean) && (0, core_12.isNum)(sb.mean) ? sa.mean - sb.mean : null)
                     : kind === "rank" ? ((0, core_12.isNum)(sa.meanRank) && (0, core_12.isNum)(sb.meanRank) ? sa.meanRank - sb.meanRank : null) : null;
             const word = kind === "binary" || kind === "count" ? "difference in rates" : kind === "numeric" ? "difference in means" : kind === "rank" ? "difference in mean rank" : "probability of superiority";
-            return { metric, a, b, kind, n: sizes, estimate: kind === "ordinal" ? (() => { const expand = (s) => (s.counts || []).flatMap((c, i) => Array(c).fill(i)); const xs = expand(sa), ys = expand(sb); return xs.length && ys.length ? superiority(xs, ys) : null; })() : est, interval: null, method: pooledMethod(word, (0, exports.pooledWords)((sa.cases ?? 1) >= (sb.cases ?? 1) ? sa : sb)) };
+            return { metric, a, b, kind, n: sizes, estimate: kind === "ordinal" ? (() => { const expand = (s) => (s.counts || []).flatMap((c, i) => Array(c).fill(i)); const xs = expand(sa), ys = expand(sb); return xs.length && ys.length ? superiority(xs, ys) : null; })() : est, interval: null, method: pooledMethod(word, jointWords(sa, sb)) };
         }
         if (kind === "binary" || kind === "count") {
             if (!sa.n || !sb.n || !(0, core_12.isNum)(sa.k) || !(0, core_12.isNum)(sb.k))
                 return none("no valid observations on one side", { kind, n: sizes });
-            return { metric, a, b, kind, n: sizes, estimate: sa.k / sa.n - sb.k / sb.n, interval: (0, stats_6.newcombe)(sa.k, sa.n, sb.k, sb.n), method: "difference in rates; 95% Newcombe hybrid score interval (method 10) for two independent proportions" };
+            return { metric, a, b, kind, n: sizes, estimate: sa.k / sa.n - sb.k / sb.n, interval: (0, stats_8.newcombe)(sa.k, sa.n, sb.k, sb.n), method: "difference in rates; 95% Newcombe hybrid score interval (method 10) for two independent proportions" };
         }
         if (kind === "numeric") {
             if (!(0, core_12.isNum)(sa.mean) || !(0, core_12.isNum)(sb.mean))
@@ -6053,7 +6072,7 @@ define("comparison-stats", ["require", "exports", "core", "stats"], function (re
         return duels(data, metric, filter).filter(d => !d.valid).length;
     }
 });
-define("blocks/compare", ["require", "exports", "core", "comparison-stats", "stats", "blocks/frame"], function (require, exports, core_13, comparison_stats_1, stats_7, frame_7) {
+define("blocks/compare", ["require", "exports", "core", "comparison-stats", "stats", "blocks/frame"], function (require, exports, core_13, comparison_stats_1, stats_10, frame_7) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.fmtShare = fmtShare;
@@ -6519,7 +6538,7 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
         const d = (0, comparison_stats_1.difference)(src.data, m.id, id, src.baseline, src.filter), ci = iv(d?.interval), est = (0, core_13.num)(d?.estimate);
         if (!ci || est === null)
             return null;
-        const place = (0, stats_7.placement)(ci, 0);
+        const place = (0, stats_10.placement)(ci, 0);
         if (place === "spans")
             return null;
         const up = place === "above", good = up === (better === "higher");
@@ -6801,19 +6820,19 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
                 return `<strong>No interval.</strong> ${(0, core_13.esc)(r.method || "The observations do not allow one.")}`;
             if (r.noise)
                 return Math.abs(r.est) < 1e-9 ? "<strong>Identical material.</strong> These copies came out the same this time." : `<strong>Identical material,</strong> so this gap of ${(0, core_13.esc)(fmtDiff(m, Math.abs(r.est)).replace(/^\+/, ""))} is chance alone.`;
-            const place = (0, stats_7.placement)(r.ci, 0);
+            const place = (0, stats_10.placement)(r.ci, 0);
             let out = place === "spans" ? `<strong>The 95% interval includes zero:</strong> these observations cannot tell ${A} and ${B} apart on ${(0, core_13.esc)(name)}.`
                 : `<strong>The 95% interval lies ${place} zero:</strong> these observations fit only ${(0, core_13.esc)(phrase(m, place === "above", center))} for ${A} than for ${B}.`;
             if (better && place !== "spans")
                 out += (place === "above") === (better === "higher") ? " That is the better direction for this metric." : " That is the worse direction for this metric.";
             if (thr) {
-                const t = (0, stats_7.placement)(r.ci, thr.value), what = (0, core_13.esc)(thr.label || `the ${fmtDiff(m, thr.value)} threshold`);
+                const t = (0, stats_10.placement)(r.ci, thr.value), what = (0, core_13.esc)(thr.label || `the ${fmtDiff(m, thr.value)} threshold`);
                 out += " " + (t === "above" ? `All of it is above ${what}.` : t === "below" ? `All of it is below ${what}.` : `The interval reaches across ${what}.`);
             }
             return out;
         };
         const rowHtml = (r) => {
-            const place = r.ci ? (0, stats_7.placement)(r.ci, 0) : null;
+            const place = r.ci ? (0, stats_10.placement)(r.ci, 0) : null;
             const style = `--c:${r.noise ? "var(--av-warn)" : ctx.arms.color(r.a)};--z:${sc.at(0)};${r.est !== null ? `--p:${sc.at(r.est)};` : ""}${r.est !== null && r.ci ? `--lo:${sc.at(r.ci[0])};--hi:${sc.at(r.ci[1])};` : ""}${thr && !r.noise ? `--t:${sc.at(thr.value)};` : ""}${band !== null && !r.noise ? `--b0:${sc.at(-band)};--b1:${sc.at(band)};` : ""}`;
             const aria = `${ctx.arms.label(r.a)} minus ${ctx.arms.label(r.b)}: ${r.ci && r.est !== null ? `${fmtDiff(m, r.est)}, 95% interval ${fmtDiff(m, r.ci[0])} to ${fmtDiff(m, r.ci[1])}` : r.est !== null ? `${fmtDiff(m, r.est)}, no interval` : "no interval"}`;
             const trackHtml = `<div class="av-cmp-dtrack${r.est !== null ? "" : " av-cmp-track--empty"}" role="img" aria-label="${(0, core_13.esc)(aria)}" style="${style}">${band !== null && !r.noise && r.ci ? '<span class="av-cmp-band"></span>' : ""}<span class="av-cmp-zero"></span>${thr && !r.noise ? '<span class="av-cmp-thr"></span>' : ""}${r.ci && r.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : r.est !== null ? '<span class="av-pt av-pt--pooled"></span>' : '<span class="av-cmp-none">no interval</span>'}</div>`;
@@ -6904,7 +6923,7 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
         const baseRefs = [...(thr ? [{ value: thr.value, kind: "rule" }] : []), ...(m.kind === "preference" ? [{ value: 0.5, kind: "even" }] : [])];
         const better = directed(m);
         const gapRow = (g, depth, scopeName) => {
-            const place = g.ci ? (0, stats_7.placement)(g.ci, 0) : null;
+            const place = g.ci ? (0, stats_10.placement)(g.ci, 0) : null;
             const tone = place && place !== "spans" && better ? ((place === "above") === (better === "higher") ? "better" : "worse") : "";
             const style = `--c:var(--av-ink-2);--z:${ds.at(0)};${g.est !== null ? `--p:${ds.at(g.est)};` : ""}${g.ci && g.est !== null ? `--lo:${ds.at(g.ci[0])};--hi:${ds.at(g.ci[1])};` : ""}`;
             const aria = `${g.a} minus ${g.b}, ${metricName(m)}: ${g.ci && g.est !== null ? `${fmtDiff(m, g.est)}, 95% interval ${fmtDiff(m, g.ci[0])} to ${fmtDiff(m, g.ci[1])}` : `${g.est !== null ? `${fmtDiff(m, g.est)}, ` : ""}no interval${g.method ? ` (${g.method})` : ""}`}`;
@@ -6949,7 +6968,7 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
         return (0, frame_7.frame)("hierarchy", input, `${problemList(src.problems)}${metricHeading(m)}${view.legend}${scopeLine(src, ctx)}${coverageLine(src, ctx, [m])}${view.flat}${view.grid}${input.method === false ? "" : methodNote(m, view.methods, note)}`, { "data-kind": m.kind });
     }
 });
-define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "comparison-stats", "stats", "blocks/frame"], function (require, exports, core_14, diff_2, identity_3, comparison_stats_2, stats_8, frame_8) {
+define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "comparison-stats", "stats", "blocks/frame"], function (require, exports, core_14, diff_2, identity_3, comparison_stats_2, stats_11, frame_8) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.alternatives = alternatives;
@@ -7260,7 +7279,9 @@ define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "c
         const judged = ids.filter(id => { const c = counts(id); return c.wins + c.losses + c.ties > 0; });
         const rate = (c) => c.wins + c.losses > 0 ? c.wins / (c.wins + c.losses) : null;
         // Judgments pooled over cases that each were judged more than once repeat those cases: such a win rate has no interval.
-        const spread = (id) => (0, stats_8.pooledCases)(m.perCase.get(id)?.values() || []);
+        const spread = (id) => (0, stats_11.pooledCases)(m.perCase.get(id)?.values() || []);
+        /** What an alternative's judgments pool, in the shared words: its cases, and evidence naming no case beside them. */
+        const pooledOver = (id) => (0, stats_11.casesWords)(...(0, stats_11.caseSplit)(m.perCase.get(id)?.keys() || []));
         // Lede.
         const named = judges.size;
         const judgeParts = [named ? `by ${plural(named, "judge")}` : "", unnamed ? `${(0, core_14.fmtInt)(unnamed)} without a named judge` : ""].filter(Boolean);
@@ -7298,7 +7319,7 @@ define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "c
             const order = judged.slice().sort((x, y) => (rate(counts(y)) ?? -1) - (rate(counts(x)) ?? -1) || ctx.arms.index(x) - ctx.arms.index(y));
             rates = `${subhead("Win rate", "wins ÷ (wins + losses), ties left out; the bar shows a 95% Wilson interval, except where judgments pooled over several cases repeat them; 50% is an even record")}<div class="av-scroll-x av-jv-scroll"><table class="av-jv-table"><thead><tr><th scope="col">Alternative</th><th scope="col" class="av-num">Wins</th><th scope="col" class="av-num">Losses</th><th scope="col" class="av-num">Ties</th><th scope="col">Win rate</th></tr></thead><tbody>${order.map(id => {
                 const c = counts(id), n = c.wins + c.losses, p = rate(c), across = spread(id), ci = p === null || across ? null : (0, core_14.wilson)(c.wins, n);
-                return `<tr data-arm="${(0, core_14.esc)(id)}"><th scope="row">${ctx.arms.tag(id, { id: false })}</th><td class="av-num" data-label="Wins">${(0, core_14.esc)((0, core_14.fmtInt)(c.wins))}</td><td class="av-num" data-label="Losses">${(0, core_14.esc)((0, core_14.fmtInt)(c.losses))}</td><td class="av-num" data-label="Ties">${(0, core_14.esc)((0, core_14.fmtInt)(c.ties))}</td><td data-label="Win rate">${p === null ? missing("no decisive judgments", "Every judgment of this alternative was a tie.") : `<div class="av-jv-rate"><span class="av-jv-track-wrap">${prefTrack(ctx, id, p, ci)}</span><span class="av-rate">${(0, core_14.esc)((0, core_14.fmtPct)(p))}</span><span class="av-ci-text">${ci ? `${(0, core_14.esc)((0, core_14.fmtPct)(ci[0]))}–${(0, core_14.esc)((0, core_14.fmtPct)(ci[1]))} · ` : ""}${(0, core_14.esc)((0, core_14.fmtInt)(n))} decisive${across ? ` across ${(0, core_14.esc)((0, core_14.fmtInt)(across))} cases, no interval` : ""}</span></div>`}</td></tr>`;
+                return `<tr data-arm="${(0, core_14.esc)(id)}"><th scope="row">${ctx.arms.tag(id, { id: false })}</th><td class="av-num" data-label="Wins">${(0, core_14.esc)((0, core_14.fmtInt)(c.wins))}</td><td class="av-num" data-label="Losses">${(0, core_14.esc)((0, core_14.fmtInt)(c.losses))}</td><td class="av-num" data-label="Ties">${(0, core_14.esc)((0, core_14.fmtInt)(c.ties))}</td><td data-label="Win rate">${p === null ? missing("no decisive judgments", "Every judgment of this alternative was a tie.") : `<div class="av-jv-rate"><span class="av-jv-track-wrap">${prefTrack(ctx, id, p, ci)}</span><span class="av-rate">${(0, core_14.esc)((0, core_14.fmtPct)(p))}</span><span class="av-ci-text">${ci ? `${(0, core_14.esc)((0, core_14.fmtPct)(ci[0]))}–${(0, core_14.esc)((0, core_14.fmtPct)(ci[1]))} · ` : ""}${(0, core_14.esc)((0, core_14.fmtInt)(n))} decisive${across ? ` across ${(0, core_14.esc)(pooledOver(id))}, no interval` : ""}</span></div>`}</td></tr>`;
             }).join("")}</tbody></table></div>`;
         }
         // Rankings: first places and mean position.
@@ -7322,15 +7343,15 @@ define("blocks/judgments", ["require", "exports", "core", "diff", "identity", "c
                 const perCase = new Map();
                 valid.forEach((o, i) => { if (o.includes(id))
                     perCase.set(validCase[i], (perCase.get(validCase[i]) || 0) + 1); });
-                const across = (0, stats_8.pooledCases)(perCase.values());
-                return { id, n: positions.length, firsts, mean: positions.length ? positions.reduce((s, p) => s + p, 0) / positions.length : null, positions, across, ci: positions.length && !across ? (0, core_14.wilson)(firsts, positions.length) : null };
+                const across = (0, stats_11.pooledCases)(perCase.values()), over = (0, stats_11.casesWords)(...(0, stats_11.caseSplit)(perCase.keys()));
+                return { id, over, n: positions.length, firsts, mean: positions.length ? positions.reduce((s, p) => s + p, 0) / positions.length : null, positions, across, ci: positions.length && !across ? (0, core_14.wilson)(firsts, positions.length) : null };
             };
             const rows = alts.map(a => stat(a.id)).filter(s => s.n > 0).sort((x, y) => (x.mean ?? 99) - (y.mean ?? 99) || ctx.arms.index(x.id) - ctx.arms.index(y.id));
             const top = Math.max(1, ...spans);
             if (rows.length)
                 rankings = `${subhead("Rankings", `${plural(valid.length, "full ordering")}; mean rank counts 1 as first place${partial ? "; some rankings list only some alternatives, so each alternative is averaged over the rankings that include it" : ""}`)}<div class="av-scroll-x av-jv-scroll"><table class="av-jv-table"><thead><tr><th scope="col">Alternative</th><th scope="col">First places</th><th scope="col" class="av-num">Mean rank</th><th scope="col">Positions</th></tr></thead><tbody>${rows.map(s => {
                     const dist = Array.from({ length: top }, (_, i) => s.positions.filter(p => p === i + 1).length), peak = Math.max(1, ...dist);
-                    return `<tr data-arm="${(0, core_14.esc)(s.id)}"><th scope="row">${ctx.arms.tag(s.id, { id: false })}</th><td data-label="First places"><div class="av-jv-rate"><span class="av-jv-track-wrap">${prefTrack(ctx, s.id, s.firsts / s.n, s.ci, "First-place share")}</span><span class="av-rate">${(0, core_14.esc)((0, core_14.fmtInt)(s.firsts))} of ${(0, core_14.esc)((0, core_14.fmtInt)(s.n))}</span><span class="av-ci-text">${(0, core_14.esc)((0, core_14.fmtPct)(s.firsts / s.n))}${s.ci ? ` (${(0, core_14.esc)((0, core_14.fmtPct)(s.ci[0]))}–${(0, core_14.esc)((0, core_14.fmtPct)(s.ci[1]))})` : ""}${s.across ? ` · across ${(0, core_14.esc)((0, core_14.fmtInt)(s.across))} cases, no interval` : ""}</span></div></td><td class="av-num" data-label="Mean rank">${s.mean === null ? "" : (0, core_14.esc)(s.mean.toFixed(2))}</td><td data-label="Positions"><span class="av-jv-dist" role="img" aria-label="${(0, core_14.esc)(`Times placed 1st to ${top}th: ${dist.join(", ")}`)}">${dist.map((c, i) => `<span class="av-jv-dist-cell" style="--h:${(0, frame_8.pos)(c / peak)}" title="${(0, core_14.esc)(`${plural(c, "time")} in position ${i + 1}`)}"><i></i><b>${(0, core_14.esc)((0, core_14.fmtInt)(c))}</b><small>${i + 1}</small></span>`).join("")}</span></td></tr>`;
+                    return `<tr data-arm="${(0, core_14.esc)(s.id)}"><th scope="row">${ctx.arms.tag(s.id, { id: false })}</th><td data-label="First places"><div class="av-jv-rate"><span class="av-jv-track-wrap">${prefTrack(ctx, s.id, s.firsts / s.n, s.ci, "First-place share")}</span><span class="av-rate">${(0, core_14.esc)((0, core_14.fmtInt)(s.firsts))} of ${(0, core_14.esc)((0, core_14.fmtInt)(s.n))}</span><span class="av-ci-text">${(0, core_14.esc)((0, core_14.fmtPct)(s.firsts / s.n))}${s.ci ? ` (${(0, core_14.esc)((0, core_14.fmtPct)(s.ci[0]))}–${(0, core_14.esc)((0, core_14.fmtPct)(s.ci[1]))})` : ""}${s.across ? ` · across ${(0, core_14.esc)(s.over)}, no interval` : ""}</span></div></td><td class="av-num" data-label="Mean rank">${s.mean === null ? "" : (0, core_14.esc)(s.mean.toFixed(2))}</td><td data-label="Positions"><span class="av-jv-dist" role="img" aria-label="${(0, core_14.esc)(`Times placed 1st to ${top}th: ${dist.join(", ")}`)}">${dist.map((c, i) => `<span class="av-jv-dist-cell" style="--h:${(0, frame_8.pos)(c / peak)}" title="${(0, core_14.esc)(`${plural(c, "time")} in position ${i + 1}`)}"><i></i><b>${(0, core_14.esc)((0, core_14.fmtInt)(c))}</b><small>${i + 1}</small></span>`).join("")}</span></td></tr>`;
                 }).join("")}</tbody></table></div>${bad ? `<p class="av-jv-note">${(0, core_14.esc)(`${plural(bad, "ranking")} could not be read (fewer than two alternatives, a repeat, or an alternative that is not in this comparison) and ${bad === 1 ? "is" : "are"} left out.`)}</p>` : ""}`;
         }
         // Breakdowns: by case, and by criterion.
@@ -7669,7 +7690,7 @@ ${metricIds.length > 1 ? `<label class="av-field"><span>Metric</span><select dat
         return (0, frame_8.frame)("observations", { ...input, description }, `<p class="av-jv-lede av-obs-lede">${sentence}</p>${tools}<div class="av-scroll-x av-obs-wrap"><table class="av-obs" data-av-table="observations" data-av-noun="observations">${head}<tbody>${body}</tbody></table></div>`);
     }
 });
-define("compose", ["require", "exports", "core", "trial-model", "validate"], function (require, exports, core_15, trial_model_9, validate_1) {
+define("compose", ["require", "exports", "core", "stats", "trial-model", "validate"], function (require, exports, core_15, stats_12, trial_model_9, validate_1) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.SECTION_IDS = void 0;
@@ -7809,7 +7830,7 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
                         { value: all.invalid, label: "Invalid", note: all.invalid ? "excluded, not failures" : "none", tone: all.invalid ? "warn" : "neutral" },
                         // Over several cases the runs repeat each case rather than sample new ones: plain counts, and each case's own interval under Cases.
                         ...(!multiArm && anyValid ? [one.cases > 1
-                                ? { value: `${one.pass} of ${one.valid}`, label: "Runs passed", note: `across ${one.cases} cases; each case's rate and 95% interval are under Cases` }
+                                ? { value: `${one.pass} of ${one.valid}`, label: "Runs passed", note: `across ${one.over}; each case's rate and 95% interval are under Cases` }
                                 : { value: (0, core_15.fmtPct)(one.rate), label: "Pass rate", note: `${one.pass} of ${one.valid} valid${one.interval ? ` · 95% ${(0, core_15.fmtPct)(one.interval[0])}–${(0, core_15.fmtPct)(one.interval[1])}` : ""}` }] : []),
                         { value: axes.arms.length, label: axes.arms.length === 1 ? "Arm" : "Arms" },
                         { value: baseCount, label: baseCount === 1 ? "Case" : "Cases", note: pairs.length ? `+${pairs.length} variant${pairs.length === 1 ? "" : "s"}: ${axes.cases.length} versions` : undefined },
@@ -7849,7 +7870,7 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
                 blocks: [
                     ...(allPaired ? [] : [{ type: "ladder", ...tie, ...(groups.length || pairs.length ? { title: "All cases" } : {}) }]),
                     ...(pairs.length ? [
-                        { type: "ladder", title: "Base cases", description: allPaired ? `The ${bases.length === 1 ? "case" : `${bases.length} cases`} as written.` : `The ${bases.length === 1 ? "case" : `${bases.length} cases`} that also ran as a variant, as written.`, cases: bases, ...tie },
+                        { type: "ladder", title: "Base cases", description: allPaired ? `The ${bases.length === 1 ? "case" : (0, stats_12.casesWords)(bases.length, false)} as written.` : `The ${bases.length === 1 ? "case" : (0, stats_12.casesWords)(bases.length, false)} that also ran as a variant, as written.`, cases: bases, ...tie },
                         { type: "ladder", title: `Variants (${vLabel})`, description: `The same ${bases.length === 1 ? "case" : "cases"}, each run with ${vLabel.replace(/^\+\s*/, "")} added.`, cases: pairs.map(p => p.variant), ...tie },
                     ] : []),
                     ...groups.map(g => ({ type: "ladder", title: g.label, ...(g.note ? { description: g.note } : {}), cases: g.cases, ...tie })),
@@ -7922,7 +7943,7 @@ define("compose", ["require", "exports", "core", "trial-model", "validate"], fun
         const name = typeof data.name === "string" && data.name ? data.name : undefined;
         const armText = order.length === 1 ? `One arm (${label(order[0])})` : order.length <= 4 ? `${order.length} arms (${order.map(label).join(", ")})` : `${order.length} arms`;
         const reps = range ? (range.min === range.max ? `${range.max} repeat${range.max === 1 ? "" : "s"}` : `${range.min}–${range.max} repeats`) : "";
-        const caseText = `${baseCount} case${baseCount === 1 ? "" : "s"}${!pairs.length ? "" : allPaired ? `, ${baseCount === 1 ? "run" : "each run"} as written and ${version} (${axes.cases.length} case versions)` : `, ${pairs.length === 1 ? "one" : pairs.length} of them also run ${version} (${axes.cases.length} case versions)`}`;
+        const caseText = `${(0, stats_12.casesWords)(baseCount, false)}${!pairs.length ? "" : allPaired ? `, ${baseCount === 1 ? "run" : "each run"} as written and ${version} (${axes.cases.length} case versions)` : `, ${pairs.length === 1 ? "one" : pairs.length} of them also run ${version} (${axes.cases.length} case versions)`}`;
         // Without a narrative the page has no question of its own; the plan's rule is the one place that says what the trial tested.
         const purpose = rule && !narrative.summary && !narrative.question && !narrative.title ? " What the trial tested is stated only in its decision rule, quoted under Verdict." : "";
         const shape = order.length
@@ -8275,7 +8296,7 @@ define("comparison-compose", ["require", "exports", "core", "comparison-stats", 
         };
     }
 });
-define("collection", ["require", "exports", "core", "stats", "model", "trial-model", "comparison-stats", "compose", "comparison-compose", "blocks/trial", "validate"], function (require, exports, core_17, stats_9, model_1, trial_model_11, comparison_stats_4, compose_1, comparison_compose_1, trial_1, validate_3) {
+define("collection", ["require", "exports", "core", "stats", "model", "trial-model", "comparison-stats", "compose", "comparison-compose", "blocks/trial", "validate"], function (require, exports, core_17, stats_13, model_1, trial_model_11, comparison_stats_4, compose_1, comparison_compose_1, trial_1, validate_3) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.COLLECTION_SECTION_IDS = exports.relativeMeasure = exports.MEMBER_ID = void 0;
@@ -8481,7 +8502,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             const g = balancedGain(PASS_RATE, base, r);
             const perCase = caseChanges(r, base, cs => {
                 const x = r.perCase.find(v => v.id === cs), y = base.perCase.find(v => v.id === cs);
-                return { delta: x.n && y.n ? x.k / x.n - y.k / y.n : null, interval: x.n && y.n ? (0, stats_9.newcombe)(x.k, x.n, y.k, y.n) : null };
+                return { delta: x.n && y.n ? x.k / x.n - y.k / y.n : null, interval: x.n && y.n ? (0, stats_13.newcombe)(x.k, x.n, y.k, y.n) : null };
             });
             return { arm: r.id, label: r.label, lane: r.lane, base: base.id, ...g, good: goodness(g.delta, "higher"), costChange: change(r.id), ...(g.cases > 1 ? { perCase } : {}) };
         });
@@ -8773,7 +8794,7 @@ define("collection", ["require", "exports", "core", "stats", "model", "trial-mod
             const [x, y] = shared[0];
             const label = coverage ? (noCase ? `on the ${comparison_stats_4.NO_CASE_WORDS} alone` : `on the one case ${where}, ${x.label}`) : null;
             if (rate) {
-                const iv = (0, stats_9.newcombe)(y.k, y.n, x.k, x.n);
+                const iv = (0, stats_13.newcombe)(y.k, y.n, x.k, x.n);
                 return { a: x.value, b: y.value, estimate: y.value - x.value, interval: iv, method: iv ? "difference of rates with a 95% Newcombe interval" : "difference of rates (no interval: the counts do not allow one)", why: iv ? null : "no interval: the counts do not allow one", label, coverage, shared: n, cases: caseNames, over, noCase };
             }
             if (m.kind === "numeric" && (0, core_17.isNum)(x.mean) && (0, core_17.isNum)(y.mean)) {
@@ -12928,7 +12949,7 @@ define("blocks/index", ["require", "exports", "blocks/trial", "blocks/general", 
     Object.defineProperty(exports, "reportCompare", { enumerable: true, get: function () { return collection_3.reportCompare; } });
     Object.defineProperty(exports, "frame", { enumerable: true, get: function () { return frame_10.frame; } });
 });
-define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_24, model_5, report_4, compose_3, trial_model_14, enhance_2, figures_3, validate_6, comparison_compose_3, comparison_stats_6, collection_5, reader_2, failure_5, stats_10, diff_3, text_layout_3, blocks) {
+define("index", ["require", "exports", "enhance", "compose", "comparison-compose", "collection", "core", "model", "report", "compose", "trial-model", "enhance", "figures", "validate", "comparison-compose", "comparison-stats", "collection", "reader", "failure", "stats", "diff", "text-layout", "blocks/index"], function (require, exports, enhance_1, compose_2, comparison_compose_2, collection_4, core_24, model_5, report_4, compose_3, trial_model_14, enhance_2, figures_3, validate_6, comparison_compose_3, comparison_stats_6, collection_5, reader_2, failure_5, stats_14, diff_3, text_layout_3, blocks) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
     exports.blocks = exports.browserTextMeasure = exports.wordDiff = exports.diffStats = exports.diffRuns = exports.lineDiff = exports.newcombe = exports.failureCause = exports.readerRoute = exports.COLLECTION_SECTION_IDS = exports.collectionModel = exports.memberReport = exports.compareReport = exports.collectionReport = exports.poolMoments = exports.welch = exports.tInterval = exports.tQuantile = exports.tCdf = exports.bootstrap = exports.superiority = exports.invalidJudgments = exports.ordinalLevels = exports.observationStatus = exports.judgmentMetric = exports.alternativeIds = exports.metricOf = exports.groupComparison = exports.groupPath = exports.winMatrix = exports.summarizeGroups = exports.NO_CASE_WORDS = exports.caseSplit = exports.casesWords = exports.evidenceAs = exports.difference = exports.summarize = exports.COMPARISON_SECTION_IDS = exports.fromTrial = exports.comparisonReport = exports.reportCases = exports.validateCollection = exports.validateComparison = exports.validateNarrative = exports.validateSpec = exports.mermaidDiagram = exports.runsCsv = exports.csvCell = exports.mount = exports.enhance = exports.trialAxes = exports.tally = exports.invalidReason = exports.pairedOrder = exports.casePairs = exports.SECTION_IDS = exports.trialReport = exports.blockTypes = exports.registerBlock = exports.renderBlock = exports.renderReport = exports.createContext = exports.ArmRegistry = exports.wilson = exports.escapeText = void 0;
@@ -12991,7 +13012,7 @@ define("index", ["require", "exports", "enhance", "compose", "comparison-compose
     Object.defineProperty(exports, "COLLECTION_SECTION_IDS", { enumerable: true, get: function () { return collection_5.COLLECTION_SECTION_IDS; } });
     Object.defineProperty(exports, "readerRoute", { enumerable: true, get: function () { return reader_2.readerRoute; } });
     Object.defineProperty(exports, "failureCause", { enumerable: true, get: function () { return failure_5.failureCause; } });
-    Object.defineProperty(exports, "newcombe", { enumerable: true, get: function () { return stats_10.newcombe; } });
+    Object.defineProperty(exports, "newcombe", { enumerable: true, get: function () { return stats_14.newcombe; } });
     Object.defineProperty(exports, "lineDiff", { enumerable: true, get: function () { return diff_3.lineDiff; } });
     Object.defineProperty(exports, "diffRuns", { enumerable: true, get: function () { return diff_3.diffRuns; } });
     Object.defineProperty(exports, "diffStats", { enumerable: true, get: function () { return diff_3.diffStats; } });

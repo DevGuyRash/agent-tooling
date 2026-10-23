@@ -13,6 +13,7 @@
  * when a narrative's include names it, since the case dossiers already place
  * every run. */
 import { fmtInt, fmtPct } from "./core";
+import { casesWords } from "./stats";
 import type { ArmSpec, BlockSpec, ReportSpec, SectionSpec } from "./model";
 import { armTally, CasePair, caseChecks, casePairs, checkTable, costMeasures, displayPath, judgeFor, pairedOrder, repeatRange, ruleMentions, tally, TrialReport, trialAxes } from "./trial-model";
 import type { VerdictInput } from "./blocks/trial";
@@ -183,7 +184,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
         { value: all.invalid, label: "Invalid", note: all.invalid ? "excluded, not failures" : "none", tone: all.invalid ? "warn" : "neutral" },
         // Over several cases the runs repeat each case rather than sample new ones: plain counts, and each case's own interval under Cases.
         ...(!multiArm && anyValid ? [one.cases > 1
-          ? { value: `${one.pass} of ${one.valid}`, label: "Runs passed", note: `across ${one.cases} cases; each case's rate and 95% interval are under Cases` }
+          ? { value: `${one.pass} of ${one.valid}`, label: "Runs passed", note: `across ${one.over}; each case's rate and 95% interval are under Cases` }
           : { value: fmtPct(one.rate), label: "Pass rate", note: `${one.pass} of ${one.valid} valid${one.interval ? ` · 95% ${fmtPct(one.interval[0])}–${fmtPct(one.interval[1])}` : ""}` }] : []),
         { value: axes.arms.length, label: axes.arms.length === 1 ? "Arm" : "Arms" },
         { value: baseCount, label: baseCount === 1 ? "Case" : "Cases", note: pairs.length ? `+${pairs.length} variant${pairs.length === 1 ? "" : "s"}: ${axes.cases.length} versions` : undefined },
@@ -225,7 +226,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
       blocks: [
         ...(allPaired ? [] : [{ type: "ladder", ...tie, ...(groups.length || pairs.length ? { title: "All cases" } : {}) }]),
         ...(pairs.length ? [
-          { type: "ladder", title: "Base cases", description: allPaired ? `The ${bases.length === 1 ? "case" : `${bases.length} cases`} as written.` : `The ${bases.length === 1 ? "case" : `${bases.length} cases`} that also ran as a variant, as written.`, cases: bases, ...tie },
+          { type: "ladder", title: "Base cases", description: allPaired ? `The ${bases.length === 1 ? "case" : casesWords(bases.length, false)} as written.` : `The ${bases.length === 1 ? "case" : casesWords(bases.length, false)} that also ran as a variant, as written.`, cases: bases, ...tie },
           { type: "ladder", title: `Variants (${vLabel})`, description: `The same ${bases.length === 1 ? "case" : "cases"}, each run with ${vLabel.replace(/^\+\s*/, "")} added.`, cases: pairs.map(p => p.variant), ...tie },
         ] : []),
         ...groups.map(g => ({ type: "ladder", title: g.label, ...(g.note ? { description: g.note } : {}), cases: g.cases, ...tie })),
@@ -292,7 +293,7 @@ export function trialReport(data: TrialReport, narrativeIn: Narrative = {}): Rep
   const name = typeof data.name === "string" && data.name ? data.name : undefined;
   const armText = order.length === 1 ? `One arm (${label(order[0])})` : order.length <= 4 ? `${order.length} arms (${order.map(label).join(", ")})` : `${order.length} arms`;
   const reps = range ? (range.min === range.max ? `${range.max} repeat${range.max === 1 ? "" : "s"}` : `${range.min}–${range.max} repeats`) : "";
-  const caseText = `${baseCount} case${baseCount === 1 ? "" : "s"}${!pairs.length ? "" : allPaired ? `, ${baseCount === 1 ? "run" : "each run"} as written and ${version} (${axes.cases.length} case versions)` : `, ${pairs.length === 1 ? "one" : pairs.length} of them also run ${version} (${axes.cases.length} case versions)`}`;
+  const caseText = `${casesWords(baseCount, false)}${!pairs.length ? "" : allPaired ? `, ${baseCount === 1 ? "run" : "each run"} as written and ${version} (${axes.cases.length} case versions)` : `, ${pairs.length === 1 ? "one" : pairs.length} of them also run ${version} (${axes.cases.length} case versions)`}`;
   // Without a narrative the page has no question of its own; the plan's rule is the one place that says what the trial tested.
   const purpose = rule && !narrative.summary && !narrative.question && !narrative.title ? " What the trial tested is stated only in its decision rule, quoted under Verdict." : "";
   const shape = order.length
