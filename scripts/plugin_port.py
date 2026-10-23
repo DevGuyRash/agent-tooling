@@ -238,8 +238,8 @@ def _agent_files(root: Path, host: str) -> list[Path]:
             die(f"{manifest_path}: agents must be a path or list of paths")
         for item in declared:
             path = root / item
-            if not item.startswith("./") or not path.resolve().is_relative_to(root.resolve()):
-                die(f"{manifest_path}: agent path escapes the plugin root or lacks ./ prefix: {item}")
+            if not item.startswith("./") or ".." in Path(item).parts or not path.resolve().is_relative_to(root.resolve()):
+                die(f"{manifest_path}: agent path escapes the plugin root, climbs with .., or lacks ./ prefix: {item}")
             if not path.is_file() or path.suffix != ".md":
                 die(f"{manifest_path}: agent path must name an existing Markdown file: {item}")
             files.add(path)
@@ -1548,9 +1548,13 @@ def mark_preserved_host_specific(root: Path, target: str, report: Report) -> Non
 def archive_superseded_agents(out_root: Path, host: str, report: Report, kind: str, note: str) -> None:
     """Move a host's superseded agent definitions out of discovery; a retained link to one follows it into the archive."""
     moved: dict[Path, Path] = {}
+    archive_root = (out_root / PORTABILITY_DIR / "original-agents").resolve()
     for old_path in _agent_files(out_root, host):
-        archive = out_root / PORTABILITY_DIR / "original-agents" / old_path.relative_to(out_root)
         real_path = old_path.resolve()  # a retained link names the real path, which differs under a folder alias
+        # The archive copies the real path's place in the package, never a spelling that could climb out of it.
+        archive = archive_root / real_path.relative_to(out_root.resolve())
+        if not archive.resolve().is_relative_to(archive_root):
+            die(f"{old_path.relative_to(out_root)}: archiving this agent would write outside the converted package")
         archive.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(str(old_path), str(archive))
         moved[old_path] = moved[real_path] = archive

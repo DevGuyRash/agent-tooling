@@ -352,6 +352,19 @@ class PluginPortTests(unittest.TestCase):
         self.assertEqual(text, (output / "old-agent-copy").read_text())
         plugin_port.validate_symlink_tree(output)
 
+    def test_a_manifest_agent_path_that_climbs_is_refused_and_nothing_is_overwritten(self) -> None:
+        base = self.root / "climb"
+        source = base / "source"
+        write(source / ".codex-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / ".claude-plugin/plugin.json", json.dumps({"name": "kit", "version": "1.0.0", "agents": ["./alias/../../../../source/victim.md"]}))
+        (source / "a/b/c/d").mkdir(parents=True)
+        (source / "alias").symlink_to("a/b/c/d")
+        write(source / "source/victim.md", "---\nname: victim\ndescription: Victim.\n---\nOriginal.\n")
+        before = (source / "source/victim.md").read_bytes()
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "agent path"):
+            plugin_port.convert_plugin(source, "claude", base / "output", mode="strict", overwrite=False, explicit_host="codex")
+        self.assertEqual(before, (source / "source/victim.md").read_bytes())
+
     def test_marketplace_child_without_a_manifest_takes_the_catalogs_host(self) -> None:
         market = self.root / "codex-market-src"
         child = market / "plugins/kit"
