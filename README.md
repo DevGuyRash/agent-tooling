@@ -52,11 +52,33 @@ Common commands:
 
 Compatibility contract:
 
-- Supported active surfaces: plugin detection, plugin/marketplace inspection, Codex skills, Claude skills, Claude commands converted to Codex skills, basic manifests, local marketplaces, MCP path normalization, and hook placeholder normalization.
+- Supported active surfaces: bidirectional native custom-agent definition conversion, plugin detection, plugin/marketplace inspection, Codex skills, Claude skills, Claude commands converted to Codex skills, basic manifests, local marketplaces, MCP path normalization, and hook placeholder normalization.
 - Preserved-only surfaces: Codex apps and plugin-root `CLAUDE.md` files when targeting Claude; Claude LSP/output styles/themes/monitors/bin/settings when targeting Codex. Root `CLAUDE.md` files are moved to `.plugin-portability/preserved/CLAUDE.md` in Claude output because Claude plugin validation rejects plugin-root context files.
 - Strict rejection surfaces: unsupported hook events, async command hooks, handler-level hook filters, non-command hook handlers, invalid JSON/YAML, non-local marketplace entries, marketplace paths that escape the marketplace root, and MCP runtime paths that escape the plugin root.
 - Roundtrips use strict mode by default and internally validate the converted second-hop plugin. Codex external validation resolves its bundled validator below `CODEX_HOME` when that environment variable is set.
-- Best-effort behavior: the source tree is still copied, but semantic loss is recorded in `unsupported`, `preserved_only`, and `executable_surfaces`. Invalid skill, command, or agent frontmatter is repaired with generated target metadata only in best-effort conversion; validation still rejects malformed source frontmatter.
+- Best-effort behavior: the source tree is still copied, but semantic loss is recorded in `unsupported`, `preserved_only`, and `executable_surfaces`. Invalid skill or command frontmatter may be repaired with generated target metadata in best-effort conversion. Malformed agents and unsupported agent restrictions fail before output mutation in both modes.
+
+### Custom agents
+
+Claude plugin agents are Markdown files with YAML frontmatter. Codex custom agents are TOML files. The converter adapts their name, description, instructions, explicit model selection and compatible effort fields in both directions. Instructions retain their original bytes. The converter does not rewrite prose that assumes host-specific tools or runtime variables. Review those assumptions separately. It preserves the source definitions for roundtrips.
+
+Codex does not load agents from a plugin manifest. Converted definitions live under `.codex/agents/` inside the package until an installer projects them into `$CODEX_HOME/agents/`, or `~/.codex/agents/` when `CODEX_HOME` is unset. Claude loads converted `agents/*.md` through its native plugin installation. A copied definition is not proof that either host invoked it.
+
+A source model other than `inherit` requires an explicit mapping such as `--agent-model SOURCE=TARGET`. The converter does not select a supposedly equivalent model or check account availability. Unmapped tool restrictions, permission modes, isolation, hooks, MCP declarations and unknown fields stop cross-host conversion rather than produce a more privileged agent. Advisory display and background-scheduling metadata produces warnings when the destination cannot enforce it.
+
+After native Codex plugin installation, project agents from its installed root:
+
+```sh
+python3 scripts/plugin_port.py install-agents /path/to/installed/plugin --owner example@marketplace
+python3 scripts/plugin_port.py install-agents /path/to/installed/plugin --owner example@marketplace --dry-run
+python3 scripts/plugin_port.py install-agents --owner example@marketplace --remove
+```
+
+This supplemental command does not replace the plugin's marketplace or vendor its upstream source. It registers names as `plugin:agent`, matching Claude's plugin namespace. Rerun it after a native plugin update, and remove its owned copies when uninstalling that plugin. Run it again after a partial failure. It refuses local edits, duplicate registered names, symlinked agent paths and stale plans. File writes and its ownership receipt roll back together on a handled write failure. It never overwrites a user-managed agent, including with the marketplace installer's `--force` option.
+
+`scripts/install-all` performs this projection automatically for selected Codex plugins after verifying their installed contents. It preflights mappings and collisions before native plugin mutations. The existing Claude installation path already loads native agent files. `--agent-model` is also accepted by `install-all`. Only selected plugins are reconciled; unselected agents remain unchanged. Installation uses POSIX `fcntl` locking and does not support native Windows; package conversion is independent of that lock. The native plugin transaction and agent projection are separate. If projection or the final installer receipt fails after native installation, the error reports that partial outcome. Resolve any reported local-agent conflict and rerun the same command. Already verified native plugins remain installed and are not rolled back.
+
+Contracts are based on the [Codex custom-agent documentation](https://learn.chatgpt.com/docs/agent-configuration/subagents), [Codex 0.163.0 role loader](https://github.com/openai/codex/blob/rust-v0.163.0/codex-rs/agent-roles/src/loader.rs), and [Claude subagent documentation](https://code.claude.com/docs/en/sub-agents). Use a host version supporting those native formats and its subagent runtime. Installation does not enable feature flags or change provider, sandbox, or permission settings. Package validation, discovery and model invocation are separate checks.
 
 Report fields include `schema_version`, `status`, `support_level`, `validation_summary`, `executable_surfaces`, `warnings`, `unsupported`, `preserved_only`, `mappings`, and `files_copied`.
 
@@ -71,10 +93,11 @@ WHEN semantic loss would be unacceptable THEN you SHALL use `--mode strict`. WHE
 
 Local tests:
 
-- `just test-plugin-port` runs deterministic unit tests.
+- `just test-plugin-port` runs deterministic converter and owned-agent installation tests.
 - `PLUGIN_PORT_LIVE=1 PLUGIN_PORT_CLAUDE=1 just test-plugin-port-live` runs Claude CLI checks when `claude` is installed.
 - `PLUGIN_PORT_LIVE=1 PLUGIN_PORT_CODEX=1 just test-plugin-port-live` runs Codex temp-marketplace checks when `codex` is installed.
 - Set `PLUGIN_PORT_CODEX_BIN=/absolute/path/to/codex` to select a native executable when the `codex` wrapper chooses a different profile. The test confirms a unique skill marker from the temporary profile before registering or installing its fixture.
+- Native agent lifecycle tests use disposable homes for both hosts. They require a positive profile marker before mutation, preserve an unrelated control plugin, and cover install, update, removal, and rejected replacements. Claude component discovery is checked through `plugin details`. Codex package loading and agent-file projection are checked separately; these tests do not claim model invocation.
 - Live tests use temporary directories and a temporary `CODEX_HOME`; they do not install into the user's normal plugin state.
 
 ## Container bootstrap scripts
@@ -216,3 +239,4 @@ Docker Architect’s retired Compose and image launchers are preserved under `ar
 `scripts/package_skills.py` retains the existing packaging command names as adapters over the task engine. `stage-host` and `dist-refresh` synchronize selected Rust tasks; verification commands check their receipts without rebuilding. `sync-artifacts` imports prepared outputs only with matching task receipts and source identities. `vendor` operates on direct-copy tasks. The manifest, receipt format and publication logic have one maintained owner.
 
 Setup flags remain documented by `scripts/setup.sh` and `scripts/maintenance.sh`. Plugin installation uses the explicit installer described above.
+

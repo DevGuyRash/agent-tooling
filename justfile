@@ -65,11 +65,11 @@ audit-plugins *args:
 
 # Run the plugin portability converter unit tests
 test-plugin-port:
-  python3 -m unittest scripts.tests.test_plugin_port
+  python3 -m unittest scripts.tests.test_plugin_port scripts.tests.test_agent_install
 
 # Run live checks; opt into each host with PLUGIN_PORT_CODEX=1 / PLUGIN_PORT_CLAUDE=1
 test-plugin-port-live:
-  PLUGIN_PORT_LIVE=1 python3 -m unittest scripts.tests.test_plugin_port_live
+  PLUGIN_PORT_LIVE=1 python3 -m unittest scripts.tests.test_plugin_port_live scripts.tests.test_plugin_agents_live
 
 # Reconcile selected agent-tooling plugins in Codex and Claude Code by artifact identity
 install-all *args:
@@ -130,3 +130,4 @@ visual-previews:
 # Confirm every evals scenario's checks: known-good behavior passes and known-bad fails (needs bubblewrap)
 qualify-evals:
   python3 plugins/agentic-design-and-evaluation/skills/split-testing/scripts/trial.py run evals/plans/qualify-checks.json --out "${XDG_CACHE_HOME:-$HOME/.cache}/agent-trials/qualify-evals-$(date +%s)"
+

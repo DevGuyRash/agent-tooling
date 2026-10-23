@@ -476,7 +476,8 @@ class InstallAllTests(unittest.TestCase):
             (repo_root / ".agents" / "plugins").mkdir(parents=True)
             (repo_root / ".claude-plugin").mkdir(parents=True)
             shutil.copy2(INSTALL_ALL, repo_root / "scripts" / "install-all")
-            shutil.copy2(REPO_ROOT / "scripts" / "install_all.py", repo_root / "scripts" / "install_all.py")
+            for module in ("install_all.py", "agent_install.py", "plugin_port.py"):
+                shutil.copy2(REPO_ROOT / "scripts" / module, repo_root / "scripts" / module)
             for name in sorted(set(codex_plugins) | set(claude_plugins)):
                 for manifest_dir in (".codex-plugin", ".claude-plugin"):
                     manifest = repo_root / "plugins" / name / manifest_dir / "plugin.json"
@@ -506,6 +507,36 @@ class InstallAllTests(unittest.TestCase):
         proc, calls = self.run_install_all_process(*args)
         self.assertEqual(0, proc.returncode, proc.stdout + proc.stderr)
         return calls
+
+    def test_codex_agents_are_projected_after_verified_plugin_install(self):
+        with tempfile.TemporaryDirectory(prefix="install-all-agents-") as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            shutil.copytree(REPO_ROOT, repo, ignore=shutil.ignore_patterns('.local', '__pycache__'))
+            agents = repo / 'plugins/visualization/agents'
+            agents.mkdir()
+            (agents / 'reviewer.md').write_text('---\nname: reviewer\ndescription: Review one file.\n---\n\nNever edit files.\n')
+            proc, calls = self._run_install_all_process(repo, root, '--source', str(repo), '--codex-only', '--include', 'visualization')
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            projected = list((root / 'codex-profile/agents').glob('*.toml'))
+            self.assertEqual(len(projected), 1)
+            import tomllib
+            payload = tomllib.loads(projected[0].read_text())
+            self.assertEqual(payload['name'], 'visualization:reviewer')
+            self.assertEqual(payload['developer_instructions'], '\nNever edit files.\n')
+
+    def test_agent_restriction_blocks_native_plugin_mutation(self):
+        with tempfile.TemporaryDirectory(prefix="install-all-agent-restriction-") as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            shutil.copytree(REPO_ROOT, repo, ignore=shutil.ignore_patterns('.local', '__pycache__'))
+            agents = repo / 'plugins/visualization/agents'
+            agents.mkdir()
+            (agents / 'reviewer.md').write_text('---\nname: reviewer\ndescription: Review one file.\ntools: Read\n---\nNever edit files.\n')
+            proc, calls = self._run_install_all_process(repo, root, '--source', str(repo), '--codex-only', '--include', 'visualization')
+            self.assertNotEqual(proc.returncode, 0)
+            self.assertIn('tools', proc.stderr)
+            self.assertEqual(mutation_calls(calls), [])
 
     def test_retired_packages_are_preserved_but_not_installable(self):
         retired = {"diagram", "docker-architect", "goalspec"}
@@ -1021,6 +1052,68 @@ class ClaudeRegistryPreservationTests(unittest.TestCase):
             with preserve_claude_registry(plan, args, env):
                 pass
             self.assertEqual(path.read_bytes(), original)
+
+
+
+class AgentPartialOutcomeTests(unittest.TestCase):
+    def test_retry_finishes_agents_without_reinstalling_verified_native_plugin(self):
+        import contextlib
+        from unittest.mock import patch
+        from scripts import install_all, agent_install
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plugin = root / 'plugin'
+            plugin.mkdir()
+            identity = Identity('1.0.0', hash_tree(plugin))
+            owner = 'example@agent-tooling'
+            home = root / 'codex'
+            installed = {}
+            native_changes = []
+            def discover(*args, **kwargs):
+                return HostState('codex', str(root), True, dict(installed))
+            def native_apply(plan, *args):
+                if plan.mutates:
+                    native_changes.append(plan)
+                    installed[owner] = InstalledArtifact('1.0.0', plugin)
+            def source(args, *rest):
+                args.resolved_source = str(root)
+                args.source_local = True
+                return contextlib.nullcontext(root)
+            def agents(*args):
+                return agent_install.plan(home, owner, {'review.toml': 'name = "example:reviewer"\n'})
+            real_apply = agent_install.apply
+            attempts = []
+            def interrupted_apply(plan):
+                attempts.append(plan)
+                if len(attempts) == 1:
+                    raise agent_install.AgentInstallError('injected stale plan')
+                real_apply(plan)
+            with contextlib.ExitStack() as stack:
+                for name, replacement in {
+                    'resolve_public_git': lambda *a: Path('/usr/bin/git'),
+                    'public_git_environment': lambda *a: contextlib.nullcontext({}),
+                    'resolved_source': source,
+                    'read_catalog': lambda root, host: {owner: identity} if host == 'codex' else {},
+                    'receipt_path': lambda: root / 'receipt.json',
+                    'lifecycle_lock': lambda: contextlib.nullcontext(),
+                    'discover': discover,
+                    'apply': native_apply,
+                    'selected_agent_plan': agents,
+                }.items():
+                    stack.enter_context(patch.object(install_all, name, replacement))
+                stack.enter_context(patch.object(install_all.shutil, 'which', return_value='/fake/codex'))
+                stack.enter_context(patch.object(agent_install, 'apply', interrupted_apply))
+                import io
+                output = io.StringIO()
+                with contextlib.redirect_stderr(output):
+                    self.assertEqual(install_all.main(['--codex-only', '--source', str(root)]), 1)
+                self.assertIn('native plugin changes were not rolled back', output.getvalue())
+                self.assertFalse((root / 'receipt.json').exists())
+                self.assertEqual(install_all.main(['--codex-only', '--source', str(root)]), 0)
+                self.assertEqual(len(native_changes), 1)
+                self.assertEqual(len(list((home / 'agents').glob('*.toml'))), 1)
+                self.assertTrue((root / 'receipt.json').is_file())
+
 
 if __name__ == "__main__":
     unittest.main()
