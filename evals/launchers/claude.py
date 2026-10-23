@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -63,6 +64,27 @@ ACCOUNT_OFF = {
 }
 
 
+# A claude.ai login refreshes by rotating its refresh token: a refresh inside a run would give the new tokens to the run's
+# copy, which the runtime removes afterwards, and leave the owner's own login holding the revoked one, signed out. So a
+# turn on a copied login starts only while its access token outlasts the turn's time limit (TRIAL_TIMEOUT_S, from the
+# runtime) and a margin. Only the expiry and whether a refresh token exists are read; neither is printed.
+REFRESH_MARGIN_S = 600
+
+
+def copied_login_needs_refresh() -> bool:
+    try:
+        oauth = json.loads((HOME / ".claude" / ".credentials.json").read_text()).get("claudeAiOauth")
+    except (OSError, ValueError, AttributeError):
+        return False
+    if not isinstance(oauth, dict) or not oauth.get("refreshToken"):
+        return False  # nothing that rotates
+    expires = oauth.get("expiresAt")
+    if not isinstance(expires, (int, float)) or isinstance(expires, bool):
+        return True
+    expires_s = expires / 1000 if expires > 1e11 else expires
+    return expires_s < time.time() + float(os.environ.get("TRIAL_TIMEOUT_S") or 3600) + REFRESH_MARGIN_S
+
+
 def settings() -> dict:
     path = HOME / ".launcher" / "settings.json"
     return json.loads(path.read_text()) if path.is_file() else {}
@@ -99,6 +121,11 @@ def run_turn(turn: int) -> int:
     if extra.get("bare") is False:
         env["CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL"] = "1"
         env.update(ACCOUNT_OFF["env"])
+    if extra.get("bare") is False and copied_login_needs_refresh():
+        print("launcher: the copied claude.ai login expires before this turn could finish, and refreshing it inside the "
+              "run would revoke the owner's own login; refresh the login on this machine first (run any claude command "
+              "there), then run the trial again", file=sys.stderr)
+        return 77
     message = Path(os.environ["TRIAL_PROMPT_FILE"]).read_bytes()
     events = STATE / f"events-{turn}.jsonl"
     with events.open("wb") as out:

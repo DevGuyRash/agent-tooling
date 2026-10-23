@@ -2,6 +2,8 @@
 judge, checked against what the removed drivers passed, with the executor itself replaced by a recorder."""
 import importlib.util
 import json
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -139,6 +141,37 @@ class ClaudeInvocationTest(LauncherCase):
         self.assertEqual(self.turn(module, 2, launched, **env), 0)
         second = launched.calls[1]["cmd"]
         self.assertEqual(second[second.index("--resume"):second.index("--resume") + 2], ["--resume", "S7"])
+
+    def test_a_copied_login_that_would_need_a_refresh_inside_the_run_is_refused(self):
+        # A claude.ai login refreshes by rotating its refresh token. A refresh inside the run hands the new tokens to the
+        # copy, which is removed afterwards, and leaves the owner's own login holding a revoked token: signed out.
+        # So a turn starts only while the copied access token outlasts the turn's time limit and a margin.
+        import time
+        init = {"type": "system", "subtype": "init", "session_id": "S1", "model": "model-a"}
+        result = {"type": "result", "subtype": "success", "is_error": False, "result": "done", "session_id": "S1", "usage": {}}
+        (self.home / ".launcher").mkdir(exist_ok=True)
+        (self.home / ".launcher" / "settings.json").write_text('{"bare": false}')
+        (self.home / ".claude").mkdir(exist_ok=True)
+        login = self.home / ".claude" / ".credentials.json"
+        now_ms = int(time.time() * 1000)
+        for label, expires, limit, refused in (("expires within the turn", now_ms + 20 * 60_000, "1800", True),
+                                               ("already marked expired", 0, "900", True),
+                                               ("outlasts the turn", now_ms + 8 * 3_600_000, "1800", False)):
+            with self.subTest(label):
+                login.write_text(json.dumps({"claudeAiOauth": {"accessToken": "a", "refreshToken": "r", "expiresAt": expires}}))
+                module = self.launcher()
+                with mock.patch.dict(os.environ, {**self.env, "TRIAL_TURN": "0"}):
+                    self.assertEqual(module.main(), 0)
+                launched = Launched([[init, result]])
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    code = self.turn(module, 1, launched, TRIAL_TURNS="1", TRIAL_TIMEOUT_S=limit)
+                started = [call for call in launched.calls if call["cmd"][0] == "claude"]  # the last turn also cleans caches
+                if refused:
+                    self.assertEqual((77, []), (code, started))
+                    self.assertIn("refresh", stderr.getvalue())
+                else:
+                    self.assertEqual((0, 1), (code, len(started)))
 
     def test_a_signed_in_run_turns_off_everything_its_account_brings_that_claude_code_can_and_a_bare_run_is_unchanged(self):
         # A signed-in login (not bare) would bring its claude.ai account into every run. Every control Claude Code 2.1.299

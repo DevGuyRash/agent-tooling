@@ -1647,6 +1647,7 @@ def _launcher_turns(arm, spec, job_dir: Path, env, *, out: Path, stdout_path: Pa
     messages = [spec["prompt"], *spec.get("followups", [])]
     settings.update(TRIAL_TURNS=str(len(messages)), TRIAL_CONFINED="1" if confined else "0")
     timeout = spec.get("timeout_s", LAUNCHER_TIMEOUT)
+    settings["TRIAL_TIMEOUT_S"] = str(int(timeout))  # so a launcher can refuse a turn its sign-in would not outlast
     watched = _watch_paths(arm, job_dir)
     status, baseline, session = "ok", {}, None
     for turn in range(len(messages) + 1):
