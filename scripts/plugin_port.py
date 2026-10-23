@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import datetime
 import json
 import os
 import re
@@ -277,6 +278,8 @@ def _toml_value(value: Any) -> str:
         return _toml_string(value)
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, (datetime.date, datetime.time)):  # datetime.datetime is a date; isoformat is TOML's own form
+        return value.isoformat()
     if isinstance(value, (int, float)):
         return repr(value)
     if isinstance(value, list):
@@ -402,8 +405,7 @@ def agent_documents(
             fields.update(name=name, description=description)
             content = f"---\n{dump_yaml_data(fields)}\n---\n{body}"
             if origin == "claude":
-                relative = path.relative_to(root / "agents") if path.is_relative_to(root / "agents") else Path(path.name)
-                destination = Path("agents") / relative.with_suffix(".md")
+                destination = source_path  # a native Claude agent stays where its plugin declares it
             else:
                 destination = Path("agents", *parts[:-1], name + ".md")
             invocation = identity

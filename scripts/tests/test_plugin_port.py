@@ -205,6 +205,39 @@ class PluginPortTests(unittest.TestCase):
                 expected = "kit:team:review" if name == "codex" else "kit:frontname"
                 self.assertEqual([expected], [document.name for document in plugin_port.agent_documents(previous, "codex", namespace="kit")])
 
+    def test_installer_honours_the_package_host_over_a_stale_native_copy(self) -> None:
+        # A Claude-only package whose old Codex copy is unrestricted must not install that copy over its restricted agent.
+        from scripts import agent_install
+        source = self.root / "claude-only"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / "agents/reviewer.md", "---\nname: reviewer\ndescription: Review.\ntools: Read\n---\nRead only.\n")
+        write(source / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Old."\ndeveloper_instructions="Do anything."\n')
+        home = self.root / "codex-home"
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            status = agent_install.main([str(source), "--owner", "kit@market", "--codex-home", str(home), "--dry-run"])
+        self.assertEqual(1, status)
+        self.assertIn("cannot preserve agent fields in codex: tools", stderr.getvalue())
+
+    def test_dual_package_keeps_a_custom_path_agent_where_it_is(self) -> None:
+        source = self.root / "dual"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0","agents":["./custom/reviewer.md"]}')
+        write(source / ".codex-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / "custom/reviewer.md", "---\nname: reviewer\ndescription: Review.\n---\nReview.\n")
+        write(source / ".codex/agents/scout.toml", 'name="scout"\ndescription="Scout."\ndeveloper_instructions="Look."\n')
+        output = self.root / "converted"
+        plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
+        self.assertEqual(["reviewer", "scout"], sorted(document.name for document in plugin_port.agent_documents(output, "claude", source_host="claude")))
+        self.assertFalse((output / "agents/reviewer.md").exists())
+
+    def test_codex_projection_keeps_dates_and_times(self) -> None:
+        source = self.root / "source"
+        write(source / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Review."\npublished=2026-10-23\nat=07:30:00\nstamp=2026-10-23T07:30:00Z\n')
+        document, = plugin_port.agent_documents(source, "codex", namespace="kit")
+        original = tomllib.loads((source / ".codex/agents/reviewer.toml").read_text())
+        projected = tomllib.loads(document.content)
+        self.assertEqual([original[key] for key in ("published", "at", "stamp")], [projected[key] for key in ("published", "at", "stamp")])
+
     def test_a_directory_named_like_the_plugin_keeps_its_segment(self) -> None:
         source = self.root / "source"
         write(source / "agents/probe/filename.md", "---\nname: review\ndescription: Nested.\n---\nNested.\n")

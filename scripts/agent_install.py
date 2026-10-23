@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> int:
         documents = {}
         if args.package:
             package = plugin_port.detect_plugin(Path(args.package))
-            for document in plugin_port.agent_documents(package.root, 'codex', plugin_port.agent_model_map(args.agent_model), namespace=args.namespace or args.owner.split('@', 1)[0]):
+            for document in plugin_port.agent_documents(package.root, 'codex', plugin_port.agent_model_map(args.agent_model), namespace=args.namespace or args.owner.split('@', 1)[0], source_host=package.host):
                 documents[document_filename(document.path)] = document.content
                 for warning in document.warnings:
                     print(f'agent-install: {warning}', file=sys.stderr)
