@@ -888,6 +888,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 receipt = read_receipt(receipt_file)
                 plans: list[HostPlan] = []
                 codex_state = None
+                kept: dict[str, Identity] = {}  # the receipt identities of plugins left as installed
                 for host, plugins in selected.items():
                     if not plugins:
                         continue
@@ -902,6 +903,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                         for plugin_id in disabled:  # Codex enables what it installs, so updating it would undo the user's choice
                             log(f"codex: {plugin_id} is disabled; it is left as installed, with no custom agents, until it is enabled")
                         plugins = {p: identity for p, identity in plugins.items() if p not in disabled}
+                        kept = {p: identity for p in disabled if (identity := receipt_identity(receipt, host, p)) is not None}
                     plans.append(plan_host(host, state, plugins, receipt, args))
                 agents = selected_agent_plan(root, selected["codex"], args, environment, codex_state) if selected.get("codex") else None
                 if agents and agents.changes:
@@ -933,7 +935,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         "source": args.resolved_source,
                         "scope": args.claude_scope if plan.host == "claude" else "user",
                         "projectPath": str(args.claude_project_path) if plan.host == "claude" and args.claude_project_path is not None else None,
-                        "plugins": {plugin_id: dataclasses.asdict(identity) for plugin_id, identity in sorted(plan.selected.items())},
+                        "plugins": {plugin_id: dataclasses.asdict(identity) for plugin_id, identity in
+                                    sorted({**(kept if plan.host == "codex" else {}), **plan.selected}.items())},
                     }
                 if agents is not None:
                     try:

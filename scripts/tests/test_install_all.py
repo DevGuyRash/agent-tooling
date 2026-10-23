@@ -569,6 +569,8 @@ class InstallAllTests(unittest.TestCase):
                     proc, _ = self._run_install_all_process(repo, root, *run)
                     self.assertEqual(proc.returncode, 0, proc.stderr)
                     self.assertEqual(1, len(list(profile.glob('plugin-port-*.toml'))))  # projected while enabled
+                    receipt = root / 'state/agent-tooling/install-all.json'
+                    recorded = json.loads(receipt.read_text())['hosts']['codex']['plugins'][plugin_id]
                     held = json.loads(state.read_text())
                     for item in held['installed']:
                         if item['pluginId'] == plugin_id:
@@ -582,6 +584,8 @@ class InstallAllTests(unittest.TestCase):
                 self.assertEqual([False], [i['enabled'] for i in json.loads(state.read_text())['installed'] if i['pluginId'] == plugin_id])
                 if not label.startswith('disabled after'):
                     continue
+                # Its receipt entry, the baseline that tells a later run its installed files were changed, is kept.
+                self.assertEqual(recorded, json.loads(receipt.read_text())['hosts']['codex']['plugins'][plugin_id])
                 held = json.loads(state.read_text())
                 for item in held['installed']:
                     if item['pluginId'] == plugin_id:
