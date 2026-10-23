@@ -590,6 +590,13 @@ def _check_pass_env(entry: dict, where: str) -> dict:
             raise TrialError(f"{where} passes {', '.join(owned)}, which the runtime sets for every run itself (its "
                              "private home, its tools first on PATH, its own git and gh configuration, and the TRIAL_ "
                              f"variables); remove it from {key}")
+    return _check_held_apart(entry, where)
+
+
+def _check_held_apart(entry: dict, where: str) -> dict:
+    """Refuse a variable passed both as configuration (pass_env, whose values are part of a run's conditions) and as a
+    credential (secret_env or api_key_var, whose values never are), as the settings are once expanded (see
+    resolve_arm)."""
     key = [entry["api_key_var"]] if isinstance(entry.get("api_key_var"), str) else []
     both = sorted({*entry.get("secret_env", []), *key} & set(entry.get("pass_env", [])))
     if both:
@@ -630,7 +637,7 @@ def resolve_arm(arm: dict, where: str, base: Path | None = None) -> dict:
                          "`trial.py latest GLOB FILE` picks the newest version from a list of model IDs you obtained")
     if isinstance(raw, str) and raw != arm.get("model"):
         arm["model_spec"] = raw
-    return arm
+    return _check_held_apart(arm, where)
 
 
 def _version_key(parts: tuple[str, ...]):
@@ -1093,7 +1100,8 @@ def _conditions(arm: dict, spec: dict) -> dict:
 def _env_digest(entry: dict) -> str:
     """One digest of the values this process passes on to an arm's or judge's process: its pass_env names', and the
     locale's (an API key, apart, is not)."""
-    names = sorted({*CONDITION_ENV, *LOCALE_ENV, *(entry.get("pass_env") or [])})
+    held = {*(entry.get("secret_env") or []), *([entry["api_key_var"]] if entry.get("api_key_var") else [])}
+    names = sorted({*CONDITION_ENV, *LOCALE_ENV, *(entry.get("pass_env") or [])} - held)
     return hashlib.sha256(json.dumps([[n, os.environ.get(n)] for n in names]).encode()).hexdigest()
 
 
@@ -1260,14 +1268,14 @@ def _open_record(path: Path):
 def _run(cmd, *, cwd, env, stdin_text, timeout, stdout_path, stderr_path, secrets=()):
     """Run `cmd` in its own process group, and end that group once it exits or times out: whatever it left running
     in the background ends with it, unconfined as under confinement (where its process namespace ends with it). With
-    `secrets`, its output first goes to unnamed files outside the run (see _private_root), and reaches stdout_path and
+    `secrets`, its output first goes to unnamed files outside the run (see _copies_root), and reaches stdout_path and
     stderr_path with each of them replaced (see _redact_into), so no credential the runtime knows is written there."""
     with _open_record(stdout_path) as out, _open_record(stderr_path) as err, contextlib.ExitStack() as spools:
         sout, serr = out, err
         if secrets:
-            sout = spools.enter_context(tempfile.TemporaryFile(dir=_private_root()))
+            sout = spools.enter_context(tempfile.TemporaryFile(dir=_copies_root()))
             serr = (sout if stderr_path == stdout_path
-                    else spools.enter_context(tempfile.TemporaryFile(dir=_private_root())))
+                    else spools.enter_context(tempfile.TemporaryFile(dir=_copies_root())))
         proc = subprocess.Popen(cmd, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=sout,
                                 stderr=serr, start_new_session=True)
         try:
@@ -1325,7 +1333,8 @@ def confine_prefix(job_dir: Path, readable: list[Path], *, network=True, writabl
     run (see run_launcher), `hide_after` names directories hidden after the readable binds, so a readable path can
     never re-expose them, `cover_above` covers every file and dot-entry in each directory above the run that
     stays visible (see _cover_above), and `share` names directories outside the run bound writable after all of
-    those: the run's copied credentials (see _start_copies)."""
+    those: the run's own copied credentials (see _start_copies), in a container hidden whole before (see
+    _copies_root), so no confined process sees another run's."""
     bwrap = shutil.which("bwrap")
     if not bwrap:
         raise TrialError("confined runs need bubblewrap (bwrap); install it, or pass --sandbox none "
@@ -1351,7 +1360,11 @@ def confine_prefix(job_dir: Path, readable: list[Path], *, network=True, writabl
             cmd += ["--tmpfs", str(path)]
     if cover_above:
         cmd += _cover_above(job_dir, [home, Path("/tmp"), *([out] if out is not None else []), *hide_after])
-    for path in share:
+    copies = _copies_root()  # hidden whole, after anything that could expose it, unless /run or /tmp already hides it
+    if not (any(copies.is_relative_to(d) for d in (Path("/run"), Path("/tmp")))
+            and not any(copies.is_relative_to(Path(p)) for p in readable)):
+        cmd += ["--tmpfs", str(copies)]
+    for path in share:  # then only a run's own copies are given back
         cmd += ["--bind", str(path), str(path)]
     cmd += ["--bind" if writable else "--ro-bind", str(job_dir), str(job_dir)]
     for path in protect:
@@ -1505,6 +1518,11 @@ def _resolve_key(arm: dict, var: str, target: str, where: str) -> tuple[list[str
 
 
 def run_command(arm, spec, job_dir: Path, env):
+    """A command arm's one turn, the credentials it holds held as _with_credentials says."""
+    return _with_credentials(arm, job_dir, job_dir.parent.parent, lambda share: _command_turn(arm, spec, job_dir, env))
+
+
+def _command_turn(arm, spec, job_dir: Path, env):
     prompt = spec["prompt"]
     prefix = []
     instructions = arm.get("instructions") or ""
@@ -1576,34 +1594,20 @@ def run_launcher(arm, spec, job_dir: Path, env, *, out: Path | None = None, stdo
     follow-up), confined with the trial's own inputs hidden and nothing readable above the run (see confine_prefix). The script writes each turn's final message to TRIAL_REPLY and the run's record to
     TRIAL_RECORD; exit status 0 means the turn ran, TRANSIENT_EXIT a transient failure, anything else an
     executor error. A path the arm "watch"es that a turn changes, when a later turn would load it, ends the run
-    as "config-changed". Its "copy" entries are copied outside the run and linked from its private home before the
-    first turn, and removed as the last turn ends, before anything reads the run, its private home emptied of all but
-    its evidence (see _start_copies, _end_copies): a removal that cannot be verified makes the run "credential-kept",
-    which nothing reads, and stays in the credential journal for later sweeps. What it prints is kept with every
-    credential the runtime knows replaced (see _secret_values). Returns (status, confined)."""
+    as "config-changed". The credentials it holds are held as _with_credentials says, and what it prints is kept
+    with every one of them replaced (see _secret_values). Returns (status, confined)."""
     out = out or job_dir.parent.parent
-    home = Path(env["HOME"])
-    copies = _start_copies(out, home, arm) if arm.get("copy") else None
-    status, confined = "credential-kept", False
-    try:
-        if copies:
-            _place_copies(arm, home, copies[0])
-        status, confined = _launcher_turns(arm, spec, job_dir, env, out=out, stdout_path=stdout_path,
-                                           extra_env=extra_env, protect=protect, secrets=_secret_values(arm, env),
-                                           share=[copies[0]] if copies else [])
-    finally:
-        cleared = _end_copies(out, job_dir, arm, *copies) if copies else True
-    return (status if cleared else "credential-kept"), confined
+    return _with_credentials(arm, job_dir, out, lambda share: _launcher_turns(
+        arm, spec, job_dir, env, out=out, stdout_path=stdout_path, extra_env=extra_env, protect=protect,
+        secrets=_secret_values(arm, env), share=share))
 
 
 def _launcher_turns(arm, spec, job_dir: Path, env, *, out: Path, stdout_path: Path | None, extra_env: dict | None,
                     protect: tuple, secrets: list[bytes], share: list[Path]):
     """The turns of one run_launcher call, its copies in place (in `share`, bound writable when confined), its output
-    kept with `secrets` and its key replaced (see _run). Returns (status, confined)."""
+    kept with `secrets` replaced (see _run). Returns (status, confined)."""
     var = arm.get("api_key_var")
     key_prefix, key_env = _resolve_key(arm, var, var, "launcher") if var else ([], {})
-    keys = {v.encode(errors="surrogateescape") for v in key_env.values() if v.strip() and "\n" not in v}
-    secrets = sorted({*secrets, *keys}, key=len, reverse=True)
     binary = _resolve_binary(arm["binary"]) if arm.get("binary") else None
     readable = (_executor_readable(binary) if binary else []) + [Path(p).expanduser() for p in arm.get("readable", [])]
     script, instructions = _launcher_files(arm, job_dir)
@@ -1813,35 +1817,78 @@ def _watch_state(paths: list[Path], job_dir: Path) -> dict:
     return state
 
 
-COPIES_PREFIX = "trial-copies-"  # the name of every directory a run's copies are kept in (see _start_copies)
 REDACTED = b"[redacted]"  # what a credential the runtime knows is replaced with in a run's output (see _run)
 
 
-def _private_root() -> str | None:
-    """Where the runtime keeps what must never be written inside a run directory while a run uses it (copies of
-    credentials, and output not yet cleared of them): $XDG_RUNTIME_DIR when it is set (normally a tmpfs only this user
-    can enter), else None, the system's temporary directory."""
-    root = os.environ.get("XDG_RUNTIME_DIR")
-    return root if root and os.path.isabs(root) and os.path.isdir(root) else None
+def _copies_root() -> Path:
+    """The one directory every run's copies' directory is made in, trial-copies-<uid>: under $XDG_RUNTIME_DIR when it
+    is set (normally a tmpfs only this user can enter), else under the system's temporary directory. Owner-only, and
+    hidden whole from every confined process (see confine_prefix), which is given only its own run's directory in it,
+    so no run sees another's copies. Unnamed files the runtime keeps a run's output in until its credentials are
+    replaced (see _run) are made here too."""
+    base = os.environ.get("XDG_RUNTIME_DIR")
+    base = base if base and os.path.isabs(base) and os.path.isdir(base) else tempfile.gettempdir()
+    root = Path(os.path.realpath(base)) / f"trial-copies-{os.getuid()}"
+    with contextlib.suppress(FileExistsError):
+        os.mkdir(root, 0o700)
+    st = os.lstat(root)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.getuid():
+        raise TrialError(f"{root} is not a directory of this user's own; remove it, or set XDG_RUNTIME_DIR to a "
+                         "directory only you can enter")
+    if stat.S_IMODE(st.st_mode) != 0o700:
+        os.chmod(root, 0o700)
+    return root
 
 
-def _start_copies(out: Path, home: Path, arm: dict) -> tuple[Path, Path]:
-    """Make the directory an arm's or a judge's "copy" entries are kept in while one run uses them: owner-only (0700)
-    from the moment it exists, and outside the run directory (see _private_root), so no copy is ever in the run's tree,
-    a hard link into it is impossible on another file system, and a move into it is a copy. It is noted, with each
-    placement's path in the run's private home, in the credential journal (RUN_DIR/.copies/<id>.json) before any
-    credential is copied, so copies a run left when it was interrupted are removed by the next run, recheck, or
-    pairwise on the directory (see _sweep_copies). Returns (directory, journal entry)."""
-    journal = _owned(out / ".copies")
-    private = Path(os.path.realpath(tempfile.mkdtemp(prefix=COPIES_PREFIX, dir=_private_root())))
-    marker = journal / f"{os.urandom(8).hex()}.json"
+def _holds_credentials(arm: dict) -> bool:
+    """Whether a run of `arm` is given a credential: a copied file, a secret_env variable, or an API key."""
+    return bool(arm.get("copy") or arm.get("secret_env") or arm.get("api_key_var"))
+
+
+def _with_credentials(arm: dict, job_dir: Path, out: Path, turns):
+    """Run `turns(share)`, an executor's turns, given the directories confinement is to open to it, with the
+    credentials `arm` holds as a run holds them: its "copy" entries copied outside the run and linked from its private
+    home (see _start_copies, _place_copies), and, as the last turn ends and before anything reads the run, every
+    placement and the copies removed and the private home emptied of all but its evidence (see _end_copies). A run
+    whose cleanup cannot be verified is "credential-kept", which nothing reads. Returns (status, confined)."""
+    if not _holds_credentials(arm):
+        return turns([])
+    entry, marker = _start_copies(out, job_dir, arm)
+    status, confined = "credential-kept", False
     try:
-        _write_json(marker, {"private": str(private),
-                             "placed": [(home / rel).relative_to(out).as_posix() for rel in arm["copy"]]})
-    except BaseException:
-        os.rmdir(private)  # nothing is in it yet
-        raise
-    return private, marker
+        if entry["private"]:
+            _place_copies(arm, job_dir / "harness" / "home", Path(entry["private"]))
+        status, confined = turns([Path(entry["private"])] if entry["private"] else [])
+    finally:
+        cleared = _end_copies(out, entry, marker)
+    return (status if cleared else "credential-kept"), confined
+
+
+def _start_copies(out: Path, job_dir: Path, arm: dict) -> tuple[dict, Path]:
+    """Note, in the credential journal (RUN_DIR/.copies/<id>.json), what a run holding credentials will need cleared
+    before any credential is placed: its copies' directory (made here, owner-only, in _copies_root, when it copies
+    anything), each placement's path in its private home, the home itself, and what of the home is the runtime's own
+    and stays (the arm's resources and stub skills). Paths only, never content. A run interrupted before it is
+    cleared is cleared by the next run, recheck, or pairwise on the directory (see _sweep_copies). Returns (entry,
+    journal file)."""
+    home = job_dir / "harness" / "home"
+    root = _copies_root()
+    if root.is_relative_to(out) or out.is_relative_to(root):
+        raise TrialError(f"the runtime keeps copied credentials in {root}, which is inside the run directory {out} or "
+                         "holds it; set XDG_RUNTIME_DIR, or --out, so that neither is inside the other")
+    journal = _owned(out / ".copies")
+    private = root / "".join(random.SystemRandom().choices("abcdefghijklmnopqrstuvwxyz0123456789_", k=8)) \
+        if arm.get("copy") else None
+    entry = {"private": str(private) if private else None,
+             "placed": [(home / rel).relative_to(out).as_posix() for rel in arm.get("copy") or {}],
+             "home": home.relative_to(out).as_posix(),
+             "keep": [(home / rel).relative_to(out).as_posix()
+                      for rel in [*(arm.get("resources") or {}), *(d for d, _ in _stub_files(arm))]]}
+    marker = journal / f"{os.urandom(8).hex()}.json"
+    _write_json(marker, entry)
+    if private:
+        os.mkdir(private, 0o700)  # once noted, so an interruption at any point leaves nothing the journal does not name
+    return entry, marker
 
 
 def _place_copies(arm: dict, home: Path, private: Path):
@@ -1917,42 +1964,65 @@ def _drop(path: Path) -> bool:
     return _reach(path.parent, path.name) is None
 
 
-def _clear_copies(out: Path, private: Path, placed: list[str]) -> list[str]:
-    """Remove what one run's copies left: whatever is at each placement in its private home (the link to its copy, or
-    a file a tool wrote in its place when it refreshed a sign-in), reached through real directories only, and the
-    copies' own directory. Returns what is not verified gone: a placement a link on the way keeps from being reached,
-    or anything whose removal failed."""
-    left = []
-    for rel in placed:
-        st = _reach(out, rel)
-        if st is False or (st is not None and not _drop(out / rel)):
-            left.append(rel)
-    if not _drop(private):
-        left.append(str(private))
-    return left
+def _transcript_chain(job_dir: Path, name) -> list[Path] | None:
+    """What a transcript a record names rests on: each link followed on the way to it and the regular file it reaches
+    (last), all inside the run's own directory; None when it reaches no regular file, or passes outside that
+    directory. The one rule both for which transcripts a record may name (see _transcripts_problem) and for what
+    clearing a home keeps of them (see _clear_home)."""
+    if not isinstance(name, str) or not name:
+        return None
+    root = Path(os.path.realpath(job_dir))
+    path, parts = (Path("/"), list(Path(name).parts[1:])) if os.path.isabs(name) else (root, list(Path(name).parts))
+    links = []
+    while parts:
+        part = parts.pop(0)
+        if part in ("", "."):
+            continue
+        if part == "..":
+            path = path.parent
+            continue
+        try:
+            st = os.lstat(path / part)
+        except OSError:
+            return None
+        if stat.S_ISLNK(st.st_mode):
+            if len(links) >= 40:
+                return None
+            links.append(path / part)
+            target = os.readlink(path / part)
+            path, parts = (Path("/"), [*Path(target).parts[1:], *parts]) if os.path.isabs(target) else \
+                (path, [*Path(target).parts, *parts])
+            continue
+        path = path / part
+    try:
+        regular = stat.S_ISREG(os.lstat(path).st_mode)
+    except OSError:
+        return None
+    chain = [*links, path]
+    if not regular or not all(p.is_relative_to(root) for p in chain):
+        return None
+    return [job_dir / p.relative_to(root) for p in chain]
 
 
-def _clear_home(job_dir: Path, arm: dict) -> list[str]:
-    """Empty a run's private home once its copies are gone, keeping only what is evidence or the runtime's own: each
-    transcript its record names that is a file in the home, and the arm's resources and stub skills, which exposure is
-    read against. Whatever the agent moved or copied within its home goes with it. Returns what could not be removed
-    (the home itself, when a link on the way keeps it from being reached), relative to the run's own directory."""
-    st = _reach(job_dir, "harness/home")
+def _clear_home(out: Path, home_rel: str, keep: list[str]) -> list[str]:
+    """Empty a run's private home (out/home_rel), keeping only what is evidence or the runtime's own: every link and
+    file each transcript its record names rests on (see _transcript_chain), and `keep`, the arm's resources and stub
+    skills, which exposure is read against. Whatever a tool cached there, or the agent moved or copied there, goes.
+    Returns what could not be removed (the home itself, when a link on the way keeps it from being reached), relative
+    to the run directory."""
+    st = _reach(out, home_rel)
     if st is None:
         return []
     if st is False or not stat.S_ISDIR(st.st_mode):
-        return ["harness/home"]
-    home = job_dir / "harness" / "home"
-    kept = {home / rel for rel in [*(arm.get("resources") or {}), *(d for d, _ in _stub_files(arm))]}
-    record = _try_json(_read(job_dir / "record.json", follow=False))
-    transcripts = record.get("transcripts") if isinstance(record, dict) else None
-    for t in transcripts if isinstance(transcripts, list) else []:
-        if (isinstance(t, str) and not Path(t).is_absolute() and ".." not in Path(t).parts
-                and (job_dir / t).is_relative_to(home)):
-            st = _reach(job_dir, t)
-            if st and stat.S_ISREG(st.st_mode):
-                kept.add(job_dir / t)
-    kept = {Path(os.path.normpath(k)) for k in kept}
+        return [home_rel]
+    home = out / home_rel
+    job_dir = home.parent.parent
+    kept = {Path(os.path.normpath(out / k)) for k in keep}
+    for name in ("record.json", "host.json"):
+        record = _try_json(_read(job_dir / name, follow=False))
+        transcripts = record.get("transcripts") if isinstance(record, dict) else None
+        for t in transcripts if isinstance(transcripts, list) else []:
+            kept.update(_transcript_chain(job_dir, t) or [])
     left = []
 
     def clear(d: Path):
@@ -1960,7 +2030,7 @@ def _clear_home(job_dir: Path, arm: dict) -> list[str]:
         try:
             entries = list(os.scandir(d))
         except OSError:
-            left.append(d.relative_to(job_dir).as_posix())
+            left.append(d.relative_to(out).as_posix())
             return
         for e in entries:
             p = Path(e.path)
@@ -1969,25 +2039,37 @@ def _clear_home(job_dir: Path, arm: dict) -> list[str]:
             if e.is_dir(follow_symlinks=False) and any(k.is_relative_to(p) for k in kept):
                 clear(p)
             elif not _drop(p):
-                left.append(p.relative_to(job_dir).as_posix())
+                left.append(p.relative_to(out).as_posix())
     clear(home)
     return left
 
 
-def _end_copies(out: Path, job_dir: Path, arm: dict, private: Path, marker: Path) -> bool:
-    """As a run's last turn ends, before anything reads the run: remove its copies (see _clear_copies), then empty its
-    private home (see _clear_home), and record the outcome in RUN_DIR/credentials.jsonl (paths, never content). Its
-    journal entry goes once its copies are verified gone. True when all of it is."""
-    home = job_dir / "harness" / "home"
-    placed = [(home / rel).relative_to(out).as_posix() for rel in arm["copy"]]
-    left = _clear_copies(out, private, placed)
-    rel = job_dir.relative_to(out).as_posix()
-    left_home = [f"{rel}/{p}" for p in _clear_home(job_dir, arm)]
-    _credential_log(out, {"removed": [p for p in [*placed, str(private)] if p not in left], "by": "its last turn",
-                          **({"unremoved": left + left_home} if left or left_home else {})})
+def _settle(out: Path, entry: dict) -> tuple[list[str], list[str]]:
+    """Clear what one journal entry notes: whatever is at each placement (the link to its copy, or a file a tool wrote
+    in its place when it refreshed a sign-in), reached through real directories only, the copies' directory, and the
+    private home (see _clear_home). Returns (what was removed, what is not verified gone: a placement or a home a link
+    on the way keeps from being reached, or anything whose removal failed)."""
+    left = []
+    for rel in entry["placed"]:
+        st = _reach(out, rel)
+        if st is False or (st is not None and not _drop(out / rel)):
+            left.append(rel)
+    if entry["private"] and not _drop(Path(entry["private"])):
+        left.append(entry["private"])
+    left += _clear_home(out, entry["home"], entry["keep"])
+    removed = [p for p in [*entry["placed"], *([entry["private"]] if entry["private"] else [])] if p not in left]
+    return removed, left
+
+
+def _end_copies(out: Path, entry: dict, marker: Path, by: str = "its last turn") -> bool:
+    """Clear what a run holding credentials left (see _settle), recording the outcome in RUN_DIR/credentials.jsonl
+    (paths, never content); its journal entry goes only once all of it is verified gone, and the result says whether
+    it is. Until then the run is not run again or set aside (see _copies_tracked), and every sweep tries again."""
+    removed, left = _settle(out, entry)
+    _credential_log(out, {"removed": removed, "home": entry["home"], "by": by, **({"unremoved": left} if left else {})})
     if not left:
         _remove(marker)
-    return not left and not left_home
+    return not left
 
 
 def _credential_log(out: Path, entry: dict):
@@ -1998,20 +2080,40 @@ def _credential_log(out: Path, entry: dict):
         f.write(line.encode())
 
 
-def _placement(rel) -> bool:
-    """Whether a journal path names a place the runtime puts a copy: a path inside the run directory, below a private
-    home (".../harness/home/..."), never above it or anywhere else."""
+def _inside_home(rel, home: str | None = None) -> bool:
+    """Whether a journal path names a place inside the run directory below a private home (".../harness/home/..."),
+    or, given `home`, below that home; never above it or anywhere else."""
     if not isinstance(rel, str) or not rel or Path(rel).is_absolute() or ".." in Path(rel).parts:
         return False
+    if home is not None:
+        return Path(rel).is_relative_to(home) and Path(rel) != Path(home)
     parts = Path(rel).parts
     return any(parts[i:i + 2] == ("harness", "home") for i in range(len(parts) - 2))
 
 
+def _journal_entry(entry) -> dict | None:
+    """A credential journal entry as the runtime writes it (see _start_copies), or None for anything else, which is
+    never acted on: a copies' directory with the runtime's own name in its container, or none; placements and kept
+    paths below its private home; and the home a run directory's own."""
+    if not isinstance(entry, dict):
+        return None
+    home, private, placed, keep = entry.get("home"), entry.get("private"), entry.get("placed"), entry.get("keep")
+    if not (isinstance(home, str) and not Path(home).is_absolute() and ".." not in Path(home).parts
+            and Path(home).parts[-2:] == ("harness", "home") and len(Path(home).parts) > 2):
+        return None
+    if not (private is None or _copies_dir(private)):
+        return None
+    if not all(isinstance(x, list) and all(_inside_home(p, home) for p in x) for x in (placed, keep)):
+        return None
+    return {"home": home, "private": private, "placed": placed, "keep": keep}
+
+
 def _copies_dir(path) -> bool:
-    """Whether a journal names a copies' directory as the runtime makes one (see _start_copies): an absolute path with
-    the runtime's own name, which is gone or is a real directory of this user's."""
+    """Whether a journal names a copies' directory as the runtime makes one (see _start_copies): an absolute path of
+    the runtime's own naming in a trial-copies-<uid> container, which is gone or is a real directory of this user's."""
     if not (isinstance(path, str) and os.path.isabs(path) and os.path.normpath(path) == path
-            and re.fullmatch(re.escape(COPIES_PREFIX) + r"[a-z0-9_]{8}", os.path.basename(path))):
+            and re.fullmatch(r"[a-z0-9_]{8}", os.path.basename(path))
+            and re.fullmatch(r"trial-copies-\d+", os.path.basename(os.path.dirname(path)))):
         return False
     try:
         st = os.lstat(path)
@@ -2028,45 +2130,60 @@ def _journal(out: Path):
     journal = _owned(out / ".copies", make=False)
     if not os.path.lexists(journal):
         return []
+    for e in os.scandir(journal):  # a note whose writing was interrupted, before what it notes was made
+        if e.name.endswith(".tmp") and e.is_file(follow_symlinks=False):
+            _remove(journal / e.name)
     return [(e.name, _try_json(_read(journal / e.name, follow=False)))
             for e in sorted(os.scandir(journal), key=lambda e: e.name)
             if e.name.endswith(".json") and e.is_file(follow_symlinks=False)]
 
 
 def _sweep_copies(out: Path, by: str):
-    """Remove the copies a run left when it was interrupted, or could not remove (see _end_copies): each journal entry's
-    placements and copies' directory (see _clear_copies), recording what was removed and what is still not. An entry
-    the runtime did not write (one naming anything but a placement in a private home, or a directory that is no copies'
-    directory of the runtime's) is never acted on, and is dropped. Called by `by` (run, recheck, or pairwise) as soon as
-    it holds the directory's lock, before anything that could refuse."""
-    for name, entry in _journal(out):
-        marker = out / ".copies" / name
-        private, placed = (entry.get("private"), entry.get("placed")) if isinstance(entry, dict) else (None, None)
-        if not (_copies_dir(private) and isinstance(placed, list) and all(_placement(p) for p in placed)):
+    """Clear what runs holding credentials left when they were interrupted, or could not clear (see _end_copies), as
+    each journal entry notes it. An entry the runtime did not write (see _journal_entry) is never acted on, and is
+    dropped. Called by `by` (run, recheck, or pairwise) as soon as it holds the directory's lock, before anything
+    that could refuse."""
+    for name, raw in _journal(out):
+        entry = _journal_entry(raw)
+        if entry is None:
             _credential_log(out, {"ignored": name, "by": by})
-            _remove(marker)
+            _remove(out / ".copies" / name)
             continue
-        left = _clear_copies(out, Path(private), placed)
-        _credential_log(out, {"removed": [p for p in [*placed, private] if p not in left], "by": by,
-                              **({"unremoved": left} if left else {})})
-        if not left:
-            _remove(marker)
+        _end_copies(out, entry, out / ".copies" / name, by)
 
 
 def _copies_tracked(out: Path, job_dir: Path) -> bool:
-    """Whether the credential journal still holds a placement inside `job_dir` not yet verified gone."""
+    """Whether the credential journal still holds what a run in `job_dir` left, not yet verified gone."""
     rel = job_dir.relative_to(out)
-    return any(isinstance(entry, dict) and isinstance(entry.get("placed"), list)
-               and any(_placement(p) and Path(p).is_relative_to(rel) for p in entry["placed"]) for _, entry in _journal(out))
+    return any(isinstance(raw, dict) and isinstance(raw.get("home"), str) and Path(raw["home"]).is_relative_to(rel)
+               for _, raw in _journal(out))
+
+
+def _key_value(arm: dict) -> str | None:
+    """The value of the one key variable an arm uses, as its run is given it (see _resolve_key): from its env_file, or
+    TRIAL_ENV_FILE, sourced in a subshell as the run's own prefix does, or from this process's environment. Held in
+    memory only, so what the run prints can be kept without it (see _secret_values)."""
+    var = arm.get("api_key_var")
+    if not var or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", var):
+        return None
+    env_file = _env_file_for(arm)
+    if env_file is None:
+        return os.environ.get(var) or None
+    env_file = Path(env_file).expanduser().resolve()
+    if not env_file.exists():
+        return None
+    done = subprocess.run(["sh", "-c", '. "$0" >/dev/null 2>&1; eval "printf %s \\"\\${$1-}\\""', str(env_file), var],
+                          capture_output=True, timeout=60)
+    return done.stdout.decode(errors="surrogateescape") or None
 
 
 def _secret_values(arm: dict, env: dict) -> list[bytes]:
-    """Every exact credential value a run's output must never keep (see _run): its secret_env values, and the strings
-    of at least 16 characters its copied credential files hold (see _credential_strings); each a line at a time, and
-    the longest first, so a value inside another never decides what is replaced."""
+    """Every exact credential value a run's output must never keep (see _run), from every source the runtime gives
+    one: its secret_env values, its API key however it is supplied (see _key_value), and the strings of at least 16
+    characters its copied credential files hold (see _credential_strings); each a line at a time, and the longest
+    first, so a value inside another never decides what is replaced."""
     found = set()
-    for name in arm.get("secret_env") or []:
-        value = env.get(name) or ""
+    for value in [*(env.get(name) or "" for name in arm.get("secret_env") or []), _key_value(arm) or ""]:
         found.update(line for line in [value, *value.splitlines()] if line.strip() and "\n" not in line)
     for src in (arm.get("copy") or {}).values():
         p = Path(src)
@@ -2164,15 +2281,10 @@ def _read_record(path: Path) -> tuple[dict | None, str | None]:
 
 
 def _transcripts_problem(record: dict, job_dir: Path) -> str | None:
-    """Why a record's transcripts are not all regular files inside its run directory, or None."""
-    root = job_dir.resolve()
+    """Why a record's transcripts are not all regular files inside its run directory, reached through links inside it
+    only (see _transcript_chain), or None."""
     for name in record.get("transcripts") or []:
-        target = job_dir / name
-        try:
-            inside = target.resolve().is_relative_to(root) and target.is_file()
-        except (OSError, RuntimeError):
-            inside = False
-        if not inside:
+        if _transcript_chain(job_dir, name) is None:
             return f"names transcript {name!r}, which is not a file inside the run directory"
     return None
 
@@ -4428,6 +4540,9 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         if record is None:
             return _waiting(marker, note)
         status, confined = ("ok" if record["finished"] else "unfinished"), False
+        # its executor done, what it held is cleared from its home before anything reads the run (see _with_credentials)
+        if _holds_credentials(arm) and not _end_copies(out, *_start_copies(out, job_dir, arm), "its collection"):
+            status = "credential-kept"
         reported = record.get("seconds")  # the host's own measure of its executor's time, when it has one
         seconds = reported if isinstance(reported, (int, float)) and not isinstance(reported, bool) and _finite(reported) \
             and reported >= 0 else None
@@ -4460,9 +4575,10 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
             # scenario author's own code, which may read helpers beside the scenarios), only the run writable, and
             # whatever it leaves running ended with it.
             prefix = [] if _unconfined(spec) else confine_prefix(job_dir, [Path.home(), sdir], out=out)
-            code, timed_out = _run(prefix + ["sh", str(sdir / "setup.sh")], cwd=job_dir / "work", env=env, stdin_text=None,
-                                   timeout=SETUP_TIMEOUT, stdout_path=job_dir / "setup.log",
-                                   stderr_path=job_dir / "setup.log", secrets=_secret_values(arm, env))
+            setup_env = {k: v for k, v in env.items() if k not in (arm.get("secret_env") or [])}  # the executor's alone
+            code, timed_out = _run(prefix + ["sh", str(sdir / "setup.sh")], cwd=job_dir / "work", env=setup_env,
+                                   stdin_text=None, timeout=SETUP_TIMEOUT, stdout_path=job_dir / "setup.log",
+                                   stderr_path=job_dir / "setup.log")
             if timed_out or code != 0:
                 result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep,
                           "status": "setup-failed", "passed": None, "identity": _identity(arm), "conditions": conditions,
@@ -4499,17 +4615,9 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
         # The executor's own wall time only, never setup, checks, or judging (each timed and recorded on its
         # own below): those phases can dwarf or shrink independently of what the arm itself actually spent.
         seconds = round((dt.datetime.now(dt.timezone.utc) - agent_started).total_seconds(), 1)
-        if status == "credential-kept":  # no check, extractor, or judge reads a run a copied credential may remain in
-            result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep, "status": status,
-                      "passed": None, "identity": _identity(arm), "conditions": conditions, "executed": True,
-                      "seconds": seconds, "setup_seconds": setup_seconds, "confined": confined,
-                      "sandbox": executor_sandbox or spec.get("sandbox", "confined"),
-                      **({"attempts": attempts} if attempts else {})}
-            _write_json(result_path, result)
-            _remove(pending)
-            return result
         _own(job_dir)
-        if arm["executor"] == "launcher" or (arm["executor"] == "command" and os.path.lexists(job_dir / "record.json")):
+        if status != "credential-kept" and (arm["executor"] == "launcher" or  # nothing reads that one (see below)
+                                             (arm["executor"] == "command" and os.path.lexists(job_dir / "record.json"))):
             record, record_note = _read_record(job_dir / "record.json")
             if arm["executor"] == "launcher":
                 status = _launcher_status(arm, status, record, record_note)
@@ -4517,6 +4625,15 @@ def _run_job_once(plan, out: Path, job, retry_invalid):
                 status = "record-invalid"
             elif record is not None and status == "ok" and not record["finished"]:  # its own record says it stopped
                 status = "unfinished"
+    if status == "credential-kept":  # no check, extractor, or judge reads a run a credential may remain in
+        result = {"job": job_id, "arm": arm_name, "scenario": spec["name"], "repeat": rep, "status": status,
+                  "passed": None, "identity": _identity(arm), "conditions": conditions, "executed": True,
+                  "seconds": seconds, "setup_seconds": setup_seconds, "confined": confined,
+                  "sandbox": executor_sandbox or spec.get("sandbox", "confined"), **({"attempts": attempts} if attempts else {})}
+        _write_json(result_path, result)
+        _remove(waiting)
+        _remove(pending)
+        return result
     _own(job_dir)  # the runner writes here next, whatever the agent did to it
     unconfined = _unconfined(spec)
     if marker:
