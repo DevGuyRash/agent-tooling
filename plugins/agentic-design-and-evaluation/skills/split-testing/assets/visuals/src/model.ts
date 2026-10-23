@@ -5,6 +5,8 @@ import { attrs, esc, slug } from "./core";
 import type { TrialReport, TrialRun } from "./trial-model";
 import type { Comparison } from "./comparison-model";
 import type { Problem } from "./validate";
+import type { Collection } from "./collection";
+import type { Story } from "./reading";
 
 export interface ArmSpec { id: string; label?: string; note?: string }
 export interface MetaItem { label: string; value: string }
@@ -16,12 +18,16 @@ export interface SectionSpec {
   /** Short label for the section index; defaults to the title. */
   label?: string;
   lead?: string | string[];
+  /** What this section's views say for this data, for a reader new to the work. */
+  reading?: string | string[];
   blocks: BlockSpec[];
 }
 export interface ReportSpec {
   title: string;
   kicker?: string;
   summary?: string | string[];
+  /** What a reader new to the work needs before the results; it opens the report. */
+  story?: Story;
   meta?: MetaItem[];
   /** Identity order for arms: color and shape follow this order everywhere. */
   arms?: ArmSpec[];
@@ -33,6 +39,8 @@ export interface ReportSpec {
   cases?: Record<string, string>;
   /** Any comparison's data, for the comparison views; comparisonReport() sets it. */
   comparison?: Comparison;
+  /** Many reports with their narratives, for the collection views and the reader; collectionReport() sets it. */
+  collection?: Collection;
   /** Problems found while composing (trialReport() puts the narrative's here);
    * renderReport() lists them with the specification's own in one visible panel. */
   problems?: Problem[];
@@ -70,6 +78,7 @@ export interface RenderContext {
   arms: ArmRegistry;
   comparison?: Comparison;
   trial?: TrialReport;
+  collection?: Collection;
   /** Runs addressable by index from marks, the ledger and the drawer. */
   runs: TrialRun[];
   runIndex: Map<TrialRun, number>;
@@ -78,14 +87,14 @@ export interface RenderContext {
   uid(base: string): string;
 }
 
-export function createContext(spec: Pick<ReportSpec, "arms" | "trial" | "comparison">, caseLabels: Record<string, string> = {}): RenderContext {
+export function createContext(spec: Pick<ReportSpec, "arms" | "trial" | "comparison" | "collection">, caseLabels: Record<string, string> = {}): RenderContext {
   const arms = new ArmRegistry(spec.arms || []);
   const runs = spec.trial?.runs || [];
   for (const r of runs) if (typeof r.arm === "string") arms.add(r.arm);
   for (const a of spec.comparison?.alternatives || []) if (a && typeof a.id === "string") arms.add(a.id, { label: a.label, note: a.note });
   const used = new Map<string, number>();
   return {
-    arms, comparison: spec.comparison, trial: spec.trial, runs, runIndex: new Map(runs.map((r, i) => [r, i])), caseLabels,
+    arms, comparison: spec.comparison, trial: spec.trial, collection: spec.collection, runs, runIndex: new Map(runs.map((r, i) => [r, i])), caseLabels,
     uid(base: string): string {
       const id = slug(base), n = used.get(id) || 0;
       used.set(id, n + 1);

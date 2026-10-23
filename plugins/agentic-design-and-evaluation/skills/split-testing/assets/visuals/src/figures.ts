@@ -1,4 +1,4 @@
-import { documentId, escapeText as e, svg } from './core';
+import { documentId, escapeText as e, svg, stripText } from './core';
 export interface FigureBounds { width: number; height: number }
 export interface FigureSource { language: string; text: string; filename?: string }
 export interface FigureItem { id: string; label: string; text?: string; values?: Record<string, string | number | null> }
@@ -28,7 +28,7 @@ export function registerVisualAdapter(name: string, adapter: VisualAdapter): () 
 }
 export function visualAdapter(element: HTMLElement): VisualAdapter | undefined { return adapters.get(element.getAttribute('data-av-adapter') || ''); }
 export function visualFigure(input: VisualFigureInput): string {
-  if (typeof input.title !== 'string' || !input.title.trim() || typeof input.body !== 'string') throw new TypeError('A figure needs a title and trusted body markup.');
+  if (typeof input.title !== 'string' || !stripText(input.title) || typeof input.body !== 'string') throw new TypeError('A figure needs a title and trusted body markup.');
   if (input.adapter) documentId(input.adapter, 'An adapter name');
   if (input.fit !== undefined && input.fit !== 'natural' && input.fit !== 'width') throw new TypeError('Figure fit must be natural or width.');
   if (input.source && (typeof input.source.text !== 'string' || typeof input.source.language !== 'string')) throw new TypeError('Figure source needs a language and its original text.');
@@ -36,7 +36,7 @@ export function visualFigure(input: VisualFigureInput): string {
 }
 export interface MermaidDiagramInput { id?: string; title: string; source: string; caption?: string; fit?: 'natural' | 'width'; config?: Record<string, unknown> }
 export function mermaidDiagram(input: MermaidDiagramInput): string {
-  if (typeof input.source !== 'string' || !input.source.trim()) throw new TypeError('A Mermaid diagram needs its original source.');
+  if (typeof input.source !== 'string' || !stripText(input.source)) throw new TypeError('A Mermaid diagram needs its original source.');
   // HTML normalizes literal carriage returns and discards a leading newline in
   // <pre>. Character references and the code child keep the supplied source intact.
   const sourceMarkup = e(input.source).replace(/\r/g, '&#13;');

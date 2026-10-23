@@ -51,7 +51,8 @@ test("newcombe handles zero and full counts on either side and refuses unusable 
 // ------------------------------------------------------------------ explicit counts
 
 test("explicit rows need no trial and show the difference, its interval and both sides' counts", () => {
-  const html = block({ rows: [{ label: "Pooled", k1: 20, n1: 23, k2: 14, n2: 24 }], a: { label: "Checklist" }, b: { label: "Current" } });
+  // Counts written by hand carry an interval only when they are said to be independent samples (or one case's repeats).
+  const html = block({ independent: true, rows: [{ label: "Pooled", k1: 20, n1: 23, k2: 14, n2: 24 }], a: { label: "Checklist" }, b: { label: "Current" } });
   H.includes(html, 'av-block--contrast');
   H.includes(html, '+29<span class="av-contrast-unit">pts</span>', "the difference in points");
   H.includes(html, "+3 to +50", "the 95% interval in points");
@@ -63,7 +64,7 @@ test("explicit rows need no trial and show the difference, its interval and both
 });
 
 test("the reading names where the interval lies and never claims significance", () => {
-  const html = block({ rows: [
+  const html = block({ independent: true, rows: [
     { label: "up", k1: 9, n1: 10, k2: 3, n2: 10 },
     { label: "down", k1: 0, n1: 5, k2: 5, n2: 5 },
     { label: "unclear", k1: 4, n1: 12, k2: 3, n2: 12 },
@@ -107,7 +108,7 @@ test("missing counts and empty sides are visible, never blank", () => {
 });
 
 test("a threshold is drawn and read against the whole interval", () => {
-  const html = block({ rows: [{ k1: 20, n1: 23, k2: 14, n2: 24 }, { k1: 6, n1: 6, k2: 0, n2: 6 }], threshold: { value: 0.15, label: "rule: +15 points" } });
+  const html = block({ rows: [{ k1: 20, n1: 23, k2: 14, n2: 24, cases: 1 }, { k1: 6, n1: 6, k2: 0, n2: 6, cases: 1 }], threshold: { value: 0.15, label: "rule: +15 points" } });
   H.includes(html, "rule: +15 points", "the threshold's label");
   H.includes(html, "av-contrast-bar", "the threshold line");
   H.includes(html, "The observed +29 meets the +15-point bar, but the interval reaches down to +3.");

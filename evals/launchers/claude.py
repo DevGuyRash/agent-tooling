@@ -8,8 +8,10 @@ The plan gives it "binary": "claude" and "api_key_var" (the variable holding an 
 ANTHROPIC_API_KEY for the CLI; "base_url" becomes ANTHROPIC_BASE_URL). Optionally a resource at
 ~/.launcher/settings.json: {"bare": false, "args": [...]}: without bare mode Claude Code discovers skills,
 settings and memory in the run's private home, for selection trials (then hide /etc/claude-code with "hide");
-"args" adds command-line flags. As a judge (TRIAL_SCHEMA_FILE set) it runs with no tools and the schema as its
-JSON schema, and prints the verdict alone on standard output.
+"args" adds command-line flags. Without bare mode it signs in with whatever login the run's home holds (a copied
+credential file, say), and a claude.ai login would bring that account's synced skills, plugins, connectors and more
+into every run: it turns off all that Claude Code lets it (see ACCOUNT_OFF). As a judge (TRIAL_SCHEMA_FILE set) it
+runs with no tools and the schema as its JSON schema, and prints the verdict alone on standard output.
 """
 import json
 import os
@@ -23,11 +25,48 @@ STATE = HOME / ".launcher-state"
 TRANSIENT = ("overloaded", "Overloaded", "529", "502", "503", "Connection error", "ECONNRESET", "rate_limit",
              "Request timed out", "fetch failed")
 WRITING_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
+# Every control Claude Code 2.1.299 offers for what a claude.ai login brings into a run, or lets reach it. The settings
+# go on the command with --settings, so they layer over the run's own user settings, which an arm may place read-only
+# (skillOverrides, say), and nothing in the private home is written; each is read from --settings. Sources: SR is
+# code.claude.com/docs/en/settings-reference, EV docs/en/env-vars, TR docs/en/tools-reference, PR docs/en/permissions,
+# and BIN the 2.1.299 binary.
+#   syncClaudeAiSkills false        the account's synced skills (SR)
+#   syncClaudeAiPlugins false       the account's synced plugins, loaded as <name>@synced (SR)
+#   disableClaudeAiConnectors true  the account's claude.ai connectors (SR), with ENABLE_CLAUDEAI_MCP_SERVERS=false (EV)
+#   enableArtifact false            the Artifact tool, which publishes to the account's claude.ai (SR)
+#   autoMemoryEnabled false         memory: the organization's memory stores load only with auto memory on (SR; BIN),
+#                                   so this also turns off the run's own auto memory, as --bare does
+#   disableRemoteControl true       Remote Control of the run from the account's apps (SR)
+#   crossSessionInbound "refuse"    messages from the account's other sessions (SR)
+#   isolatePeerMachines true        messages to its sessions beyond this machine wait for an approval no one gives (SR)
+#   autoUploadSessions false        mirroring the run to claude.ai (BIN schema: "Mirror local sessions to claude.ai")
+#   permissions.deny                tools that write to the account, removed whole by a bare-name deny rule (PR):
+#                                   RemoteTrigger, its cloud scheduled tasks (TR); DesignSync and ClaudeDesign, its
+#                                   claude.ai/design projects, two separate tools with separate gates (BIN: "only
+#                                   available with claude.ai authentication"; ClaudeDesign reads projects under the
+#                                   account's existing Design consent); ShareOnboardingGuide,
+#                                   a share link on Team and Enterprise plans (TR); ListAgents, which can list the
+#                                   account's cloud sessions ("Stop sending and listing: add permission deny rules naming
+#                                   SendMessage and ListAgents", docs/en/cross-session-messaging); SendFile, which
+#                                   resolves names against them. SendMessage stays: denying it "also removes messaging
+#                                   to subagents", which a run under test may use.
+# No documented control blocks SendMessage's name resolution while keeping messaging to the run's own subagents (denying
+# SendMessage would also remove that), so a name that matches nothing can still be answered with the account's cloud
+# session names. No control covers the account's identity (its email in Claude Code's own context, its organization in the transcript)
+# or the settings its organization delivers (server-managed settings, which outrank every local source).
+ACCOUNT_OFF = {
+    "settings": {"syncClaudeAiSkills": False, "syncClaudeAiPlugins": False, "disableClaudeAiConnectors": True,
+                 "enableArtifact": False, "autoMemoryEnabled": False, "disableRemoteControl": True,
+                 "crossSessionInbound": "refuse", "isolatePeerMachines": True, "autoUploadSessions": False,
+                 "permissions": {"deny": ["RemoteTrigger", "DesignSync", "ClaudeDesign", "ShareOnboardingGuide", "ListAgents", "SendFile"]}},
+    "env": {"ENABLE_CLAUDEAI_MCP_SERVERS": "false"},
+}
 
 
 def settings() -> dict:
     path = HOME / ".launcher" / "settings.json"
     return json.loads(path.read_text()) if path.is_file() else {}
+
 
 
 def run_turn(turn: int) -> int:
@@ -42,6 +81,8 @@ def run_turn(turn: int) -> int:
         cmd += ["--append-system-prompt-file", os.environ["TRIAL_INSTRUCTIONS"]]
     if judge:
         cmd += ["--tools", "", "--json-schema", Path(judge).read_text()]
+    if extra.get("bare") is False:  # a login: what its account brings, off (the identity in context cannot be)
+        cmd += ["--settings", json.dumps(ACCOUNT_OFF["settings"])]
     cmd += list(extra.get("args", []))
     session = (STATE / "session").read_text().strip() if (STATE / "session").exists() else None
     if turn > 1:
@@ -57,6 +98,7 @@ def run_turn(turn: int) -> int:
         env["ANTHROPIC_BASE_URL"] = os.environ["TRIAL_BASE_URL"]
     if extra.get("bare") is False:
         env["CLAUDE_CODE_DISABLE_OFFICIAL_MARKETPLACE_AUTOINSTALL"] = "1"
+        env.update(ACCOUNT_OFF["env"])
     message = Path(os.environ["TRIAL_PROMPT_FILE"]).read_bytes()
     events = STATE / f"events-{turn}.jsonl"
     with events.open("wb") as out:

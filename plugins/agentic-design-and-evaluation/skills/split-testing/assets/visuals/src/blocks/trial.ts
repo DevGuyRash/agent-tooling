@@ -3,10 +3,11 @@
  * pairwise preferences, cost, invalid runs, the run ledger and the plan. Each
  * reads the trial in the render context and accepts explicit data where a
  * caller has its own. */
-import { attrs, axisTicks, count, esc, fmtDelta, fmtInt, fmtNum, fmtPct, fmtSeconds, fmtUsd, inline, isNum, logTicks, median, num, Outcome, secondsUnit, outcomeBadge, outcomeLabel, outcomeMark, prose, quantile, wilson } from "../core";
+import { attrs, axisTicks, count, esc, fmtDelta, fmtInt, fmtNum, fmtPct, fmtSeconds, fmtUsd, inline, isNum, logTicks, median, num, Outcome, secondsUnit, outcomeBadge, outcomeLabel, outcomeMark, prose, quantile, wilson, entriesOf, keysIn, valuesIn, stripText } from "../core";
 import type { RenderContext } from "../model";
 import { failureCause } from "../failure";
-import { CasePair, caseChecks, checkTable, costMeasures, displayPath, invalidReason, judgePassWhen, judgeQuestion, outcomeOf, pairedOrder, scenarioOf, tally, TrialReport, TrialRun, trialAxes } from "../trial-model";
+import { casesWords, countPooling } from "../stats";
+import { armCases, armTally, CasePair, caseChecks, checkTable, costMeasures, displayPath, invalidReason, judgePassWhen, judgeQuestion, outcomeOf, pairedOrder, scenarioOf, tally, TrialReport, TrialRun, trialAxes, wellFormedPairs } from "../trial-model";
 import { empty, frame, FrameInput, pos } from "./frame";
 
 const caseLabel = (ctx: RenderContext, id: string) => ctx.caseLabels[id] || id;
@@ -72,9 +73,9 @@ export interface VerdictInput extends FrameInput {
   /** A notice under the headline, such as that most runs produced no valid result; href is a section anchor such as "#invalid". */
   alert?: { text: string; href?: string; link?: string };
 }
-const verdictWords = { adopt: "Adopt", reject: "Do not adopt", inconclusive: "Inconclusive", mixed: "Mixed", none: "No decision recorded" };
-const verdictIcons = { adopt: "✓", reject: "✕", inconclusive: "?", mixed: "±", none: "–" };
-type VerdictKind = keyof typeof verdictWords;
+export const verdictWords = { adopt: "Adopt", reject: "Do not adopt", inconclusive: "Inconclusive", mixed: "Mixed", none: "No decision recorded" };
+export const verdictIcons = { adopt: "✓", reject: "✕", inconclusive: "?", mixed: "±", none: "–" };
+export type VerdictKind = keyof typeof verdictWords;
 
 function mentionsHtml(ids: string[], pairs: CasePair[], ctx: RenderContext): string {
   const data = ctx.trial;
@@ -106,7 +107,7 @@ function mentionsHtml(ids: string[], pairs: CasePair[], ctx: RenderContext): str
   const rest = axes.cases.filter(c => !covered.has(c) && !isVariant.has(c));
   const restVariants = pairs.filter(p => rest.includes(p.base) && !covered.has(p.variant)).map(p => p.variant);
   const restItem = named.length && rest.length
-    ? `<li class="av-mention av-mention--rest"><span class="av-mention-name"${attrs({ title: rest.join(", ") })}>${rest.length === 1 ? `The one case the rule does not name, <code>${esc(rest[0])}</code>` : `The other ${rest.length} cases together`}</span>${counts(rest)}${restVariants.length ? `<span class="av-mention-variant"><span class="av-mention-vlabel">↳ their variants</span>${counts(restVariants)}</span>` : ""}</li>`
+    ? `<li class="av-mention av-mention--rest"><span class="av-mention-name"${attrs({ title: rest.join(", ") })}>${rest.length === 1 ? `The one case the rule does not name, <code>${esc(rest[0])}</code>` : `The other ${casesWords(rest.length, false)} together`}</span>${counts(rest)}${restVariants.length ? `<span class="av-mention-variant"><span class="av-mention-vlabel">↳ their variants</span>${counts(restVariants)}</span>` : ""}</li>`
     : "";
   const key = arms.length > 1 && arms.length <= 8 ? `<p class="av-mention-key">${arms.map(a => ctx.arms.tag(a, { id: false })).join("")}</p>` : "";
   return `<div class="av-mentions"><h4 class="av-eyebrow">Named in the rule · passed / valid runs</h4>${key}<ul class="av-mention-list">${items}${restItem}</ul><p class="av-mention-note">Counts only: the report does not apply the rule; reading these counts against it is left to the reader.</p></div>`;
@@ -116,7 +117,7 @@ export function verdict(input: VerdictInput, ctx?: RenderContext): string {
   const asked = String(input.verdict ?? "").toLowerCase();
   const kind: VerdictKind = asked in verdictWords ? asked as VerdictKind : "none";
   const stamp = `<div class="av-stamp av-stamp--${kind}"><span class="av-stamp-icon" aria-hidden="true">${verdictIcons[kind]}</span><span class="av-stamp-word">${esc(input.label || verdictWords[kind])}</span></div>`;
-  const lists = ([["conditions", "Holds when"], ["limits", "Does not show"], ["changes", "Would change it"]] as const)
+  const lists = ([["conditions", "The decision holds when"], ["limits", "What this evidence does not show"], ["changes", "What would change the decision"]] as const)
     .filter(([key]) => (strings(input[key]) || []).length)
     .map(([key, title]) => `<div class="av-verdict-list av-verdict-list--${key}"><h4>${title}</h4><ul>${(strings(input[key]) || []).map(x => `<li>${inline(x)}</li>`).join("")}</ul></div>`).join("");
   const checkItems = Array.isArray(input.checks) ? input.checks.filter(c => c && typeof c === "object") : [];
@@ -126,7 +127,7 @@ export function verdict(input: VerdictInput, ctx?: RenderContext): string {
     return `<li class="av-rule-check av-rule-check--${state}"><span class="av-rule-label">${esc(c.label)}</span><span class="av-rule-obs">${esc(c.observed)}</span>${c.threshold ? `<span class="av-rule-thr">${esc(c.threshold)}</span>` : "<span></span>"}<span class="av-rule-state"><span class="av-rule-dot" aria-hidden="true"></span>${word}</span></li>`;
   };
   // Ungrouped terms decide the verdict and come first; each group follows under its own subheading.
-  const groupOf = (c: typeof checkItems[number]) => typeof c.group === "string" ? c.group.trim() : "";
+  const groupOf = (c: typeof checkItems[number]) => typeof c.group === "string" ? stripText(c.group) : "";
   const groupNames = [...new Set(checkItems.map(groupOf).filter(Boolean))];
   const ungrouped = checkItems.filter(c => !groupOf(c));
   const checks = checkItems.length
@@ -160,16 +161,26 @@ export function figures(input: FiguresInput): string {
       ? '<span class="av-missing">missing</span>'
       : typeof i.value === "number" ? esc(Number.isInteger(i.value) ? fmtInt(i.value) : fmtNum(i.value)) : esc(i.value);
     const text = typeof i.value === "string" && !/^[×x]?[\d.,–-]+%?$/.test(i.value);
-    return `<div class="av-figure-stat av-tone--${t}"><dt>${esc(i.label)}</dt><dd><span class="av-figure-value${text ? " av-figure-value--text" : ""}">${v}</span>${i.note ? `<span class="av-figure-note">${esc(i.note)}</span>` : ""}</dd></div>`;
+    return `<div class="av-figure-stat av-tone--${t}${typeof i.note === "string" && i.note.length > 36 ? " av-figure-stat--long" : ""}"><dt>${esc(i.label)}</dt><dd><span class="av-figure-value${text ? " av-figure-value--text" : ""}">${v}</span>${i.note ? `<span class="av-figure-note">${esc(i.note)}</span>` : ""}</dd></div>`;
   }).join("");
   return frame("figures", input, `<dl class="av-figures-row">${items}</dl>`);
 }
 
 // ------------------------------------------------------------------ ladder
 
-export interface LadderRow { arm?: string; case?: string; k: number; n: number; invalid?: number; note?: string }
+export interface LadderRow {
+  arm?: string; case?: string; k: number; n: number; invalid?: number; note?: string;
+  /** How many cases the counts pool. Above one the row shows plain counts and no interval: runs on one case repeat it. */
+  cases?: number;
+  /** null: no interval, as the runtime said. */
+  interval?: null;
+  /** Counts written by hand whose sampling is not stated: no interval (countPooling). */
+  unstated?: boolean;
+}
 export interface LadderInput extends FrameInput {
   rows?: LadderRow[];
+  /** Every hand-written count's n are independent samples, so each may carry an interval. */
+  independent?: boolean;
   /** Rows are arms (the default) or cases. */
   by?: "arm" | "case";
   /** Restrict to one case, or to a set of cases; otherwise every run of each arm is pooled. */
@@ -200,8 +211,19 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
     const runs = data.runs.filter(r => (!onlyArms || onlyArms.includes(r.arm)) && (!input.case || r.scenario === input.case) && (!onlyCases || onlyCases.includes(r.scenario)));
     rows = byCase
       ? pairedOrder(onlyCases ? onlyCases.filter(c => axes.cases.includes(c)) : axes.cases, pairs).map(cs => { const t = tally(runs.filter(r => r.scenario === cs)); return { case: cs, k: t.pass, n: t.valid, invalid: t.invalid }; })
-      : axes.arms.map(arm => { const t = tally(runs.filter(r => r.arm === arm)); return { arm, k: t.pass, n: t.valid, invalid: t.invalid }; });
+      : axes.arms.filter(arm => !onlyArms || onlyArms.includes(arm)).map(arm => {
+        // Every run of the arm, with the runtime's word on its interval, unless cases are restricted.
+        const whole = !onlyCases && !input.case, t = whole ? armTally(data, arm) : tally(runs.filter(r => r.arm === arm));
+        return { arm, k: t.pass, n: t.valid, invalid: t.invalid, cases: t.cases, ...(t.interval === null ? { interval: null } : {}) };
+      });
     rows = rows.filter(r => r.n + (r.invalid || 0) > 0);
+  } else {
+    // Counts written by hand: how they were sampled decides their interval, as for every count (countPooling). An arm
+    // of the attached trial gives its own cases; a row by case is one case's repeats unless it says otherwise.
+    rows = rows.map(r => {
+      const pooling = countPooling(byCase ? null : armCases(ctx.trial, r.arm)?.values() ?? null, r.cases ?? (byCase ? 1 : undefined), input.independent);
+      return { ...r, cases: pooling || (isNum(r.cases) && r.cases >= 1 ? r.cases : 1), ...(pooling !== 0 ? { interval: null } : {}), ...(pooling === null ? { unstated: true } : {}) };
+    });
   }
   if (!rows.length) return frame("ladder", input, empty("No runs to show."));
   const key = (r: LadderRow) => String((byCase ? r.case : r.arm) ?? "");
@@ -227,14 +249,15 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
   const baseRate = base && base.n && base.k <= base.n ? base.k / base.n : null;
 
   const row = (r: LadderRow, noise?: [number, number]) => {
-    const bad = r.k > r.n, p = r.n && !bad ? r.k / r.n : null, ci = bad ? null : wilson(r.k, r.n);
+    const across = count(r.cases ?? 1), pooled = across > 1;
+    const bad = r.k > r.n, p = r.n && !bad ? r.k / r.n : null, ci = bad || pooled || r.interval === null ? null : wilson(r.k, r.n);
     const color = byCase ? caseColor : ctx.arms.color(r.arm!);
     const style = `--c:${color};${p !== null ? `--p:${pos(p)};` : ""}${ci ? `--lo:${pos(ci[0])};--hi:${pos(ci[1])};` : ""}`;
     const invalid = r.invalid ? `<span class="av-chip av-chip--invalid" title="Invalid runs are excluded, never counted as failures">${outcomeMark("invalid")}${fmtInt(r.invalid!)} invalid</span>` : "";
     const thin = r.n > 0 && r.n < 5 && !bad ? `<span class="av-chip av-chip--warn" title="Too few valid runs for a reliable rate">n = ${r.n}</span>` : "";
     const badChip = bad ? `<span class="av-chip av-chip--warn" title="More passes than valid runs: these counts cannot be a rate">counts invalid</span>` : "";
     const isBase = !byCase && r.arm === input.baseline;
-    const label = `${bad ? `counts invalid: ${r.k} of ${r.n}` : p === null ? "no valid runs" : `${r.k} of ${r.n} valid runs passed, ${fmtPct(p)}`}${ci ? `, 95% interval ${fmtPct(ci[0])} to ${fmtPct(ci[1])}` : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
+    const label = `${bad ? `counts invalid: ${r.k} of ${r.n}` : p === null ? "no valid runs" : pooled ? `${r.k} of ${r.n} valid runs passed across ${casesWords(across, false)}, pooled counts with no interval` : `${r.k} of ${r.n} valid runs passed, ${fmtPct(p)}`}${ci ? `, 95% interval ${fmtPct(ci[0])} to ${fmtPct(ci[1])}` : r.unstated && !pooled && p !== null ? ", no interval: how these counts were sampled is not given" : ""}${r.invalid ? `, ${r.invalid} invalid` : ""}`;
     const variant = byCase ? variantOf.get(r.case!) : undefined;
     const note = r.note ?? (byCase ? undefined : ctx.arms.note(r.arm!));
     const name = byCase
@@ -244,8 +267,8 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
     const seg = noise ? `<span class="av-noise-seg" aria-hidden="true" style="--nlo:${pos(noise[0])};--nhi:${pos(noise[1])}"></span>` : "";
     return `<div class="av-ladder-row${variant ? " av-ladder-row--variant" : ""}" role="row"${attrs(byCase ? { "data-case": r.case } : { "data-arm": r.arm })}>
 <div class="av-ladder-label" role="rowheader">${name}${note ? `<span class="av-ladder-note">${esc(note)}</span>` : ""}${flags}</div>
-<div class="av-ladder-track${p === null ? " av-ladder-track--empty" : ""}" role="cell" style="${style}" aria-label="${esc(label)}">${seg}${ci ? '<span class="av-ci"></span>' : ""}${p !== null ? '<span class="av-pt"></span>' : `<span class="av-ladder-none">${bad ? "counts invalid" : "no valid runs"}</span>`}</div>
-<div class="av-ladder-num" role="cell"><span class="av-frac${bad ? " av-frac--bad" : ""}"><b>${r.k}</b>/${r.n}</span><span class="av-rate">${bad ? "—" : fmtPct(p)}</span>${ci ? `<span class="av-ci-text">${fmtPct(ci[0])}–${fmtPct(ci[1])}</span>` : ""}</div>
+<div class="av-ladder-track${p === null ? " av-ladder-track--empty" : ""}" role="cell" style="${style}" aria-label="${esc(label)}">${seg}${ci ? '<span class="av-ci"></span>' : ""}${p === null ? `<span class="av-ladder-none">${bad ? "counts invalid" : "no valid runs"}</span>` : pooled ? '<span class="av-share"></span>' : '<span class="av-pt"></span>'}</div>
+<div class="av-ladder-num" role="cell"><span class="av-frac${bad ? " av-frac--bad" : ""}"><b>${r.k}</b>/${r.n}</span>${pooled && !bad ? `<span class="av-across">across ${casesWords(across, false)}</span>` : `<span class="av-rate">${bad ? "—" : fmtPct(p)}</span>`}${ci ? `<span class="av-ci-text">${fmtPct(ci[0])}–${fmtPct(ci[1])}</span>` : r.unstated && !pooled && !bad && p !== null ? '<span class="av-across">no interval</span>' : ""}</div>
 </div>`;
   };
   const body = ordered.map(item => {
@@ -258,12 +281,13 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
   const ticks = [0, .25, .5, .75, 1].map(t => `<span style="--x:${pos(t)}">${t * 100}%</span>`).join("");
   const references = (Array.isArray(input.references) ? input.references : []).filter(r => r && isNum(r.value));
   const refs = [
-    ...(baseRate !== null ? [{ value: baseRate, label: `${ctx.arms.label(input.baseline!)} ${fmtPct(baseRate)}`, kind: "base" }] : []),
+    ...(baseRate !== null ? [{ value: baseRate, label: `${ctx.arms.label(input.baseline!)} ${base && count(base.cases ?? 1) > 1 ? `${base.k}/${base.n}` : fmtPct(baseRate)}`, kind: "base" }] : []),
     ...references.map(r => ({ value: Math.max(0, Math.min(1, r.value)), label: String(r.label ?? ""), kind: "rule" })),
   ];
   const ref = refs.map(r => `<div class="av-ladder-ref av-ladder-ref--${r.kind}" aria-hidden="true" style="--x:${pos(r.value)}"><span>${esc(r.label)}</span></div>`).join("");
-  const legend = `<p class="av-legend"><span><span class="av-legend-ci"></span>95% Wilson interval</span><span><span class="av-legend-pt"></span>pass rate over valid runs</span>${groups.length ? '<span><span class="av-legend-noise"></span>spread between identical arms</span>' : ""}${baseRate !== null ? '<span class="av-legend-item--ref"><span class="av-legend-ref"></span>baseline</span>' : ""}${references.length ? '<span class="av-legend-item--ref"><span class="av-legend-ref av-legend-ref--rule"></span>threshold</span>' : ""}</p>`;
-  return frame("ladder", { title: input.title, description: input.description, note: input.note, id: input.id },
+  const pooledRow = (r: LadderRow) => count(r.cases ?? 1) > 1;
+  const legend = `<p class="av-legend">${rows.some(r => !pooledRow(r)) ? '<span><span class="av-legend-ci"></span>95% Wilson interval</span><span><span class="av-legend-pt"></span>pass rate over valid runs</span>' : ""}${rows.some(pooledRow) ? '<span><span class="av-legend-share"></span>share of runs passed, pooled over cases: plain counts, no interval</span>' : ""}${groups.length ? '<span><span class="av-legend-noise"></span>spread between identical arms</span>' : ""}${baseRate !== null ? '<span class="av-legend-item--ref"><span class="av-legend-ref"></span>baseline</span>' : ""}${references.length ? '<span class="av-legend-item--ref"><span class="av-legend-ref av-legend-ref--rule"></span>threshold</span>' : ""}</p>`;
+  return frame("ladder", { title: input.title, description: input.description, note: input.note, id: input.id, read: input.read },
     `${legend}<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}${byCase ? " av-ladder-grid--cases" : ""}" role="table" aria-label="${esc(input.title || (byCase ? "Pass rate by case" : "Pass rate by arm"))}"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks}</div><span></span></div>${body}${ref}</div>`, byCase ? { "data-by": "case" } : {});
 }
 
@@ -317,7 +341,7 @@ export function tapestry(input: TapestryInput, ctx: RenderContext): string {
     const groups = [...groupsIn.map(g => ({ ...g, cases: rows.filter(c => g.cases.includes(c)) })), { label: "Other cases", note: undefined, cases: rows.filter(c => !groupsIn.some(g => g.cases.includes(c))) }].filter(g => g.cases.length);
     for (const g of groups) {
       const t = tally(data.runs.filter(r => g.cases.includes(r.scenario) && arms.includes(r.arm)));
-      body += `<div class="av-tap-row av-tap-row--group" role="row"><div class="av-tap-group" role="rowheader"><span class="av-tap-group-label">${esc(g.label)}</span><span class="av-muted">${plural(g.cases.length, "case")} · ${t.pass}/${t.valid} passed${t.invalid ? ` · ${t.invalid} invalid` : ""}${g.note ? ` · ${esc(g.note)}` : ""}</span></div></div>`;
+      body += `<div class="av-tap-row av-tap-row--group" role="row"><div class="av-tap-group" role="rowheader"><span class="av-tap-group-label">${esc(g.label)}</span><span class="av-muted">${casesWords(g.cases.length, false)} · ${t.pass}/${t.valid} passed${t.invalid ? ` · ${t.invalid} invalid` : ""}${g.note ? ` · ${esc(g.note)}` : ""}</span></div></div>`;
       body += g.cases.filter(c => !placed.has(c)).map(c => { placed.add(c); return line(c); }).join("");
     }
   } else body = rows.map(line).join("");
@@ -362,13 +386,13 @@ export function checks(input: ChecksInput, ctx: RenderContext): string {
 }
 
 /** One case's measures: true/false shares, and medians with their range for numbers. */
-function measuresTable(t: ReturnType<typeof caseChecks>, arms: string[], armHead: string): string {
-  return `<div class="av-scroll-x"><table class="av-heatmap av-heatmap--measures" style="--arms:${arms.length}">${colgroup(arms)}<thead><tr><th scope="col">Measure</th>${armHead}</tr></thead><tbody>${t.measures.map(m => `<tr><th scope="row">${checkName(m.name)}</th>${arms.map(a => {
+function measuresTable(ctx: RenderContext, t: ReturnType<typeof caseChecks>, arms: string[], armHead: string): string {
+  return heatTable(ctx, "av-heatmap av-heatmap--measures", arms, "Measure", t.measures.map(m => ({ code: m.name })), `<thead><tr><th scope="col">Measure</th>${armHead}</tr></thead><tbody>${t.measures.map(m => `<tr><th scope="row">${checkName(m.name)}</th>${arms.map(a => {
     const c = m.cells[a];
     if (!c || !c.n) return `<td class="av-heat av-heat--none"><span>—</span></td>`;
     if (m.kind === "boolean") return heat(c.k, c.n, true);
     return `<td class="av-ck-numeric"><span class="av-num-median">${esc(fmtNum(c.median))}</span>${c.min !== c.max ? `<span class="av-muted">${esc(fmtNum(c.min))}–${esc(fmtNum(c.max))}</span>` : ""}</td>`;
-  }).join("")}</tr>`).join("")}</tbody></table></div>`;
+  }).join("")}</tr>`).join("")}</tbody>`);
 }
 
 function measuresByCase(input: ChecksInput, ctx: RenderContext, data: TrialReport, arms: string[], cases: string[], only?: string[]): string {
@@ -381,15 +405,48 @@ function measuresByCase(input: ChecksInput, ctx: RenderContext, data: TrialRepor
     const v = variantOf.get(cs), label = caseLabel(ctx, cs);
     const bools = t.measures.filter(m => m.kind === "boolean").length, nums = t.measures.length - bools;
     const what = [bools ? plural(bools, "true or false measure") : "", nums ? plural(nums, "number") : ""].filter(Boolean).join(" and ");
-    return `<section class="av-ck-case${v ? " av-ck-case--variant" : ""}"${attrs({ "data-case": cs })}><header class="av-ck-head"><h4 class="av-ck-title">${v ? `<span class="av-ck-variant"${attrs({ title: v.note })}>↳ ${esc(v.label)}</span>` : ""}<span class="av-case-name">${esc(label)}</span>${label !== cs ? ` <code>${esc(cs)}</code>` : ""}</h4></header><details class="av-ck-measures"${t.measures.length <= 4 ? " open" : ""}><summary>${esc(what)} <span class="av-muted">· recorded, not required for a pass</span></summary>${measuresTable(t, arms, armHead)}</details></section>`;
+    return `<section class="av-ck-case${v ? " av-ck-case--variant" : ""}"${attrs({ "data-case": cs })}><header class="av-ck-head"><h4 class="av-ck-title">${v ? `<span class="av-ck-variant"${attrs({ title: v.note })}>↳ ${esc(v.label)}</span>` : ""}<span class="av-case-name">${esc(label)}</span>${label !== cs ? ` <code>${esc(cs)}</code>` : ""}</h4></header><details class="av-ck-measures"${t.measures.length <= 4 ? " open" : ""}><summary>${esc(what)} <span class="av-muted">· recorded, not required for a pass</span></summary>${measuresTable(ctx, t, arms, armHead)}</details></section>`;
   }).join("");
   if (!panels) return frame("checks", input, empty("No measures were recorded beyond the required checks."));
   const legend = `<p class="av-legend"><span>True or false: runs where it was true / valid runs, shaded by share, not by merit.</span><span>Numbers: the median, with the range beneath.</span></p>`;
   return frame("checks", input, `${legend}<div class="av-ck-cases" style="--arms:${arms.length}">${panels}</div>`, { "data-by": "measures" });
 }
 
-function colgroup(arms: string[]): string {
-  return `<colgroup><col class="av-ck-col-name">${arms.map(() => '<col class="av-ck-col-arm">').join("")}</colgroup>`;
+/** A row head of a checks table, for sizing the name column: a check's name (with the chip saying in how many cases it
+ * is required, which wraps at its spaces), or other text. */
+type RowHead = { code: string; chip?: string } | { text: string };
+/** Generous widths in rem, enough for a wide font such as DejaVu Sans: a character of a check name (monospace, 0.6em of
+ * code at .86em of the table's .86rem, plus the code's .35em padding each side), of other row-head text (0.6em of
+ * .86rem), of a column heading (capitals, 0.85em of .7rem plus .08em spacing), of a chip (0.62em of .7rem plus 8px
+ * each side) and of an arm's name (0.6em of .82rem); every cell has 10px of padding each side. */
+const EST = { mono: 0.6 * 0.86 * 0.86, code: 0.7 * 0.86 * 0.86, text: 0.6 * 0.86, head: 0.93 * 0.7, chip: 0.62 * 0.7, chipPad: 1, arm: 0.6 * 0.82, cell: 1.25 };
+const words = (text: string) => text.split(" ").filter(Boolean);
+const longest = (pieces: string[]) => Math.max(0, ...pieces.map(p => p.length));
+/** The fewest characters per line that set these words on at most `lines` lines. */
+function lineChars(pieces: string[], lines: number): number {
+  for (let width = longest(pieces); ; width++) {
+    let n = 1, used = 0;
+    for (const p of pieces) if (used && used + 1 + p.length > width) { n++; used = p.length; } else used += (used ? 1 : 0) + p.length;
+    if (n <= lines) return width;
+  }
+}
+/** A checks table in the box it scrolls in. The name column's sizes go on the table as custom properties, which
+ * trial-views.css combines in a fixed priority (.av-ck-col-name there): `--ck-hard`, its widest word that cannot break
+ * (of a chip or of the heading); `--ck-soft`, its widest piece of a check name between underscores or word of other
+ * text; `--ck-full`, its heading and row heads each on one line; and `--ck-arms`, the room the arms want, each for its
+ * name on three lines. The arms share what the name column leaves. */
+function heatTable(ctx: RenderContext, cls: string, arms: string[], heading: string, rows: RowHead[], inner: string): string {
+  const chip = (r: RowHead, piece: (text: string) => number) => "chip" in r && r.chip ? piece(r.chip) * EST.chip + EST.chipPad : 0;
+  const whole = (text: string) => text.length, word = (text: string) => longest(words(text));
+  const oneLine = (r: RowHead) => "text" in r ? r.text.length * EST.text : r.code.length * EST.mono + EST.code + (r.chip ? 0.3 + chip(r, whole) : 0);
+  const piece = (r: RowHead) => "text" in r ? longest(words(r.text)) * EST.text : longest(r.code.split(/(?<=_)/)) * EST.mono + EST.code;
+  const hard = EST.cell + Math.max(word(heading) * EST.head, ...rows.map(r => chip(r, word)));
+  const soft = EST.cell + Math.max(0, ...rows.map(piece));
+  const full = EST.cell + Math.max(heading.length * EST.head, ...rows.map(oneLine));
+  const armRoom = Math.max(0, ...arms.map(a => EST.cell + lineChars(words(ctx.arms.label(a)), 3) * EST.arm));
+  const rem = (v: number) => `${Math.round(v * 100) / 100}rem`;
+  const sizes = `--arms:${arms.length};--ck-hard:${rem(hard)};--ck-soft:${rem(soft)};--ck-full:${rem(full)};--ck-arms:${rem(arms.length * armRoom)}`;
+  return `<div class="av-scroll-x av-ck-box"><table class="${cls}" style="${sizes}"><colgroup><col class="av-ck-col-name">${arms.map(() => '<col class="av-ck-col-arm">').join("")}</colgroup>${inner}</table></div>`;
 }
 
 function checksByCheck(input: ChecksInput, ctx: RenderContext, data: TrialReport, arms: string[], only?: string[]): string {
@@ -399,7 +456,8 @@ function checksByCheck(input: ChecksInput, ctx: RenderContext, data: TrialReport
   if (!rows.length && !judged.length) return frame("checks", input, empty("No pass/fail checks were recorded."));
   const head = `<thead><tr><th scope="col" class="av-heat-corner">Check</th>${arms.map(a => `<th scope="col">${ctx.arms.tag(a, { id: false })}</th>`).join("")}</tr></thead>`;
   const caseCount = new Set(data.runs.map(r => r.scenario)).size;
-  const line = (r: typeof rows[number]) => `<tr><th scope="row">${checkName(r.name)}${r.required && r.requiredIn.length < caseCount ? ` <span class="av-chip av-chip--req" title="${esc(r.requiredIn.join(", "))}">in ${r.requiredIn.length} of ${caseCount} cases</span>` : ""}</th>${arms.map(a => heat(r.cells[a].k, r.cells[a].n, !r.required)).join("")}</tr>`;
+  const chipOf = (r: typeof rows[number]) => r.required && r.requiredIn.length < caseCount ? `in ${r.requiredIn.length} of ${casesWords(caseCount, false)}` : undefined;
+  const line = (r: typeof rows[number]) => `<tr><th scope="row">${checkName(r.name)}${chipOf(r) ? ` <span class="av-chip av-chip--req" title="${esc(r.requiredIn.join(", "))}">${chipOf(r)}</span>` : ""}</th>${arms.map(a => heat(r.cells[a].k, r.cells[a].n, !r.required)).join("")}</tr>`;
   const span = arms.length + 1;
   const fold = (summary: string, names: string[]) => names.length ? `<tr class="av-ck-fold"><td colspan="${span}"><details><summary>${esc(summary)}</summary>${chipList(names)}</details></td></tr>` : "";
   const group = (label: string, note: string, items: typeof rows, folded = "") => items.length || folded ? `<tr class="av-heat-group"><th scope="rowgroup" colspan="${span}">${esc(label)} <span class="av-muted">· ${esc(note)}</span></th></tr>${items.map(line).join("")}${folded}` : "";
@@ -413,7 +471,8 @@ function checksByCheck(input: ChecksInput, ctx: RenderContext, data: TrialReport
   const body = group("Required checks", "true is a pass; counted over the cases that require each one", reqShown, fold(`${plural(reqHeld.length, "more required check")} held in every valid run, in every arm`, reqHeld.map(r => r.name)))
     + judgeRow
     + group("Recorded measures", "recorded true or false, not required for a pass; shaded by share, not by merit", measShown, fold(`${plural(steady.length, "measure")} never changed: ${steady.filter(always).length} always true, ${steady.filter(never).length} never true`, steady.map(r => `${r.name} ${always(r) ? "true" : "false"}`)));
-  return frame("checks", input, `<div class="av-scroll-x"><table class="av-heatmap" style="--arms:${arms.length}">${colgroup(arms)}${head}<tbody>${body}</tbody></table></div>`, { "data-by": "check" });
+  const heads: RowHead[] = [...[...reqShown, ...measShown].map(r => ({ code: r.name, chip: chipOf(r) })), ...(judged.length ? [{ text: "verdict = pass" }] : [])];
+  return frame("checks", input, heatTable(ctx, "av-heatmap", arms, "Check", heads, `${head}<tbody>${body}</tbody>`), { "data-by": "check" });
 }
 
 function checksByCase(input: ChecksInput, ctx: RenderContext, data: TrialReport, arms: string[], cases: string[], only?: string[]): string {
@@ -437,7 +496,7 @@ function checksByCase(input: ChecksInput, ctx: RenderContext, data: TrialReport,
     const head = `<header class="av-ck-head">${title}<div class="av-ck-outcome"><span class="av-ck-outcome-label">passed</span>${outcome}</div></header>`;
     const row = (name: string, cells: Record<string, { k: number; n: number }>, cls = "") => `<tr${cls ? ` class="${cls}"` : ""}><th scope="row">${name}</th>${arms.map(a => heat(cells[a]?.k ?? 0, cells[a]?.n ?? 0)).join("")}</tr>`;
     const judgeRow = t.judge ? row(`<span class="av-ck-judge">Judge says pass</span>${judgePassWhen(plan) ? `<span class="av-ck-when"${attrs({ title: judgePassWhen(plan) })}>${esc(clip(judgePassWhen(plan)!, 140))}</span>` : ""}`, t.judge, "av-ck-judgerow") : "";
-    const measures = t.measures.length ? `<details class="av-ck-measures"><summary>${plural(t.measures.length, "recorded measure")} <span class="av-muted">· recorded, not required for a pass</span></summary>${measuresTable(t, arms, armHead)}</details>` : "";
+    const measures = t.measures.length ? `<details class="av-ck-measures"><summary>${plural(t.measures.length, "recorded measure")} <span class="av-muted">· recorded, not required for a pass</span></summary>${measuresTable(ctx, t, arms, armHead)}</details>` : "";
     if (clean) {
       const what = required.length ? `${required.length === 1 ? "The required check" : `All ${required.length} required checks`} held in every valid run${t.judge ? ", and the judge said pass" : ""}.` : t.judge ? "The judge said pass in every valid run." : "Every valid run passed.";
       const none = arms.every(a => !t.outcome[a].n);
@@ -445,7 +504,8 @@ function checksByCase(input: ChecksInput, ctx: RenderContext, data: TrialReport,
     }
     const rows = failing.map(r => row(`${checkName(r.name)}`, r.cells, "av-ck-failing")).join("");
     const fold = held.length ? `<tr class="av-ck-fold"><td colspan="${span}"><details><summary>${plural(held.length, "more required check")} held in every valid run</summary>${chipList(held.map(r => r.name))}</details></td></tr>` : "";
-    const table = `<div class="av-scroll-x"><table class="av-heatmap av-heatmap--case" style="--arms:${arms.length}">${colgroup(arms)}<thead><tr><th scope="col">Must hold</th>${armHead}</tr></thead><tbody>${rows}${judgeRow}${fold}</tbody></table></div>`;
+    const heads: RowHead[] = [...failing.map(r => ({ code: r.name })), ...(t.judge ? [{ text: "Judge says pass" }] : [])];
+    const table = heatTable(ctx, "av-heatmap av-heatmap--case", arms, "Must hold", heads, `<thead><tr><th scope="col">Must hold</th>${armHead}</tr></thead><tbody>${rows}${judgeRow}${fold}</tbody>`);
     return `<section class="av-ck-case${v ? " av-ck-case--variant" : ""}"${attrs({ "data-case": cs })}>${head}${table}${measures}</section>`;
   }).join("");
   const legend = `<p class="av-legend"><span>Each case's required checks and judge, over its valid runs; checks that failed somewhere come first.</span><span>Cells: runs where the check held / valid runs.</span></p>`;
@@ -457,7 +517,9 @@ function checksByCase(input: ChecksInput, ctx: RenderContext, data: TrialReport,
 export interface PairwiseInput extends FrameInput { pair?: string }
 export function pairwise(input: PairwiseInput, ctx: RenderContext): string {
   const data = trialOf(ctx, "pairwise");
-  const pairs = Object.entries(data.pairwise || {}).filter(([k, p]) => p && typeof p === "object" && (!input.pair || k === input.pair));
+  // Only the judgments the checks accept (wellFormedPair: two different arms this trial knows, with their counts), listed
+  // as the checks list them (entriesOf, where a "$" key is a note): a malformed one is refused there and not drawn here.
+  const pairs = (wellFormedPairs(data) as Array<[string, NonNullable<TrialReport["pairwise"]>[string]]>).filter(([k]) => !input.pair || k === input.pair);
   if (!pairs.length) return frame("pairwise", input, empty("No pairwise judgments were run."));
   const segs = ["a_wins", "tie", "b_wins", "inconsistent", "invalid"] as const;
   const clean = (st: Partial<Record<string, unknown>> | undefined) => {
@@ -467,20 +529,26 @@ export function pairwise(input: PairwiseInput, ctx: RenderContext): string {
     return { ...o, total: segs.reduce((n, k) => n + o[k], 0), rate, interval: iv && iv[0] !== null && iv[1] !== null ? [iv[0], iv[1]] as [number, number] : null };
   };
   let maxTotal = 1;
-  for (const [, p] of pairs) for (const st of [p.overall, ...Object.values(p.scenarios || {})]) maxTotal = Math.max(maxTotal, clean(st as never).total);
+  for (const [, p] of pairs) for (const st of [p.overall, ...valuesIn(p.scenarios || {})]) maxTotal = Math.max(maxTotal, clean(st as never).total);
   const html = pairs.map(([key, p]) => {
     const [a, b] = (Array.isArray(p.arms) ? p.arms : ["A", "B"]).map(String);
     const present = new Set<string>();
-    for (const st of [p.overall, ...Object.values(p.scenarios || {})]) { const c = clean(st as never); for (const k of segs) if (c[k]) present.add(k); }
+    for (const st of [p.overall, ...valuesIn(p.scenarios || {})]) { const c = clean(st as never); for (const k of segs) if (c[k]) present.add(k); }
     const words: Record<string, string> = { a_wins: `${ctx.arms.label(a)} preferred in both orders`, tie: "tie in both orders", b_wins: `${ctx.arms.label(b)} preferred in both orders`, inconsistent: "the two orders disagree", invalid: "invalid" };
+    // Pairs on one case repeat that case: the all-cases row pools them as plain counts, with no interval.
+    const decisiveCases = valuesIn(p.scenarios || {}).filter(st => { const c = clean(st as never); return c.a_wins + c.b_wins > 0; }).length;
     const line = (label: string, raw: unknown, strong = false) => {
       const s = clean(raw as never), total = s.total || 1;
+      const pooledCases = strong && decisiveCases > 1 ? decisiveCases : 0;
       const bar = segs.map(k => s[k] ? `<span class="av-duel-seg av-duel-seg--${k}" style="flex:${s[k]}" title="${esc(`${words[k]}: ${s[k]}`)}">${s[k] / total > .1 && k !== "inconsistent" ? s[k] : ""}</span>` : "").join("");
-      const rate = s.rate !== null && s.interval ? `${fmtPct(s.rate)} <span class="av-ci-text">${fmtPct(s.interval[0])}–${fmtPct(s.interval[1])}</span>` : '<span class="av-muted">no decisive pairs</span>';
+      const decisive = s.a_wins + s.b_wins;
+      const rate = !decisive ? '<span class="av-muted">no decisive pairs</span>'
+        : pooledCases ? `<span class="av-frac"><b>${s.a_wins}</b>/${decisive}</span> <span class="av-across">decisive pairs won, across ${casesWords(pooledCases, false)}</span>`
+        : s.rate !== null ? `${fmtPct(s.rate)}${s.interval ? ` <span class="av-ci-text">${fmtPct(s.interval[0])}–${fmtPct(s.interval[1])}</span>` : ""}` : `<span class="av-frac"><b>${s.a_wins}</b>/${decisive}</span>`;
       return `<div class="av-duel-row${strong ? " av-duel-row--overall" : ""}"><span class="av-duel-label">${esc(label)}<span class="av-muted"> · ${plural(s.total, "pair")}</span></span><div class="av-duel-track"><div class="av-duel-bar" style="width:${pos(s.total / maxTotal)}" role="img" aria-label="${esc(`${label}: ${ctx.arms.label(a)} preferred ${s.a_wins}, ties ${s.tie}, ${ctx.arms.label(b)} preferred ${s.b_wins}, order-inconsistent ${s.inconsistent}, invalid ${s.invalid}`)}">${bar}</div>${s.inconsistent ? `<span class="av-duel-split" title="the two orders disagree">${s.inconsistent} split</span>` : ""}</div><span class="av-duel-rate">${rate}</span></div>`;
     };
     // One scale for every row, the overall row included, so a bar's length always means the same number of pairs.
-    const scen = Object.entries(p.scenarios || {}).map(([s, st]) => line(caseLabel(ctx, s), st)).join("");
+    const scen = entriesOf(p.scenarios || {}).map(([s, st]) => line(caseLabel(ctx, s), st)).join("");
     const legend = `<p class="av-legend av-duel-legend">${segs.filter(k => present.has(k)).map(k => `<span><span class="av-sw av-duel-seg--${k}"></span>${k === "a_wins" ? ctx.arms.glyph(a) : k === "b_wins" ? ctx.arms.glyph(b) : ""}${esc(words[k])}</span>`).join("")}<span>Bar length is the number of pairs, on one scale for every row.</span></p>`;
     return `<div class="av-duel" data-pair="${esc(key)}" style="--c-a:${ctx.arms.color(a)};--c-b:${ctx.arms.color(b)}"><div class="av-duel-head">${ctx.arms.tag(a)}<span class="av-duel-vs">preferred over</span>${ctx.arms.tag(b)}<span class="av-duel-rate-head">${esc(ctx.arms.label(a))} win rate</span></div>${legend}${line("All cases", p.overall, true)}${scen}</div>`;
   }).join("");
@@ -629,7 +697,7 @@ export function plan(input: FrameInput, ctx: RenderContext): string {
   const data = trialOf(ctx, "plan");
   const armIds = trialAxes(data).arms.slice().sort(byIdentity(ctx)), settings = data.plan?.arms || {};
   const skip = new Set(["instructions_text", "instructions_truncated", "artifact_text", "artifact_truncated"]);
-  const present = [...new Set(armIds.flatMap(a => Object.keys(settings[a] || {})))].filter(k => !skip.has(k) && armIds.some(a => settings[a]?.[k] !== undefined && settings[a]?.[k] !== null));
+  const present = [...new Set(armIds.flatMap(a => keysIn(settings[a] || {})))].filter(k => !skip.has(k) && armIds.some(a => settings[a]?.[k] !== undefined && settings[a]?.[k] !== null));
   const cellText = (k: string, v: unknown) => v === undefined || v === null ? '<span class="av-muted">—</span>' : /sha256$/.test(k) && typeof v === "string" ? `<code title="${esc(v)}">${esc(v.slice(0, 10))}</code>` : `<code>${esc(typeof v === "string" ? v : JSON.stringify(v))}</code>`;
   const armTable = `<div class="av-scroll-x"><table class="av-table av-plan-arms"><thead><tr><th scope="col">Arm</th>${present.map(k => `<th scope="col">${esc(k.replace(/_sha256$/, " digest").replace(/_/g, " "))}</th>`).join("")}</tr></thead><tbody>${armIds.map(a => `<tr><th scope="row">${ctx.arms.tag(a)}${ctx.arms.note(a) ? `<span class="av-ladder-note">${esc(ctx.arms.note(a)!)}</span>` : ""}</th>${present.map(k => `<td>${cellText(k, settings[a]?.[k])}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
   const ran = new Set(data.runs.map(r => r.scenario));

@@ -11,7 +11,9 @@ import { failures } from "./blocks/failures";
 import { contrast } from "./blocks/contrast";
 import * as C from "./blocks/compare";
 import * as J from "./blocks/judgments";
+import * as K from "./blocks/collection";
 import { renderProblems, validateSpec } from "./validate";
+import { storyHtml } from "./reading";
 
 export type BlockRenderer = (input: any, ctx: RenderContext) => string;
 const registry = new Map<string, BlockRenderer>();
@@ -33,6 +35,7 @@ for (const [type, fn] of Object.entries({
   setup, cases, failures, contrast,
   scorecard: C.scorecard, metric: C.metric, difference: C.difference, hierarchy: C.hierarchy,
   alternatives: J.alternatives, preferences: J.preferences, "decision-matrix": J.decisionMatrix, observations: J.observations,
+  decisions: K.decisions, reports: K.reports, shifts: K.shifts, "cost-gain": K.costGain, timeline: K.timeline, matchups: K.matchups, "report-compare": K.reportCompare,
 } as Record<string, BlockRenderer>)) registry.set(type, fn);
 
 /** Render one block. An unknown type or a renderer error renders as a visible
@@ -48,16 +51,26 @@ export function renderReport(spec: ReportSpec): string {
   if (!spec || typeof spec.title !== "string" || !Array.isArray(spec.sections)) throw new TypeError("A report needs a title and a sections array.");
   const ctx = createContext(spec, spec.cases || {});
   // A malformed section entry renders as a visible notice in its place; the rest of the report still renders.
-  const sections = spec.sections.map((raw, i) => {
+  // The story opens the report, before any result, when the specification tells one.
+  // The story's section takes an id no section or block of the specification uses, nor its heading's.
+  const taken = new Set<string>();
+  for (const sec of spec.sections) if (sec && typeof sec === "object") {
+    if (typeof sec.id === "string") { taken.add(sec.id); taken.add(`${sec.id}-h`); }
+    for (const b of Array.isArray(sec.blocks) ? sec.blocks : []) { const id = (b as unknown as { id?: unknown })?.id; if (typeof id === "string") taken.add(id); }
+  }
+  let storyId = "story";
+  for (let k = 2; taken.has(storyId) || taken.has(`${storyId}-h`); k++) storyId = `story-${k}`;
+  const told = spec.story && typeof spec.story === "object" ? [{ title: "What this is about", label: "Story", id: storyId, blocks: [], story: true } as unknown as SectionSpec] : [];
+  const sections = [...told, ...spec.sections].map((raw, i) => {
     const s = (raw && typeof raw === "object" ? raw : {}) as Partial<SectionSpec>;
     const title = typeof s.title === "string" && s.title ? s.title : `Section ${i + 1}`;
     const problem = !raw || typeof raw !== "object" ? "This section entry is not an object." : !Array.isArray(s.blocks) ? "This section has no blocks list." : "";
-    return { ...s, title, blocks: Array.isArray(s.blocks) ? s.blocks : [], problem, id: typeof s.id === "string" && /^[A-Za-z][\w:.-]*$/.test(s.id) ? s.id : ctx.uid(title), n: String(i + 1).padStart(2, "0") };
+    return { ...s, story: !!(raw as { story?: boolean })?.story && i === 0 && told.length > 0, title, blocks: Array.isArray(s.blocks) ? s.blocks : [], problem, id: typeof s.id === "string" && /^[A-Za-z][\w:.-]*$/.test(s.id) ? s.id : ctx.uid(title), n: String(i + 1).padStart(2, "0") };
   });
   const toc = sections.map(s => `<li><a href="#${esc(s.id)}"><span class="av-toc-n">${s.n}</span><span class="av-toc-label">${esc(s.label || s.title)}</span></a></li>`).join("");
   const metaItems = (Array.isArray(spec.meta) ? spec.meta : []).filter(m => m && typeof m === "object");
   const meta = metaItems.length ? `<dl class="av-meta">${metaItems.map(m => `<div><dt>${esc(m.label)}</dt><dd>${esc(m.value)}</dd></div>`).join("")}</dl>` : "";
-  const body = sections.map(s => `<section class="av-section" id="${esc(s.id)}" aria-labelledby="${esc(s.id)}-h"><header class="av-section-head"><span class="av-section-n" aria-hidden="true">${s.n}</span><div><h2 id="${esc(s.id)}-h" class="av-section-title">${esc(s.title)}</h2>${prose(s.lead, "av-section-lead")}</div></header>${s.problem ? `<div class="av-block av-block-error" role="note"><strong>${esc(s.problem)}</strong> Each section needs a title and a blocks list.</div>` : ""}${s.blocks.map(b => renderBlock(b, ctx)).join("")}</section>`).join("");
+  const body = sections.map(s => `<section class="av-section" id="${esc(s.id)}" aria-labelledby="${esc(s.id)}-h"><header class="av-section-head"><span class="av-section-n" aria-hidden="true">${s.n}</span><div><h2 id="${esc(s.id)}-h" class="av-section-title">${esc(s.title)}</h2>${prose(s.lead, "av-section-lead")}</div></header>${s.story ? storyHtml(spec.story!, ctx) : ""}${s.reading ? `<div class="av-section-reading"><span class="av-read-tag">What this shows</span>${prose(s.reading, "av-read-prose")}</div>` : ""}${s.problem ? `<div class="av-block av-block-error" role="note"><strong>${esc(s.problem)}</strong> Each section needs a title and a blocks list.</div>` : ""}${s.blocks.map(b => renderBlock(b, ctx)).join("")}</section>`).join("");
   return `<div class="av-report" data-av-report>
 <a class="av-skip" href="#${esc(sections[0]?.id || "top")}">Skip to the first section</a>
 <header class="av-topbar"><div class="av-topbar-inner"><a class="av-brand" href="#av-top"><span class="av-brand-mark" aria-hidden="true"></span><span class="av-brand-text">${esc(spec.kicker || "Report")}</span></a><nav class="av-toc" aria-label="Sections"><ol>${toc}</ol></nav><button type="button" class="av-theme-toggle" data-av-theme-toggle hidden><span class="av-theme-icon" aria-hidden="true"></span><span class="av-theme-word">Auto</span></button></div></header>

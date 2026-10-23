@@ -32,7 +32,69 @@ for (const el of document.querySelectorAll(".av-report *")) { const r = el.getBo
 return { scrollWidth: document.documentElement.scrollWidth, innerWidth: vw, offenders: out.slice(0, 8) };
 """
 HOSTILE = '"\'><x-hostile id="h-browser">'
+# Text crushed into a narrow column: an element whose own text (over 40 characters) wraps to four or more lines
+# in a box under 200 pixels wide, as the decision rule's evidence once did beside a wide verdict.
+CRAMPED = """
+const out = [];
+for (const el of document.querySelectorAll(".av-report *")) {
+  if (el.closest("[hidden], details:not([open]), svg, .av-sr, dialog:not([open])")) continue;
+  const own = [...el.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join("").replace(/\\s+/g, " ").trim();
+  if (own.length <= 40) continue;
+  const style = getComputedStyle(el), rect = el.getBoundingClientRect();
+  if (style.display === "none" || !rect.width) continue;
+  const lines = Math.round(rect.height / (parseFloat(style.lineHeight) || parseFloat(style.fontSize) * 1.3));
+  if (lines >= 4 && rect.width < 200) out.push(el.tagName.toLowerCase() + "." + String(el.className).split(" ")[0] + " " + Math.round(rect.width) + "px, " + lines + " lines: " + own.slice(0, 40));
+}
+return out.slice(0, 8);
+"""
 
+# Content of a checks table's row head or corner heading that runs past its cell's right edge: a chip, which cannot wrap,
+# spilling into the first arm's cell under the sticky row head.
+SPILL = """
+const out = [];
+const tables = [...document.querySelectorAll(".av-heatmap")].filter(t => t.getBoundingClientRect().width);
+for (const t of tables) for (const cell of t.querySelectorAll("tbody th, thead th:first-child")) {
+  if (cell.colSpan > 1) continue;
+  const edge = cell.getBoundingClientRect().right;
+  for (const el of cell.querySelectorAll("*")) {
+    const r = el.getBoundingClientRect();
+    if (r.width && r.right > edge + 0.5) out.push(String(el.className || el.tagName.toLowerCase()).split(" ")[0] + ' "' + el.textContent.trim().slice(0, 30) + '" ends ' + Math.round(r.right - edge) + " px past its cell");
+  }
+}
+return { chips: [...document.querySelectorAll(".av-heatmap .av-chip--req")].map(c => c.textContent), variants: [...new Set(tables.map(t => t.className))].sort(), spills: [...new Set(out)].slice(0, 8) };
+"""
+# Each value in a checks table's arm cells, scrolled so that it starts at the sticky name column's edge: a value that
+# still runs under that column or past the box's right edge can never be read in full, even by scrolling.
+READABLE = """
+const out = []; let cells = 0, scrolled = 0;
+const textBox = td => {
+  let left = Infinity, right = -Infinity;
+  const walk = document.createTreeWalker(td, NodeFilter.SHOW_TEXT);
+  for (let n; (n = walk.nextNode());) {
+    if (!n.textContent.trim() || n.parentElement.closest("[aria-hidden]")) continue;
+    const range = document.createRange(); range.selectNodeContents(n);
+    const r = range.getBoundingClientRect();
+    if (r.width) { left = Math.min(left, r.left); right = Math.max(right, r.right); }
+  }
+  return left < right ? { left, right } : null;
+};
+for (const table of [...document.querySelectorAll(".av-heatmap")].filter(t => t.getBoundingClientRect().width)) {
+  const box = table.closest(".av-scroll-x");
+  for (const row of table.querySelectorAll("tbody tr")) {
+    const head = row.querySelector("th");
+    if (!head || head.colSpan > 1) continue;
+    for (const td of row.querySelectorAll("td")) {
+      if (td.colSpan > 1 || !textBox(td)) continue;
+      box.scrollTo({ left: box.scrollLeft + textBox(td).left - head.getBoundingClientRect().right, behavior: "instant" });
+      cells++; scrolled = Math.max(scrolled, box.scrollLeft);
+      const v = textBox(td), h = head.getBoundingClientRect(), b = box.getBoundingClientRect();
+      if (v.left < h.right - 0.5 || v.right > b.right + 0.5) out.push('"' + td.textContent.trim() + '" beside ' + head.textContent.trim().slice(0, 30) + ": " + Math.round(v.right - v.left) + " px of value, " + Math.round(b.right - h.right) + " px beside the sticky column");
+    }
+    box.scrollTo({ left: 0, behavior: "instant" });
+  }
+}
+return { cells, scrolled: Math.round(scrolled), hidden: [...new Set(out)].slice(0, 8) };
+"""
 
 def kinds_trial(*, invalid: bool, hostile: bool = False) -> dict:
     """Two arms, two cases, three repeats: a required check that fails with a
@@ -238,7 +300,8 @@ class BrowserRenderTest(unittest.TestCase):
         result = self.scenario("keyboard", "--trial", EXAMPLES / "fictional-trial.json", "--narrative", EXAMPLES / "fictional-narrative.json")
         # One link control per section is a deliberate stop (it names the section
         # it links); every other control counts against the budget.
-        self.assertLess(result["tabStops"] - result["sections"], 60, "reaching the ledger takes too many Tab presses")
+        # Each view's "How to read it" disclosure is one stop of its own, about a dozen in this report.
+        self.assertLess(result["tabStops"] - result["sections"], 80, "reaching the ledger takes too many Tab presses")
         self.assertGreater(result["marks"], 20)
         self.assertEqual(result["markStops"], 1, "a case dossier's runs are not a single tab stop")
         self.assertEqual(result["titles"], 0, "run marks keep a native title beside the styled tooltip")
@@ -284,6 +347,87 @@ class BrowserRenderTest(unittest.TestCase):
         self.assertNotIn("error", out, out.get("error"))
         self.assertEqual(out["width"], width, "the viewport was not emulated")
         return out
+
+    def test_no_text_is_crushed_into_a_narrow_column(self) -> None:
+        narrative = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
+        long = "GPT 17/17 against 17/17 (p = 1.00); Claude 29/29 against 25/29 (p = 0.11); mean seconds per run 153, 205 and 243"
+        narrative["decision"]["checks"] = [{"label": "The checklist beats both copies by 15 points", "observed": long, "threshold": "at least 15 points on pooled runs", "met": True}] * 3
+        path = self.dir / "narrative.json"
+        path.write_text(json.dumps(narrative), encoding="utf-8")
+        page = self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", path)
+        for width in (1440, 1024, 800):
+            with self.subTest(width=width):
+                self.assertEqual(self.drive(page, width=width, script=CRAMPED)["result"], [], "text crushed into a column under 200 px")
+        # An observation ledger whose case labels are sentences and whose sources are long run paths: the labels
+        # once stayed on one line and took the room, so each path wrapped to seven lines in a 144 px column.
+        cases = {"recurring": "Starting a pass: a recurring stale instruction met during a feature task",
+                 "first": "Restraint: the same stale instruction met for the first time"}
+        observations = [{"alternative": alt, "case": case, "metric": "passed", "value": (i + j) % 2 == 0, "unit": f"r{i}",
+                         "note": "The agent edited the build file to add an alias for the old target name.",
+                         "source": f"/home/someone/.cache/agent-trials/heal-any-final2-auto-{alt}/runs/heal-autolaunch-{case}__{alt}__r{i}"}
+                        for j, alt in enumerate(("current", "revised")) for case in cases for i in range(1, 4)]
+        comparison = {"title": "Ledger widths", "alternatives": [{"id": "current", "label": "Main's text"}, {"id": "revised", "label": "Revised text"}],
+                      "cases": [{"id": k, "label": v} for k, v in cases.items()],
+                      "metrics": [{"id": "passed", "label": "Passed (checks and cross-family judge)", "kind": "binary", "better": "higher"}],
+                      "observations": observations}
+        data = self.dir / "ledger.json"
+        data.write_text(json.dumps(comparison), encoding="utf-8")
+        ledger = self.build("--data", data)
+        for width in (1440, 1024):
+            with self.subTest(ledger=width):
+                self.assertEqual(self.drive(ledger, width=width, script=CRAMPED)["result"], [], "a ledger cell crushed into a column under 200 px")
+        # Six arms with long names in the checks table: the check-name column once kept 44% of the width however many
+        # arms shared the rest, so at 1440 px each arm's name wrapped to five lines in a 71 px column. (At 1024 px the
+        # six names and the check names share under 900 px, and a name of four short lines is the table fitting.)
+        names = ["No instructions (GPT)", "Policy line naming over-engineering (GPT)", "Both directions at equal standing (GPT)",
+                 "No instructions (Claude)", "Policy line naming over-engineering (Claude)", "Both directions at equal standing (Claude)"]
+        arms = [f"arm{i}" for i in range(len(names))]
+        runs = [{"job": f"{case}__{arm}__r{r}", "scenario": case, "arm": arm, "repeat": r, "status": "ok", "passed": (i + r) % 3 != 0, "valid": True,
+                 "checks": {"reply_written": True, "cites_the_source": (i + r) % 3 != 0}}
+                for case in ("first", "second") for i, arm in enumerate(arms) for r in (1, 2)]
+        wide = {"name": "wide", "plan": {"arms": {a: {"executor": "command", "model": "m"} for a in arms},
+                                         "scenarios": [{"name": c, "prompt": "Reply.", "required": ["reply_written", "cites_the_source"]} for c in ("first", "second")]}, "runs": runs}
+        (self.dir / "wide.json").write_text(json.dumps(wide), encoding="utf-8")
+        (self.dir / "wide-narrative.json").write_text(json.dumps({"arms": [{"id": a, "label": n} for a, n in zip(arms, names)]}), encoding="utf-8")
+        checks = self.build("--trial", self.dir / "wide.json", "--narrative", self.dir / "wide-narrative.json")
+        for width in (1440, 1280):
+            with self.subTest(checks=width):
+                self.assertEqual(self.drive(checks, width=width, script=CRAMPED)["result"], [], "an arm's name crushed into a column under 200 px")
+        # The glyphs stay drawn above the names.
+        glyphs = self.drive(checks, width=1440, script='return [...document.querySelectorAll(".av-heatmap thead .av-glyph")].map(g => Math.round(g.getBoundingClientRect().width));')["result"]
+        self.assertTrue(glyphs and all(w >= 10 for w in glyphs), f"each arm's glyph in the table head is drawn: {glyphs}")
+
+    def test_phone_width_keeps_row_heads_in_their_cells_and_every_value_readable(self) -> None:
+        # A check required in only some cases carries a chip such as "in 10 of 20 cases" in its pooled row head. At 320 px
+        # the chip once ran into the first arm's cell; kept whole instead, "in 9999 of 10,000 cases" widened the sticky
+        # name column until the 58 px left beside it could never show "9999/9999", however far the table scrolled. Every
+        # checks table (pooled, by case, and the recorded measures) keeps each row head inside its cell, and each value
+        # can be scrolled to sit in full beside the sticky column.
+        def chips_trial(count: int, required_in: int, measures: bool) -> dict:
+            cases = [f"c{i:05d}" for i in range(1, count + 1)]
+            runs = []
+            for i, case in enumerate(cases):
+                for j, arm in enumerate(("a", "b")):
+                    cites = (i + j) % 3 != 0 if measures else True
+                    checks = {"reply_written": True, "cites_the_source": cites, "under_budget": (i + j) % 2 == 0} if measures else {"cites_the_source": True}
+                    runs.append({"job": f"{case}__{arm}__r1", "scenario": case, "arm": arm, "repeat": 1, "status": "ok", "valid": True, "passed": cites or i >= required_in, "checks": checks})
+            required = (lambda i: ["reply_written", "cites_the_source"] if i < required_in else ["reply_written"]) if measures else (lambda i: ["cites_the_source"] if i < required_in else [])
+            return {"name": "chips", "plan": {"arms": {a: {"executor": "command", "model": "m"} for a in ("a", "b")},
+                                              "scenarios": [{"name": c, "prompt": "Reply.", "required": required(i)} for i, c in enumerate(cases)]}, "runs": runs}
+        variants = {"av-heatmap": {"type": "checks", "by": "check"}, "av-heatmap av-heatmap--case": {"type": "checks", "by": "case"}, "av-heatmap av-heatmap--measures": {"type": "checks", "required": False}}
+        fixtures = {"twenty cases": (chips_trial(20, 10, True), "in 10 of 20 cases", list(variants)), "ten thousand cases": (chips_trial(10_000, 9_999, False), "in 9999 of 10,000 cases", ["av-heatmap"])}
+        for name, (trial, chip, drawn) in fixtures.items():
+            with self.subTest(fixture=name):
+                spec_file = self.dir / "row-heads.json"
+                spec_file.write_text(json.dumps({"title": "Row heads", "sections": [{"title": v, "blocks": [variants[v]]} for v in drawn]}), encoding="utf-8")
+                page = self.build("--trial", self.trial_file(trial), "--spec", spec_file)
+                out = self.drive(page, width=320, script=SPILL)["result"]
+                self.assertIn(chip, out["chips"], "the pooled row head carries its chip")
+                self.assertEqual(out["variants"], sorted(drawn), "each checks table drawn")
+                self.assertEqual(out["spills"], [], "a row head running into the first arm's cell at 320 px")
+                seen = self.drive(page, width=320, script=READABLE)["result"]
+                self.assertGreater(seen["scrolled"], 0, "the tables scroll sideways at 320 px")
+                self.assertEqual(seen["hidden"], [], f"a value that cannot be shown in full beside the sticky column at 320 px ({seen['cells']} values)")
 
     def test_phone_width_never_scrolls_the_page_sideways(self) -> None:
         reports = {

@@ -6044,6 +6044,23 @@ def _probe_values() -> dict:
             "file": f"{word()}-{word()}", "number": str(rng.randrange(10000, 100000))}
 
 
+def _placed_skills(arm: dict) -> set[str]:
+    """The skills an arm places in a run's private home, named as Run.exposed names them (see _Material): a resource
+    that is a skill directory (one holding SKILL.md) by its own place's name, a SKILL.md placed alone by the name of
+    the directory it is placed in, a resource holding skill directories by theirs, and each stub skill."""
+    names = {Path(d).name for d, _ in _stub_files(arm)}
+    for rel, src in (arm.get("resources") or {}).items():
+        src = Path(src)
+        if (src / "SKILL.md").is_file():
+            names.add(Path(rel).name)
+        elif Path(rel).name == "SKILL.md" and src.is_file():
+            names.add(Path(rel).parent.name)
+        elif src.is_dir():
+            with contextlib.suppress(OSError):
+                names |= {d.name for d in src.iterdir() if d.is_dir() and (d / "SKILL.md").is_file()}
+    return names
+
+
 def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str, attempt: int, inputs: list) -> dict:
     """One attempt of a launcher's probe: a built-in run, in the arm's own confinement, of only the steps the
     selected scenarios need (a code word in its standing instructions; a command whose printed output it reports;
@@ -6141,6 +6158,11 @@ def _probe_launcher(entry: dict, needs: dict, out: Path, key: str, sandbox: str,
     placement = {t.get("instructions") for t in record.get("turns") or [] if t.get("instructions")}
     if placement:
         notes.append(f"instructions placed as: {', '.join(sorted(placement))}")
+    # what the harness, or an account a copied login brings, adds to what the executor lists, whichever harness it is
+    unplaced = sorted(set(record.get("listed") or {}) - _placed_skills(entry))
+    if unplaced:
+        notes.append(f"the executor listed {len(unplaced)} skill{'' if len(unplaced) == 1 else 's'} the arm did not place: "
+                     + ", ".join(unplaced))
     return {"misses": misses, "notes": notes, "model": models[0] if len(models) == 1 else None, "dir": str(job_dir),
             "usage": _sane_numeric(record.get("usage"))}
 

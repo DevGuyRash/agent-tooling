@@ -181,9 +181,13 @@ test("scorecard: alternatives across, baseline column marked, missing cells show
 });
 
 test("scorecard: tints only where a direction and the baseline make better or worse meaningful", () => {
+  // One region only: 20 of 200 against the baseline's 80 of 200 has an interval well below zero.
   const data = nested();
+  data.observations = data.observations.filter(o => o.case === "north");
   const html = render({ type: "scorecard" }, data);
   H.ok(H.count(html, 'data-tone="worse"') >= 4, "Direction B is worse than the Direction A baseline");
+  // Over both regions, each holding its own 200 visitors per ad, the values pool repeats: no interval, so no tint.
+  H.excludes(render({ type: "scorecard" }, nested()), 'data-tone="worse"', "a tint without an interval");
   H.includes(html, "worse than the baseline");
   data.metrics[0].better = "none";
   H.excludes(render({ type: "scorecard" }, data), "data-tone=", "a tint without a direction");
@@ -250,7 +254,9 @@ test("hierarchy: nested pooled groups, their members, and differences at each le
   H.includes(html, "Between top-level groups");
   H.includes(html, "Between Direction A");
   H.includes(html, "Direction A <span class=\"av-cmp-minus\">minus</span> Direction B");
-  H.includes(html, "excludes 0 · better", "Direction A converts better than B");
+  // 640 of 1,600 against 160 of 1,600, pooled over north and south, each with 200 visitors per ad: +30 points, no interval.
+  H.includes(html, '<span class="av-cmp-v">+30 pts</span><span class="av-ci-text"', "Direction A's pooled lead");
+  H.includes(html, "pooled over 2 cases, each holding repeats", "why it has no interval");
   H.includes(html, "av-cmp-ref--parent", "members read against their group");
   H.includes(html, "4 alternatives in 2 groups, pooled");
 });
@@ -358,6 +364,68 @@ test("unequal case coverage is named, and data naming no case gets no empty case
 test("a comparison of totals alone still lists the totals it was given", () => {
   const spec = V.comparisonReport({ alternatives: [{ id: "a" }, { id: "b" }], metrics: [{ id: "m", kind: "count" }], aggregates: [{ alternative: "a", metric: "m", k: 1, n: 4 }, { alternative: "b", metric: "m", k: 2, n: 4 }] }, {});
   H.ok(spec.sections.some(s => s.id === "observations" && s.title === "Every supplied total"), "a totals section");
+});
+
+test("the same cases weighted differently draw the uneven-case-mix warning", () => {
+  // The reviewer's comparison: both alternatives always pass easy and fail hard; x has nine easy and one hard, y the reverse.
+  // Pooled, 90% against 10%; case by case, the same.
+  const times = (n, x) => Array.from({ length: n }, () => x);
+  const obs = (alt, easy, hard) => [...times(easy, ["easy", true]), ...times(hard, ["hard", false])].map(([c, value]) => ({ alternative: alt, case: c, metric: "ok", value }));
+  const data = { alternatives: [{ id: "x" }, { id: "y" }], cases: [{ id: "easy" }, { id: "hard" }], metrics: [{ id: "ok", kind: "binary", better: "higher" }], observations: [...obs("x", 9, 1), ...obs("y", 1, 9)] };
+  for (const type of ["metric", "scorecard", "difference"]) {
+    const html = render({ type, ...(type === "metric" ? { metric: "ok" } : {}) }, data);
+    H.includes(html, "Uneven case mix", `${type} warns`);
+    H.includes(html.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " "), "easy carries 90% of x's data but 10% of y's; hard carries 90% of y's data but 10% of x's", `${type} says how`);
+  }
+  // Even weights draw no warning.
+  H.excludes(render({ type: "metric", metric: "ok" }, { ...data, observations: [...obs("x", 3, 3), ...obs("y", 2, 2)] }), "Uneven case mix", "the same shares");
+});
+
+test("an uneven case mix is found from every kind of evidence: level counts, totals, and observations naming no case", () => {
+  const times = (n, x) => Array.from({ length: n }, () => x);
+  // 4. Ordinal totals: X has {good: 9} on easy and {bad: 1} on hard; Y {good: 1} and {bad: 9}. Identical case by case.
+  const ordinal = { alternatives: [{ id: "x" }, { id: "y" }], cases: [{ id: "easy" }, { id: "hard" }], metrics: [{ id: "q", kind: "ordinal", levels: ["bad", "good"] }],
+    aggregates: [["x", "easy", { good: 9 }], ["x", "hard", { bad: 1 }], ["y", "easy", { good: 1 }], ["y", "hard", { bad: 9 }]].map(([alternative, c, counts]) => ({ alternative, case: c, metric: "q", counts })) };
+  const ord = render({ type: "metric", metric: "q" }, ordinal).replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ");
+  H.includes(ord, "Uneven case mix", "ordinal totals weighted by their level counts");
+  H.includes(ord, "easy carries 90% of x's data but 10% of y's", "how");
+  // 5. Named and unnamed: X has nine passes on easy and one failure naming no case; Y one pass on easy and nine failures naming none.
+  const mixed = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "ok", kind: "binary" }],
+    observations: [...times(9, ["x", "easy", true]), ["x", undefined, false], ["y", "easy", true], ...times(9, ["y", undefined, false])].map(([alternative, c, value]) => ({ alternative, ...(c ? { case: c } : {}), metric: "ok", value })) };
+  const named = render({ type: "metric", metric: "ok" }, mixed).replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ");
+  H.includes(named, "Uneven case mix", "observations naming no case are a case of their own");
+  H.includes(named, "evidence naming no case carries 90% of y's data but 10% of x's", "named as such");
+});
+
+test("a specification's own section called story keeps its id; the inserted story takes another", () => {
+  // 6. The reviewer's specification: a section with id story beside the story the page inserts.
+  const spec = { title: "S", story: { background: "b", intent: "i", questions: ["q"], covers: "c", notCovered: "n" }, sections: [{ id: "story", title: "Recorded outcome", reading: "r", blocks: [{ type: "text", text: "t" }] }] };
+  const html = V.renderReport(spec);
+  const ids = [...html.matchAll(/ id="([^"]+)"/g)].map(m => m[1]);
+  H.equal(ids.filter((id, i) => ids.indexOf(id) !== i), [], "no id used twice");
+  const toc = [...html.matchAll(/<li><a href="#([^"]+)"/g)].map(m => m[1]);
+  H.equal(toc.length, 2, "two entries"); H.ok(toc[0] !== toc[1], "each to its own section");
+  H.equal(toc[1], "story", "the specification's own section keeps its id");
+});
+
+test("round 12: the comparison views' warnings read the evidence their values read, after the filter", () => {
+  const times = (n, x) => Array.from({ length: n }, () => x);
+  const plain = html => html.replace(/<[^>]+>/g, " ").replace(/&#39;/g, "'").replace(/\s+/g, " ");
+  const views = (data, filter = {}) => ["metric", "scorecard", "difference"].map(type => [type, plain(render({ type, ...(type === "metric" ? { metric: "m" } : {}), ...filter }, data))]);
+  // 2. Totals that the filter brings in: X has one observation on c0, which the filter leaves out, so X's totals are read:
+  // 9 of 9 on c1 and 0 of 1 on c2; Y's 1 of 1 and 0 of 9. 100% on c1 and 0% on c2 for both: the gap is all weights.
+  const activated = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "m", kind: "binary" }], observations: [{ alternative: "x", case: "c0", metric: "m", value: true }],
+    aggregates: [["x", "c1", 9, 9], ["x", "c2", 0, 1], ["y", "c1", 1, 1], ["y", "c2", 0, 9]].map(([alternative, c, k, n]) => ({ alternative, case: c, metric: "m", k, n })) };
+  for (const [type, html] of views(activated, { cases: ["c1", "c2"] })) H.includes(html, "c1 carries 90% of x's data but 10% of y's", `${type}: the totals the values read`);
+  // 3. A case-group filter: c1 is in group "selected"; X and Y pass once each on c1, and X has nine failures naming no case, Y one.
+  // Within the group both are 1 of 1 on c1: no case mix at all.
+  const grouped = { alternatives: [{ id: "x" }, { id: "y" }], cases: [{ id: "c1", group: "selected" }], metrics: [{ id: "m", kind: "binary" }],
+    observations: [{ alternative: "x", case: "c1", metric: "m", value: true }, { alternative: "y", case: "c1", metric: "m", value: true }, ...times(9, { alternative: "x", metric: "m", value: false }), { alternative: "y", metric: "m", value: false }] };
+  for (const [type, html] of views(grouped, { caseGroups: ["selected"] })) { H.excludes(html, "Uneven case mix", `${type}: nothing outside the group`); H.excludes(html, "evidence naming no case", `${type}: no unnamed evidence`); }
+  // 4. Rank totals the rankings leave unread: [x, y] on c1 and [y, x] on c2 give both a mean rank of 1.5 over one ranking each.
+  const ranked = { alternatives: [{ id: "x" }, { id: "y" }], metrics: [{ id: "m", kind: "rank" }], rankings: [{ order: ["x", "y"], case: "c1" }, { order: ["y", "x"], case: "c2" }],
+    aggregates: [["x", "c1", 90], ["x", "c2", 10], ["y", "c1", 10], ["y", "c2", 90]].map(([alternative, c, n]) => ({ alternative, case: c, metric: "m", mean: 1.5, sd: 0.5, n })) };
+  for (const [type, html] of views(ranked)) H.excludes(html, "Uneven case mix", `${type}: rankings weigh one each, the totals not at all`);
 });
 
 H.report();

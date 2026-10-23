@@ -110,4 +110,20 @@ test("pairwise counts are escaped when they are not numbers", () => {
   noRaw(V.renderReport(V.trialReport(data)));
 });
 
+test("a metric's unit stays text in every collection view", () => {
+  // A numeric metric whose unit is markup, in two members with one shared measure: index, shifts, exact numbers,
+  // per-case tables, the member's own report and the two side by side.
+  const unit = F.hostile("metric-unit");
+  const comparison = cases => ({
+    title: "Durations", alternatives: [{ id: "a", label: "A" }, { id: "b", label: "B" }], baseline: "a",
+    cases: cases.map(id => ({ id, label: id })),
+    metrics: [{ id: "t", label: "Time", kind: "numeric", better: "lower", unit }],
+    observations: cases.flatMap(c => [["a", 10], ["a", 12], ["b", 8], ["b", 9]].map(([alternative, value]) => ({ alternative, case: c, metric: "t", value }))),
+  });
+  const member = (id, cases) => ({ id, label: id, comparison: comparison(cases), narrative: { decision: { verdict: "adopt", headline: "H." }, baseline: "a" } });
+  const data = { title: "Units", members: [member("one", ["c1"]), member("two", ["c1", "c2"])], pairs: [{ a: "one", b: "two" }] };
+  const views = [V.collectionReport(data), V.memberReport(data, "one"), V.compareReport(data, "one", "two")];
+  noRaw(views.map(spec => V.renderReport(spec)).join("\n"));
+});
+
 H.report();

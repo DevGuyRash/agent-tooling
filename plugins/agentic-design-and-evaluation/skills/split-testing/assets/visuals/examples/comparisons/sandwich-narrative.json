@@ -1,5 +1,34 @@
 {
   "kicker": "Split test · an everyday choice",
+  "story": {
+    "background": [
+      "A household cook makes one sandwich for lunch and wants to make the one people will actually enjoy. Two sandwiches were on the table: **peanut butter** (crunchy peanut butter on wholemeal bread) and **jelly** (strawberry jelly on the same bread). Nothing else differed: same bread, same kitchen, same lunchtime.",
+      "Four people who like both, Ana, Ben, Cy and Dee, each tasted the sandwiches, said which one they would rather eat right then, rated each one's taste on four steps (Poor, Fair, Good, Great) and said how much effort each was to make (Trivial, Easy, Some work, A chore). The example is fictional, made to show how a small everyday choice reads as a report."
+    ],
+    "intent": "The cook asked: “Which sandwich should I make for lunch?” They wanted the one people would rather eat, as long as it was not a chore to make.",
+    "questions": [
+      "Would more of the four rather eat peanut butter or jelly, asked plainly with both in front of them?",
+      "Does either sandwich taste clearly better, rated on the same four steps?",
+      "Is either one enough of a chore to make that it should lose even if people prefer it?"
+    ],
+    "rule": "Make the sandwich more people would rather eat, unless most of them rate its effort “A chore”. The rule was set before anyone tasted anything, so the result cannot have shaped it.",
+    "alternatives": {
+      "pb": "Peanut butter: crunchy peanut butter spread on two slices of wholemeal bread. Salty, filling, no preparation beyond spreading.",
+      "jelly": "Jelly: strawberry jelly spread on the same wholemeal bread. Sweet; the jelly can drip and soak into the bread."
+    },
+    "covers": "What four people said at one lunch: which sandwich they would rather eat, how each tasted, and how much effort each was, with the cook's own notes on mess and on how each might keep in a lunch box.",
+    "notCovered": "Anyone beyond these four people, other breads or fillings, nutrition or cost, and how either sandwich keeps until noon, which nobody tested. Dee did not make or taste the jelly sandwich, so her jelly ratings are missing, not low.",
+    "glossary": [
+      {
+        "term": "Decisive judgment",
+        "meaning": "A choice that names one sandwich. A tie, or a person who did not taste both, decides nothing and is counted apart."
+      },
+      {
+        "term": "95% interval",
+        "meaning": "The range the true value would likely fall in if many more people were asked; with four people it is wide, so small differences could be chance."
+      }
+    ]
+  },
   "decision": {
     "verdict": "adopt",
     "headline": "Make the **peanut butter** sandwich: two of four would rather eat it, one has no preference, and nobody picked the jelly.",
@@ -124,5 +153,13 @@
       "4": "great"
     },
     "note": "The cook's rating from 1 (poor) to 4 (great), read from the people's ratings where they exist."
+  },
+  "readings": {
+    "compared": "The two sandwiches differ only in the spread; the bread and everything else are the same, so any difference in the ratings comes from peanut butter against jelly.",
+    "results": "Peanut butter was rated Great by Ana and Dee and Good by Ben and Cy; jelly was rated Good by Ana and Cy and Fair by Ben, with Dee's rating missing. For effort, three people called peanut butter Trivial and one Easy; jelly was Easy for two and Some work for Ben, and nobody called either A chore. With four people every interval is wide: the lean towards peanut butter is clear in these ratings, not proof about people in general.",
+    "differences": "Peanut butter minus jelly, measure by measure. Both decisive choices went to peanut butter, but two judgments leave a wide interval (−32 to +100 points), so the preference alone could be chance. On taste, a peanut butter rating beats a jelly rating more often than the reverse (superiority +0.33, interval +0.13 to +0.50, clear of zero). On effort, peanut butter was the easier one (−0.42, interval −0.50 to −0.25; lower effort is better).",
+    "judgments": "Ana and Ben would rather eat peanut butter, Cy had no preference and Dee did not taste the jelly, so two judgments were decisive and both went to peanut butter; nobody chose jelly.",
+    "decision": "On the cook's own weights (taste counts three times), peanut butter rates higher on every criterion. The totals show the cook's judgment with its arithmetic; they are not a measurement.",
+    "observations": "Sixteen ratings in all: eight for taste and eight for effort. Two are invalid, Dee's taste and effort ratings for jelly, because she had no jelly left and did not make or taste it."
   }
 }

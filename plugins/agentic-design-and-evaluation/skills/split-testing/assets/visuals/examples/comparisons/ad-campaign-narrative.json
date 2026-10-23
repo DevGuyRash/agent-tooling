@@ -1,5 +1,45 @@
 {
   "kicker": "Split test · ad campaign",
+  "story": {
+    "background": [
+      "An online shop runs a banner ad on paid social and wanted a better headline for its spring campaign. Three new headlines were written: a **Savings headline**, a **Speed headline** and a **Social-proof headline**. Each ran against the **current banner**, with impressions split evenly within each of three audiences: new visitors, returning visitors and subscribers. The example is fictional, made to show how an ad test reads as a report.",
+      "Only the ad platform's totals exist: how many people saw each version, how many clicked, how many of those bought, and the revenue per visitor who clicked. No individual visit was exported, so every number is a total the platform reported."
+    ],
+    "intent": "The marketing lead asked: “Which headline should the spring campaign run, and for whom?” A headline is only worth running where it brings in purchases, not just clicks.",
+    "questions": [
+      "Does any new headline turn more of the people who click into buyers than the current banner, in any audience?",
+      "Do more clicks come with more purchases, or can a headline raise clicks without raising sales?",
+      "Is the answer the same for new visitors, returning visitors and subscribers?"
+    ],
+    "rule": "Fixed before the campaign: roll a headline out to an audience only if at least 5% of the people who click it buy (the break-even point), and the interval for its difference from the current banner stays above zero, so the gain is unlikely to be chance.",
+    "alternatives": {
+      "control": "The current banner, already running; every new headline is measured against it.",
+      "v1": "The Savings headline: a new headline built around saving money.",
+      "v2": "The Speed headline: a new headline built around speed.",
+      "v3": "The Social-proof headline: a new headline built around other customers. It ran for new and returning visitors only, not for subscribers."
+    },
+    "cases": {
+      "s1": "New visitors, 60,000 impressions per version: people who have not bought before, where a headline has the most to win.",
+      "s2": "Returning visitors, 30,000 impressions per version: people who know the shop, to see whether a headline still matters to them.",
+      "s3": "Subscribers, 15,000 impressions per version: the shop's most loyal audience, where a change could also lose sales."
+    },
+    "covers": "Clicks per impression, purchases per click and revenue per visitor who clicked, for each version in each audience, as the ad platform totalled them.",
+    "notCovered": "Individual visits, repeat purchases after the first, the cost of the ads themselves, other channels than paid social, and the Social-proof headline's effect on subscribers, where it did not run.",
+    "glossary": [
+      {
+        "term": "Click rate",
+        "meaning": "Clicks divided by impressions: how often people who saw the ad clicked it."
+      },
+      {
+        "term": "Purchase rate",
+        "meaning": "Purchases divided by clicks: how often people who clicked went on to buy."
+      },
+      {
+        "term": "Percentage points",
+        "meaning": "The difference between two rates: 6.3% against 4.1% is 2.2 points."
+      }
+    ]
+  },
   "decision": {
     "verdict": "mixed",
     "headline": "Run the **Savings headline** for new visitors on paid social, and keep the **current banner** everywhere else.",
@@ -81,7 +121,15 @@
             "s1"
           ]
         }
-      ]
+      ],
+      "reading": "Inside the new-visitor audience the Savings headline's purchase rate is 2.2 points above the current banner's (interval +0.4 to +3.8): the one difference in the campaign that clears both parts of the rule."
     }
-  ]
+  ],
+  "readings": {
+    "compared": "Four versions of the banner: the current one and three new headlines. Only the headline differs; each version was shown to the same three audiences.",
+    "results": "Across all audiences the Savings and Speed headlines drew more clicks than the current banner (3.1% and 3.1% of impressions against 2.7%), but their purchase rates were about the same (7.3% and 7.0% against 6.9%). The Social-proof headline drew fewer clicks (2.4%), fewer purchases (5.4%) and less revenue per visitor ($4.06 against $5.12).",
+    "differences": "Against the current banner, the Savings headline added 0.4 points of clicks (interval +0.26 to +0.54) and the Speed headline 0.3, both clear of zero; neither added purchases that clear zero (Savings +0.4 points, interval −0.9 to +1.6). The Social-proof headline did worse on all three measures, each interval below zero.",
+    "cases": "The audiences answer differently. Among new visitors the Savings headline turned 98 of 1,560 clicks into purchases (6.3%) against 47 of 1,140 (4.1%) for the current banner; among returning visitors and subscribers no headline beat the banner's purchase rate by more than chance.",
+    "observations": "Thirty-three totals, three measures for each version in each audience it ran in; the Social-proof headline has none for subscribers because it did not run there."
+  }
 }

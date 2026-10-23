@@ -8,6 +8,7 @@
  * drawer. Invalid runs are not failures: they are counted in the opening line and
  * never enter a group. When no valid run in scope failed, the block draws nothing. */
 import { attrs, count, esc, fmtPct, inline, num } from "../core";
+import { casesWords } from "../stats";
 import type { RenderContext } from "../model";
 import { outcomeOf, trialAxes } from "../trial-model";
 import type { TrialReport, TrialRun, TrialScenario } from "../trial-model";
@@ -199,7 +200,7 @@ export function failures(input: FailuresInput, ctx: RenderContext): string {
       // Cases with at least one valid run that could have failed this way.
       const applicable = cases.filter(c => valid.some(r => r.scenario === c && applies(m, r)));
       const scopeText = m.kind === "check"
-        ? `valid runs in the ${applicable.length === 1 ? "case that requires" : `${applicable.length} cases that require`} it`
+        ? `valid runs in the ${applicable.length === 1 ? "case that requires" : casesWords(applicable.length, false, "that require")} it`
         : m.kind === "judge" ? "valid runs the judge decides" : "valid runs";
       const rows = where.map(({ c, runs }) => {
         const k = runs.length, cn = among(m, r => r.scenario === c);
@@ -223,7 +224,7 @@ export function failures(input: FailuresInput, ctx: RenderContext): string {
       return `<li class="av-fx-mode av-fx-mode--case"><div class="av-fx-head"><span class="av-fx-count"><b>${runs.length}</b><span>of ${n}</span></span><div class="av-fx-title-wrap"><span class="av-eyebrow">Case</span><${hx} class="av-fx-title">${esc(caseLabel(c))}${caseLabel(c) !== c ? ` <code class="av-fx-id">${esc(c)}</code>` : ""}</${hx}><p class="av-fx-scope">${esc(`${runs.length} of ${n} valid ${n === 1 ? "run" : "runs"} failed, from ${plural(local.length, "cause")}`)}</p>${armCounts(null, runs, r => r.scenario === c)}</div></div><div class="av-fx-body"><ul class="av-fx-rows">${rows}</ul></div></li>`;
     }).join("");
     const clean = cases.filter(c => !failedCases.has(c) && valid.some(r => r.scenario === c));
-    const cleanNote = clean.length ? `<p class="av-fx-clean"><span class="av-mark av-mark--pass" aria-hidden="true"></span><span>${esc(plural(clean.length, "case"))} had no failed run: ${list(clean.slice(0, 8).map(c => esc(caseLabel(c))))}${clean.length > 8 ? ` and ${clean.length - 8} more` : ""}.</span></p>` : "";
+    const cleanNote = clean.length ? `<p class="av-fx-clean"><span class="av-mark av-mark--pass" aria-hidden="true"></span><span>${esc(casesWords(clean.length, false))} had no failed run: ${list(clean.slice(0, 8).map(c => esc(caseLabel(c))))}${clean.length > 8 ? ` and ${clean.length - 8} more` : ""}.</span></p>` : "";
     return `<ol class="av-fx-modes">${groups}</ol>${cleanNote}`;
   };
 

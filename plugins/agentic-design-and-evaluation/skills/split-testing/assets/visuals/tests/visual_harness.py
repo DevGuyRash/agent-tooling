@@ -18,6 +18,56 @@ NODE = shutil.which("node")
 PYTHON_ENV = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
 
 
+TRIAL_SECTIONS = ["setup", "arms", "cases", "grid", "failures", "checks", "pairwise", "cost", "invalid", "runs"]
+COMPARISON_SECTIONS = ["compared", "results", "differences", "groups", "cases", "judgments", "decision", "observations", "sources"]
+
+
+def story_for(trial: dict | None = None, comparison: dict | None = None) -> dict:
+    """A complete story for a test fixture whose test is about something else: every part present and every
+    alternative and case described, in deliberately plain filler words."""
+    story = {"background": "Background for a reader new to this test fixture.", "intent": "What the fixture's decider wanted.",
+             "questions": ["What the fixture tests."], "rule": "How the fixture's decision was made.", "covers": "What the fixture covers.", "notCovered": "What it does not."}
+    if trial is not None:
+        runs = [r for r in trial.get("runs", []) if isinstance(r, dict)]
+        story["alternatives"] = {a: f"Arm {a}." for a in dict.fromkeys(r["arm"] for r in runs if isinstance(r.get("arm"), str))}
+        story["cases"] = {c: f"Case {c}." for c in dict.fromkeys(r["scenario"] for r in runs if isinstance(r.get("scenario"), str))}
+    if comparison is not None:
+        story["alternatives"] = {a["id"]: f"Alternative {a['id']}." for a in comparison.get("alternatives", []) if isinstance(a, dict) and isinstance(a.get("id"), str)}
+        # Every case the comparison's data name, declared or not.
+        named = [c.get("id") for c in comparison.get("cases", []) if isinstance(c, dict)]
+        for key in ("observations", "aggregates", "preferences", "rankings"):
+            named += [x.get("case") for x in comparison.get(key, []) if isinstance(x, dict)] if isinstance(comparison.get(key), list) else []
+        cases = list(dict.fromkeys(c for c in named if isinstance(c, str) and c))
+        if cases:
+            story["cases"] = {c: f"Case {c}." for c in cases}
+    return story
+
+
+def told(narrative: dict, trial: dict | None = None, comparison: dict | None = None) -> dict:
+    """The narrative with a complete story and a reading for every section its composition can show."""
+    sections = TRIAL_SECTIONS if trial is not None else COMPARISON_SECTIONS
+    return {**narrative, "story": story_for(trial, comparison), "readings": {s: f"What the {s} views show here." for s in sections}}
+
+
+PROSE_BLOCKS = ("text", "callout", "list", "facts", "verdict")
+
+
+def told_spec(spec: dict, trial: dict | None = None, comparison: dict | None = None) -> dict:
+    """The specification with a complete story, a reading in every section and, in a section of several views,
+    each view's own reading."""
+    def read(b):
+        if not isinstance(b, dict) or b.get("type") in PROSE_BLOCKS or not isinstance(b.get("type"), str):
+            return b
+        return {**b, "read": {**(b["read"] if isinstance(b.get("read"), dict) else {}), "says": "What this view shows here."}}
+
+    def section(s):
+        if not isinstance(s, dict):
+            return s
+        blocks = [read(b) for b in s["blocks"]] if isinstance(s.get("blocks"), list) else s.get("blocks")
+        return {**s, "reading": "What these views show here.", **({"blocks": blocks} if isinstance(s.get("blocks"), list) else {})}
+    return {**spec, "story": story_for(trial, comparison), "sections": [section(s) for s in spec.get("sections", [])]}
+
+
 def run_python(*args: object, cwd: Path | None = None, timeout: int = 60) -> subprocess.CompletedProcess:
     """Run a Python script from this library with the current interpreter."""
     return subprocess.run([sys.executable, *map(str, args)], capture_output=True, text=True, timeout=timeout, cwd=cwd, env=PYTHON_ENV)

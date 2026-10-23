@@ -1,7 +1,7 @@
 """Renderer behavior, checked against the built bundle in node:vm.
 
 Each class runs one Node case script (escaping.cjs, outcomes.cjs,
-composition.cjs) and reports each of its cases as a subtest.
+composition.cjs, pooled.cjs) and reports each of its cases as a subtest.
 """
 from __future__ import annotations
 
@@ -43,6 +43,16 @@ class CompositionTest(NodeCases):
     minimum = 35
 
     def test_composition_registry_and_runtime(self) -> None:
+        self.run_script_cases()
+
+
+class PooledCountsTest(NodeCases):
+    """Counts pooled over several cases carry no interval; each case keeps its own."""
+
+    script = "pooled.cjs"
+    minimum = 7
+
+    def test_pooled_counts_and_per_case_intervals(self) -> None:
         self.run_script_cases()
 
 

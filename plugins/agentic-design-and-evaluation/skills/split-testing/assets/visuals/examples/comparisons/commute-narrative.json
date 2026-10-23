@@ -1,0 +1,36 @@
+{
+  "title": "Bike, bus or train to work?",
+  "question": "Which way to get to work arrives on time most reliably?",
+  "story": {
+    "background": [
+      "Someone who starts work at 9:00 tried four ways of getting there over two working weeks in March: **cycling along the river path**, **cycling along the main road**, **Bus 14**, and **the train with a walk** at each end. Each day they noted how many minutes the trip took, whether they arrived by 9:00, and, on the bus and train, whether they got a seat. The example is fictional, made to show how a plain table of observations becomes a report.",
+      "The record is a long table, one observation per row, kept by a phone tracker, a calendar and a weekly tally of seats; nothing else was written down."
+    ],
+    "intent": "The commuter wanted the way to work that gets them in by 9:00 most reliably, and wanted to see whether rain changes the answer.",
+    "questions": [
+      "Which way arrives by 9:00 most often?",
+      "How long does each way take, and how much does that vary?",
+      "Does rain change which way is fastest or most reliable?"
+    ],
+    "rule": "No rule was fixed in advance: this report lays out the record so a choice can be made from it, and it records no decision.",
+    "alternatives": {
+      "Bike via river path": "Cycling the quieter river path; longer in distance, away from traffic.",
+      "Bike via main road": "Cycling the direct main road, with traffic.",
+      "Bus 14": "The number 14 bus from the nearest stop.",
+      "Train and walk": "A short walk to the station, the train, and a walk from the station to work."
+    },
+    "cases": {
+      "dry": "Dry days: the ordinary commute, seven of the ten days.",
+      "rain": "Rainy days: three of the ten days, to see whether bad weather changes the answer."
+    },
+    "covers": "Trip minutes and arrival by 9:00 for every day of two working weeks, by way and by weather, and how many days a seat was free on the bus and the train.",
+    "notCovered": "Cost, comfort, exercise, safety, winter weather and any week but these two. One Bus 14 trip was cancelled and taken by train instead, so that day has no bus result."
+  },
+  "readings": {
+    "compared": "Four ways to work in two groups: two cycling routes and two kinds of public transport.",
+    "results": "Both bike routes arrived by 9:00 on all 10 days and took about 23 to 25 minutes on average. The train arrived on time on 8 of 10 days (32 minutes on average) and Bus 14 on only 2 of 9 (37 minutes). On the train a seat was free every day; on the bus on 4 of 10.",
+    "groups": "Cycling, pooled over both routes, was on time every day and about 10 minutes faster than public transport, which was on time on 10 of 19 days.",
+    "cases": "Rain slowed the river path most, from 23 to 30 minutes, while the main road went from 22 to 24; both bikes still arrived on time. In the rain the train was on time on only 1 of 3 days and the bus on none.",
+    "observations": "Eighty-four observations over ten days; two are invalid, the day Bus 14 was cancelled and the commuter took the train instead."
+  }
+}

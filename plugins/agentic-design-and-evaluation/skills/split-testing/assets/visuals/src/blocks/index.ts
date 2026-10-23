@@ -5,4 +5,5 @@ export { setup } from "./setup";
 export { cases } from "./cases";
 export { failures } from "./failures";
 export { contrast } from "./contrast";
+export { decisions, reports, shifts, costGain, timeline, matchups, reportCompare } from "./collection";
 export { frame } from "./frame";
