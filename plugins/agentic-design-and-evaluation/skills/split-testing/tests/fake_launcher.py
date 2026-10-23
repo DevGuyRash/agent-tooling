@@ -109,6 +109,13 @@ def main():
         where = {rel: "inside the run" if os.path.realpath(HOME / rel).startswith(job) else "outside the run"
                  for rel in (".fake-sign-in", ".fake-auth") if (HOME / rel).exists()}
         (harness / f"sign-in-where-{TURN}.json").write_text(json.dumps(where))
+        if MODE in ("signed-in-refresh", "signed-in-replace") and TURN:  # a tool refreshing its sign-in: new tokens
+            fresh = held[:-1] + ("1" if held.endswith("0") else "0") + "\n"  # as long as the old: only its bytes differ
+            if MODE == "signed-in-refresh":
+                sign_in.write_text(fresh)  # in place, through the link it was given
+            else:
+                (HOME / ".fake-sign-in.new").write_text(fresh)
+                os.replace(HOME / ".fake-sign-in.new", sign_in)  # a new file in its place
         prompt = Path(os.environ["TRIAL_PROMPT_FILE"]).read_text() if TURN else ""
         slow = (MODE == "signed-in-slow" and "create out.txt" in prompt) or (MODE == "signed-in-slow-probe" and "short check" in prompt)
         if slow and TURN == 1 and not os.environ.get("TRIAL_SCHEMA_FILE"):

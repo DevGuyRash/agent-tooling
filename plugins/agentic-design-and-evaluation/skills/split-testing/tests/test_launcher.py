@@ -678,6 +678,35 @@ class LauncherTest(unittest.TestCase):
         log = [json.loads(l) for l in (self.out / "credentials.jsonl").read_text().splitlines()]
         self.assertTrue(log and all(e["removed"] and e["by"] and "unremoved" not in e for e in log), log)
 
+    def test_a_sign_in_a_run_changed_is_named_with_where_it_was_copied_from_whatever_its_format(self):
+        # A tool that refreshes a sign-in by rotating it leaves the original it was copied from holding a used token,
+        # which signs its owner out. The runtime knows no tool's format, but it knows what it copied: a copy the run
+        # changed, written through its link or replaced by a new file, is named with its source as the run ends, in what
+        # the trial prints and in the removal record (paths, never content); a copy the run left as it was is not.
+        source = str(self.tmp / "sign-in")
+        for mode, changed in (("signed-in-refresh", True), ("signed-in-replace", True), ("signed-in", False)):
+            with self.subTest(mode):
+                subprocess.run(["chmod", "-R", "u+rwx", str(self.out)], capture_output=True)
+                shutil.rmtree(self.out, ignore_errors=True)
+                secret = "".join(["sess", "-", os.urandom(16).hex()])  # assembled here: no literal to scan for
+                write(self.tmp / "auth" / "token", secret)  # a copied directory, which no tool here changes
+                self._signed_in(secret, extra_copy={".fake-auth": "auth"})
+                r = self.run_plan(mode, FAKE_LAUNCHER_MARK=secret)
+                said = r.stdout + r.stderr
+                self.assertEqual(r.returncode, 0, said)
+                self.assertIs(self.result()["passed"], True, said)  # the run itself is as good as any
+                self.assertNotIn("copied from " + str(self.tmp / "auth"), said)
+                run = Path(os.path.realpath(self.out / "runs" / "make-file__a__r1")).relative_to(os.path.realpath(self.out))
+                log = [json.loads(l) for l in (self.out / "credentials.jsonl").read_text().splitlines()]
+                scored = [e.get("changed") for e in log if e["home"] == f"{run}/harness/home"]
+                if changed:
+                    self.assertIn(f"{run} changed the sign-in copied from {source}", said)
+                    self.assertEqual([[f"{run}/harness/home/.fake-sign-in"]], scored)
+                else:
+                    self.assertNotIn("changed the sign-in", said)
+                    self.assertEqual([None], scored)
+                self._no_credential_left(secret, said)
+
     def test_a_copy_the_agent_made_in_its_home_goes_with_the_home_but_its_evidence_stays(self):
         secret = "".join(["sess", "-", os.urandom(16).hex()])
         self._signed_in(secret, resources={"skills/helper": "skills/helper"})

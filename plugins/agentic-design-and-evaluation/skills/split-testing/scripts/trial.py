@@ -1904,17 +1904,27 @@ def _with_credentials(arm: dict, job_dir: Path, out: Path, turns):
     strings its copies hold as it is given them (see _place_copies), with the
     credentials `arm` holds as a run holds them: its "copy" entries copied outside the run and linked from its private
     home (see _start_copies, _place_copies), and, as the last turn ends and before anything reads the run, every
-    placement and the copies removed and the private home emptied of all but its evidence (see _end_copies). A run
+    placement and the copies removed and the private home emptied of all but its evidence (see _end_copies), each
+    copied sign-in the run changed named with where it was copied from (see _changed_copies). A run
     whose cleanup cannot be verified is "credential-kept", which nothing reads. Returns (status, confined)."""
     if not _holds_credentials(arm):
         return turns([], set())
     entry, marker = _start_copies(out, job_dir, arm)
-    status, confined = "credential-kept", False
+    home = job_dir / "harness" / "home"
+    status, confined, given = "credential-kept", False, {}
     try:
-        held = _place_copies(arm, job_dir / "harness" / "home", Path(entry["private"])) if entry["private"] else set()
+        held, given = _place_copies(arm, home, Path(entry["private"])) if entry["private"] else (set(), {})
         status, confined = turns([Path(entry["private"])] if entry["private"] else [], held)
     finally:
-        cleared = _end_copies(out, entry, marker)
+        changed = []
+        with contextlib.suppress(Exception):  # naming a changed copy never keeps any copy from being cleared
+            changed = _changed_copies(arm, home, Path(entry["private"]), given) if given else []
+        cleared = _end_copies(out, entry, marker, changed=[(home / rel).relative_to(out).as_posix() for rel in changed])
+    for rel in changed:
+        print(f"warning: {job_dir.relative_to(out)} changed the sign-in copied from {arm['copy'][rel]} ({rel} in its "
+              "home): a tool that refreshes a sign-in by rotating it leaves the original holding a used one, signed out; "
+              "if this one rotates, sign in again where it was copied from before the next run, or sign runs in with a "
+              "credential that does not change when it is refreshed", file=sys.stderr)
     return (status if cleared else "credential-kept"), confined
 
 
@@ -1956,15 +1966,16 @@ def _start_copies(out: Path, job_dir: Path, arm: dict, awaiting: Path | None = N
     return entry, marker
 
 
-def _place_copies(arm: dict, home: Path, private: Path) -> set[str]:
+def _place_copies(arm: dict, home: Path, private: Path) -> tuple[set[str], dict]:
     """Copy each of an arm's or a judge's "copy" entries (a sign-in, most often, from this machine) into `private`
     (see _start_copies), each file and directory owner-only (0600, 0700) before any byte is written to it, whatever the
     umask, and writable, so its executor can refresh a sign-in; and link its place in the run's private home to its
     copy. Their content is never digested, recorded, or kept: each is a credential. Returns the strings the copies
     hold (see _credential_strings), read from the copies themselves, so what the run's output is kept without is what
-    it was given, whatever its sources hold by then (see _secret_values)."""
+    it was given, whatever its sources hold by then (see _secret_values); and what each place held as it was given
+    (see _held_at), in memory only while the run lasts, to tell whether the run changed it (see _changed_copies)."""
     _check_off_copies(list(arm["copy"].values()), "a copy")
-    held = set()
+    held, given = set(), {}
     for i, (rel, src) in enumerate(arm["copy"].items()):
         dest = home / rel
         _mkdir(dest.parent, parents=True, exist_ok=True)
@@ -1974,7 +1985,106 @@ def _place_copies(arm: dict, home: Path, private: Path) -> set[str]:
         for f in sorted((private / str(i)).rglob("*")) if (private / str(i)).is_dir() else [private / str(i)]:
             if f.is_file() and not f.is_symlink():  # read from the copy itself, as the run is given it
                 held |= _credential_strings(f.read_text(errors="replace"))
-    return held
+        given[rel] = _held_at(home, rel, private / str(i))
+    return held, given
+
+
+def _held_root(home: Path, rel: str, own: Path) -> Path | None:
+    """Where a tool reading a copy's place in a run's private home finds its sign-in: the copy, through the runtime's
+    own link to it (`own`), or whatever a tool put in that place; None when nothing is there, or a link elsewhere, or
+    one on the way (see _reach), keeps it out of reach."""
+    st = _reach(home, rel)
+    if not st:
+        return None
+    if stat.S_ISLNK(st.st_mode):
+        return own if os.readlink(home / rel) == str(own) else None
+    return home / rel
+
+
+def _held_at(home: Path, rel: str, own: Path):
+    """What a run holds at a copy's place (see _held_root): a file's bytes, or for a directory {relative path: bytes,
+    or ("link", its text)} of every file and link in it, no link followed; None when it cannot all be read so (a FIFO
+    or device, say). Never recorded or digested."""
+    root = _held_root(home, rel, own)
+    if root is None:
+        return None
+    if not stat.S_ISDIR(os.lstat(root).st_mode):
+        return _read_bytes(root, follow=False)
+    found = {}
+    for dirpath, dirs, files in os.walk(root):  # a link to a directory is listed, never entered
+        for name in dirs + files:
+            path = Path(dirpath) / name
+            key = path.relative_to(root).as_posix()
+            if os.path.islink(path):
+                found[key] = ("link", os.readlink(path))
+            elif not path.is_dir():
+                found[key] = _read_bytes(path, follow=False)
+                if found[key] is None:
+                    return None
+    return found
+
+
+def _same_bytes(path: Path, data: bytes) -> bool:
+    """Whether `path` is a regular file holding exactly `data`, read no further than that: no link followed, and a
+    FIFO or device never waited on."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except OSError:
+        return False
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_size != len(data):
+            return False
+        with os.fdopen(fd, "rb", closefd=False) as f:
+            return f.read(len(data) + 1) == data
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def _still_held(home: Path, rel: str, own: Path, given) -> bool:
+    """Whether a copy's place holds what it held as it was given (see _held_at), read no further than that: a file of
+    another size, or anything in a directory that was not there, ends the comparison before it is read."""
+    root = _held_root(home, rel, own)
+    if root is None:
+        return False
+    if isinstance(given, bytes):
+        return _same_bytes(root, given)
+    if not stat.S_ISDIR(os.lstat(root).st_mode):
+        return False
+    seen = set()
+    for dirpath, dirs, files in os.walk(root):
+        for name in dirs + files:
+            path = Path(dirpath) / name
+            key = path.relative_to(root).as_posix()
+            if os.path.islink(path):
+                if given.get(key) != ("link", os.readlink(path)):
+                    return False
+            elif path.is_dir():
+                continue
+            elif not isinstance(given.get(key), bytes) or not _same_bytes(path, given[key]):
+                return False
+            seen.add(key)
+    return seen == set(given)
+
+
+def _changed_copies(arm: dict, home: Path, private: Path, given: dict) -> list[str]:
+    """The places in a run's private home whose copied sign-in the run changed, whatever the tool's format: written
+    through the link or replaced in its place, its last turn ends without what it held as it was given (see
+    _still_held). A tool that refreshes a sign-in by rotating it does so, and leaves the original it was copied from
+    holding a used one. Never fails: a place whose first state could not be read, or that cannot be compared, is not
+    named, and is cleared all the same."""
+    changed = []
+    for i, rel in enumerate(arm.get("copy") or {}):
+        if given.get(rel) is None:
+            continue
+        try:
+            if not _still_held(home, rel, private / str(i), given[rel]):
+                changed.append(rel)
+        except (OSError, ValueError, RecursionError, TrialError):
+            continue
+    return changed
 
 
 def _copy_private(src: Path, dest: Path):
@@ -2135,13 +2245,16 @@ def _settle(out: Path, entry: dict) -> tuple[list[str], list[str]]:
     return removed, left
 
 
-def _end_copies(out: Path, entry: dict, marker: Path, by: str = "its last turn", keep: bool = False) -> bool:
+def _end_copies(out: Path, entry: dict, marker: Path, by: str = "its last turn", keep: bool = False,
+                changed: list[str] = ()) -> bool:
     """Clear what a run holding credentials left (see _settle), recording the outcome in RUN_DIR/credentials.jsonl
-    (paths, never content); its journal entry goes once all of it is verified gone (unless `keep`: a host job that
-    still awaits its executor), and the result says whether it is. Until then nothing replaces or moves the run (see
+    (paths, never content), with the placements the run `changed` (see _changed_copies); its journal entry goes once
+    all of it is verified gone (unless `keep`: a host job that still awaits its executor), and the result says whether
+    it is. Until then nothing replaces or moves the run (see
     _held), and every sweep tries again."""
     removed, left = _settle(out, entry)
     _credential_log(out, {"removed": removed, "home": entry["home"], "by": by, **({"unremoved": left} if left else {}),
+                          **({"changed": list(changed)} if changed else {}),
                           **({"awaiting": entry["awaiting"]} if keep else {})})
     if not left and not keep:
         _remove(marker)
