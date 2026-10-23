@@ -230,28 +230,48 @@ export function repeatRange(data: TrialReport): { min: number; max: number } | n
 
 // ------------------------------------------------------------------ invalid reasons
 
-/** An invalid reason in plain words, with the remedy for that reason. The codes
- * are those trial.py records: a run status other than ok (timeout, setup-failed,
- * credential-kept, exit-N, ...), or judge-missing, judge-stale, judge-error and check-error. */
+/** An invalid reason in plain words, with the remedy for that reason. The codes are those trial.py records: a run
+ * status other than ok (timeout, exit-N, setup-failed, setup-exit-N, credential-kept, ...), or, for a run whose
+ * executor finished, check-error, check-missing, judge-missing, judge-unassessed, judge-error, judge-unclear,
+ * judge-stale, not-exposed and exposure-unknown. Each is worded from references/trials.md and launching.md. */
 export interface InvalidReason { code: string; text: string; remedy: string }
 export function invalidReason(code: string | null | undefined): InvalidReason {
   const c = String(code || "unknown");
+  // A run whose executor did not finish is run again (references/trials.md, Reading results).
   const retry = "Rerun them: `trial.py run PLAN --out RUN_DIR --retry-invalid`.";
+  // A run whose executor finished keeps its output and is scored again once its check or judge can decide it, never
+  // run again (references/trial-flow.md, Validity).
+  const resample = "Running them again would resample exactly these runs.";
   const known: Record<string, [string, string]> = {
-    "judge-missing": ["The case asks a judge question, but the plan names no judge, so no verdict could be given.", "Rerunning gives the same result. Name a judge: `trial.py recheck RUN_DIR --judge '<judge JSON>'`, or set `judge_required: false` in the scenario when its checks alone should decide."],
-    "judge-stale": ["The verdict came from another judge than this run directory's, or there is none.", "Judge them again: `trial.py recheck RUN_DIR --rejudge`."],
-    "judge-error": ["The judge was asked but gave no verdict.", "Ask the judge again: `trial.py recheck RUN_DIR --rejudge`."],
-    "check-error": ["The executor finished, but the case's checks failed to run.", "Fix the check, then score the runs again: `trial.py recheck RUN_DIR`."],
     "timeout": ["The executor ran past the case's time limit (`timeout_s`).", `Raise the scenario's \`timeout_s\` if the task needs longer. ${retry}`],
-    "setup-failed": ["The run's setup did not finish, so the executor never started.", retry],
-    "no-thread-for-followup": ["The executor gave no conversation to continue, so the follow-up turn could not be sent.", retry],
-    "skipped": ["The run was not attempted.", retry],
+    "setup-failed": ["The scenario's `setup.sh` failed or ran past 300 seconds (`setup_error` in the run's result says why), so the executor never started.", retry],
+    "setup-timeout": ["The launcher's setup turn, which prepares the executor before the agent starts, ran past the case's time limit, so the executor never started.", retry],
+    "setup-watch-unreadable": ["A configuration path the arm watches (`watch`) could not be read after setup, so the executor never started.", `The run's \`stderr.log\` names the paths. ${retry}`],
+    "session-changed": ["A follow-up turn reported another session than the first, so it did not continue the conversation.", `A launcher continues the same session on every later turn (launching.md, One run, turn by turn). ${retry}`],
+    "config-changed": ["A turn changed watched configuration that a later turn loads, so that turn ran under other configuration.", `Watch only configuration the executor loads and does not write itself during a turn, never its session records, locks or caches; the run's \`stderr.log\` names the paths. ${retry}`],
+    "model-changed": ["The run reported another model than the one the probe observed for its arm, or more than one, and the runtime holds an arm's runs to one model.", retry],
+    "no-record": ["The launcher left no record of the run, so nothing shows what the executor did.", `\`record_error\` in the run's \`result.json\` says where the record was looked for. ${retry}`],
+    "record-invalid": ["The run's record could not be used: it is malformed, or breaks the shape launching.md gives a record.", `\`record_error\` in the run's \`result.json\` says why; fix what writes the record (launching.md, The record). ${retry}`],
+    "unfinished": ["The executor's own record says it did not finish (`finished: false`).", retry],
     // references/trials.md, Keys: an unverified clearing keeps the run noted, and `run` exits 3 until it is cleaned by hand.
     "credential-kept": ["The credentials the run was given could not be verified removed, so no check, evidence extractor or judge read it.", `Remove by hand the paths \`RUN_DIR/credentials.jsonl\` lists as \`unremoved\`; until then \`trial.py run\` leaves the run as it is and exits 3, and judging or pairing it is refused too. Then ${retry.charAt(0).toLowerCase()}${retry.slice(1)}`],
+    "no-thread-for-followup": ["The executor gave no conversation to continue, so the follow-up turn could not be sent.", retry],
+    "skipped": ["The run was not attempted: the runtime stopped scheduling it and named the cause.", "Fix the cause `trial.py run` named, then run the same plan into the same `--out`."],
+    "check-error": ["The executor finished, but the case's checks failed to run.", `Fix the check, then score the runs again: \`trial.py recheck RUN_DIR\`. ${resample}`],
+    "check-missing": ["The executor finished, but a required check returned neither true nor false (such as \"unknown\"), so it could not decide the run.", `Fix the check so it can decide, then score the runs again: \`trial.py recheck RUN_DIR\`. ${resample}`],
+    "judge-missing": ["The case asks a judge question, but the plan names no judge, so no verdict could be given.", "Rerunning gives the same result. Name a judge: `trial.py recheck RUN_DIR --judge '<judge JSON>'`, or set `judge_required: false` in the scenario when its checks alone should decide."],
+    "judge-unassessed": ["The executor finished, but a judge cannot read its output (unreadable, outside the run, not UTF-8 text, or over 64 MiB), so no judge was shown it.", `Give the scenario's \`check.py\` a \`judge_context\` that returns evidence for it, then judge them again: \`trial.py recheck RUN_DIR --rejudge\`. ${resample}`],
+    "judge-error": ["The judge was asked but gave no verdict.", `Ask the judge again: \`trial.py recheck RUN_DIR --rejudge\`. ${resample}`],
+    "judge-unclear": ["The judge said the evidence cannot decide the run (an `unclear` verdict).", `Asking the same question of the same evidence again would only wait for a verdict it likes. If the judge lacked evidence or a question it could decide, give it that (a \`judge_context\` in \`check.py\`, a clearer \`pass_when\`), then judge them again: \`trial.py recheck RUN_DIR --rejudge\`; otherwise report them as invalid. ${resample}`],
+    "judge-stale": ["The verdict answers another question or evidence than the run's now, or came from another judge than the one its arm calls for, or there is none.", `Judge them again: \`trial.py recheck RUN_DIR --rejudge\`. ${resample}`],
+    "not-exposed": ["The scenario asks how well the arm's resources work once they reach the model (`requires_exposure`), and this run's record shows they did not reach the model, so it says nothing about that.", `${resample} Report how many runs each arm lost this way: a treatment that often goes unread is a finding of its own.`],
+    "exposure-unknown": ["The scenario asks how well the arm's resources work once they reach the model (`requires_exposure`), and this run's record cannot show whether they did (the executor ran a command, say, or no record holds evidence about them).", `${resample} Report how many runs each arm lost this way. A launcher that records the reads it can identify as \`read\` actions lets later runs show it.`],
   };
   if (known[c]) return { code: c, text: known[c][0], remedy: known[c][1] };
   const exit = /^exit-(-?\d+)$/.exec(c);
   if (exit) return { code: c, text: `The executor exited with code ${exit[1]} before finishing.`, remedy: retry };
+  const setupExit = /^setup-exit-(-?\d+)$/.exec(c);
+  if (setupExit) return { code: c, text: `The launcher's setup turn, which prepares the executor before the agent starts, exited with code ${setupExit[1]} (as one does to refuse a file already in its way), so the executor never started.`, remedy: `The run's \`stderr.log\` holds what it printed. ${retry}` };
   return { code: c, text: `The run did not finish with a valid result (recorded as \`${c}\`).`, remedy: retry };
 }
 

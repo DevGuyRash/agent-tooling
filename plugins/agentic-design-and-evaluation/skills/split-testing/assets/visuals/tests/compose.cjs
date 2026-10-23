@@ -374,6 +374,60 @@ test("a run whose credentials could not be verified removed says to remove them 
   H.ok(clean >= 0 && retry > clean, "the rerun comes only after the cleanup");
 });
 
+test("every status trial.py records is explained with its own remedy, and no finished run is told to run again", () => {
+  // From references/trials.md (Scenario, Keys, Host executor, Re-scoring stored runs, Reading results), launching.md (One
+  // run, The record, What the runtime holds a launcher to, Checks and exposure) and trial.py's statuses. A run whose
+  // executor did not finish is run again with --retry-invalid; a finished run is scored again once its check or judge
+  // can decide it, never run again (trial-flow.md, Validity): a new output would resample exactly those runs.
+  const RETRY = "trial.py run PLAN --out RUN_DIR --retry-invalid";
+  const unfinished = {
+    "timeout": [["time limit"], ["timeout_s", RETRY]],
+    "exit-3": [["exited with code 3"], [RETRY]],
+    "setup-exit-1": [["setup turn", "code 1", "never started"], [RETRY]],
+    "setup-timeout": [["setup turn", "time limit", "never started"], [RETRY]],
+    "setup-watch-unreadable": [["watch", "could not be read after setup", "never started"], ["stderr.log", RETRY]],
+    "setup-failed": [["setup.sh", "300 seconds", "setup_error", "never started"], [RETRY]],
+    "session-changed": [["follow-up", "another session"], ["continue", RETRY]],
+    "config-changed": [["watched configuration", "later turn"], ["never its session records, locks or caches", RETRY]],
+    "model-changed": [["another model", "one model"], [RETRY]],
+    "no-record": [["no record"], ["record_error", RETRY]],
+    "record-invalid": [["record", "could not be used"], ["record_error", "launching.md", RETRY]],
+    "unfinished": [["did not finish", "finished: false"], [RETRY]],
+    "credential-kept": [["could not be verified removed"], ["credentials.jsonl", "unremoved", "exits 3", RETRY]],
+  };
+  const finished = {
+    "check-error": [["checks failed to run"], ["trial.py recheck RUN_DIR"]],
+    "check-missing": [["required check", "neither true nor false"], ["trial.py recheck RUN_DIR"]],
+    "judge-missing": [["names no judge"], ["trial.py recheck RUN_DIR --judge"]],
+    "judge-unassessed": [["cannot read"], ["judge_context", "trial.py recheck RUN_DIR --rejudge"]],
+    "judge-error": [["gave no verdict"], ["trial.py recheck RUN_DIR --rejudge"]],
+    "judge-unclear": [["cannot decide"], ["trial.py recheck RUN_DIR --rejudge", "a verdict it likes"]],
+    "judge-stale": [["another judge", "another question or evidence"], ["trial.py recheck RUN_DIR --rejudge"]],
+    "not-exposed": [["requires_exposure", "did not reach the model"], ["resample", "how many runs each arm lost"]],
+    "exposure-unknown": [["requires_exposure", "cannot show whether"], ["resample", "how many runs each arm lost"]],
+  };
+  const codes = [...Object.keys(unfinished), ...Object.keys(finished)];
+  const data = F.gridTrial({ a: { c: "P".padEnd(codes.length + 1, "-") } }, run => {
+    const code = codes[run.repeat - 2];
+    return code ? { status: code in finished ? "ok" : code, invalid_reason: code } : {};
+  });
+  const html = V.renderReport(V.trialReport(data));
+  const plain = t => t.replace(/<[^>]+>/g, "").replace(/&#39;/g, "'").replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/\s+/g, " ");
+  const group = code => {
+    const at = html.indexOf(`<code class="av-inv-reason">${code}</code>`);
+    H.ok(at >= 0, `${code}: its own group in the invalid view`);
+    const rest = html.slice(at), gloss = rest.slice(rest.indexOf('class="av-inv-gloss"'), rest.indexOf('class="av-inv-remedy"'));
+    return { gloss: plain(gloss.slice(gloss.indexOf(">") + 1)), remedy: plain(rest.slice(rest.indexOf('class="av-inv-remedy"'), rest.indexOf('<div class="av-inv-arms">')).replace(/^[^>]*>/, "")) };
+  };
+  for (const [code, [what, how]] of Object.entries({ ...unfinished, ...finished })) {
+    const { gloss, remedy } = group(code);
+    H.ok(!gloss.includes("did not finish with a valid result (recorded as"), `${code}: its own explanation, not the generic one`);
+    for (const w of what) H.ok(gloss.includes(w), `${code}: the explanation says "${w}" (got: ${gloss})`);
+    for (const w of how) H.ok(remedy.includes(w), `${code}: the remedy says "${w}" (got: ${remedy})`);
+    if (code in finished) H.ok(!remedy.includes("--retry-invalid") && !/\bRerun them\b/.test(remedy), `${code}: a finished run is never told to run again (got: ${remedy})`);
+  }
+});
+
 test("cost shows no empty panel when only invalid runs recorded usage", () => {
   const data = F.gridTrial({ a: { c: "--" } }, () => ({ seconds: 0.1, usage: {} }));
   H.ok(!ids(V.trialReport(data)).includes("cost"), "a cost section without a valid run");
