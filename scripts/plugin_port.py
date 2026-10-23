@@ -1063,6 +1063,15 @@ def prepare_output(source: Path, output: Path, *, overwrite: bool) -> None:
         symlinks=True,
         ignore=copytree_generated_junk_ignore(source),
     )
+    # A copied absolute link still names the source, so a later write through it would change the source package.
+    # The source's links all resolve inside it (validate_symlink_tree), so each becomes the same link inside the output.
+    for link in [path for path in output.rglob("*") if path.is_symlink()]:
+        target = Path(os.readlink(link))
+        if target.is_absolute():
+            resolved = target.resolve()
+            if resolved == source or resolved.is_relative_to(source):
+                link.unlink()
+                link.symlink_to(os.path.relpath(output / resolved.relative_to(source), link.parent))
     # Conversion rewrites active target-host surfaces. Frozen evaluation inputs
     # and release artifacts may legitimately be read-only, but preserving that
     # mode in the staging copy makes normalization fail before conversion can
@@ -1684,14 +1693,10 @@ def convert_marketplace(source: Path, target: str, output: Path, *, mode: str, o
                 die(reason)
             report.add_unsupported("marketplace-source", plugin_name_for_error, reason)
             continue
-        child_host = explicit_host
-        try:
-            child_pkg = detect_plugin(plugin_source, explicit_host=child_host)
-        except PluginPortError:
-            if child_host is not None:
-                raise
-            child_host = source_host  # a child without a manifest of its own takes the catalog's host
-            child_pkg = detect_plugin(plugin_source, explicit_host=child_host)
+        # A child keeps the host its own manifests declare; one without a manifest of its own takes the catalog's host.
+        own_manifest = any((plugin_source / relative).is_file() for relative in (CLAUDE_MANIFEST, CODEX_MANIFEST, "plugin.json"))
+        child_host = explicit_host if explicit_host is not None or own_manifest else source_host
+        child_pkg = detect_plugin(plugin_source, explicit_host=child_host)
         plugin_name = target_manifest_name(child_pkg, target)
         if any(item.get("name") == plugin_name for item in target_entries):
             reason = f"duplicate target marketplace plugin name: {plugin_name}"

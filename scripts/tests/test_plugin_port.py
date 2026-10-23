@@ -278,6 +278,29 @@ class PluginPortTests(unittest.TestCase):
         plugin_port.convert_plugin(source, "codex", output, mode="strict", overwrite=False)
         self.assertEqual([], list((output / ".codex/agents").rglob("*.toml")) if (output / ".codex/agents").exists() else [])
 
+    def test_a_copied_absolute_link_never_reaches_back_into_the_source(self) -> None:
+        # Any conversion step that writes, normalization included, must stay inside the output.
+        source = self.root / "abs-linked"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / "definitions/reviewer.md", '---\nname: reviewer\ndescription: "Review.  "\n---\nReview.\n')
+        (source / "agents").symlink_to(source / "definitions")
+        before = (source / "definitions/reviewer.md").read_bytes()
+        output = self.root / "converted"
+        plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
+        self.assertEqual(before, (source / "definitions/reviewer.md").read_bytes())
+        self.assertFalse(Path(os.readlink(output / "agents")).is_absolute())
+        self.assertTrue((output / "agents").resolve().is_relative_to(output.resolve()))
+
+    def test_marketplace_child_without_a_manifest_takes_the_catalogs_host(self) -> None:
+        market = self.root / "codex-market-src"
+        child = market / "plugins/kit"
+        write(market / ".agents/plugins/marketplace.json", json.dumps({"name": "team", "plugins": [{"name": "kit", "source": {"source": "local", "path": "./plugins/kit"}, "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"}, "category": "Testing"}]}))
+        (child / "skills").mkdir(parents=True)
+        write(child / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Review."\n')
+        out = self.root / "codex-out"
+        plugin_port.convert_marketplace(market, "codex", out, mode="strict", overwrite=False)
+        self.assertEqual(["reviewer"], [tomllib.loads(path.read_text())["name"] for path in (out / "plugins/kit/.codex/agents").rglob("*.toml")])
+
     def test_a_directory_named_like_the_plugin_keeps_its_segment(self) -> None:
         source = self.root / "source"
         write(source / "agents/probe/filename.md", "---\nname: review\ndescription: Nested.\n---\nNested.\n")
