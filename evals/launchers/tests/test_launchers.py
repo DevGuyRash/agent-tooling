@@ -89,6 +89,19 @@ class CodexRecordTest(unittest.TestCase):
         self.assertIn("plugins = false", config)
 
 
+class CodexAccountTest(unittest.TestCase):
+    def test_a_signed_in_account_brings_none_of_its_apps_plugins_suggestions_or_memories(self):
+        # A ChatGPT login's account-scoped features, as Codex's own feature table names them (codex-rs/features/src/
+        # lib.rs at rust-v0.163.0): apps, the remote plugin catalog and its sharing flows, plugins, app tool
+        # suggestions, and memories; each is turned off in the run's private configuration, whatever login it holds.
+        import tomllib
+        features = tomllib.loads(codex.provider_config("model-a", "low", ""))["features"]
+        self.assertEqual({k: features.get(k) for k in ("apps", "plugins", "remote_plugin", "plugin_sharing", "tool_suggest",
+                                                       "memories")},
+                         {"apps": False, "plugins": False, "remote_plugin": False, "plugin_sharing": False,
+                          "tool_suggest": False, "memories": False})
+
+
 class CodexTimelineTest(unittest.TestCase):
     def test_injected_skills_unfinished_commands_and_subagents_keep_their_turn_and_place(self):
         turn1 = [{"type": "thread.started", "thread_id": "T1"},
