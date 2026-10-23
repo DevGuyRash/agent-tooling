@@ -335,9 +335,11 @@ class PluginPortTests(unittest.TestCase):
                 (source / "old-agent-copy").symlink_to(agent)
                 output = self.root / f"archived-{target}"
                 plugin_port.convert_plugin(source, target, output, mode="strict", overwrite=False)
-                self.assertEqual(text, (output / "old-agent-copy").read_text())
-                self.assertTrue((output / "old-agent-copy").resolve().is_relative_to((output / ".plugin-portability/original-agents").resolve()))
+                # A link to a superseded agent is superseded with it: archived beside it, still naming it.
+                self.assertFalse((output / "old-agent-copy").exists() or (output / "old-agent-copy").is_symlink())
+                self.assertEqual(text, (output / ".plugin-portability/original-agents/old-agent-copy").read_text())
                 plugin_port.validate_symlink_tree(output)
+                plugin_port.convert_plugin(output, target, self.root / f"again-{target}", mode="strict", overwrite=False)
 
     def test_a_link_to_an_archived_agent_follows_it_through_a_folder_alias(self) -> None:
         source = self.root / "archive-alias"
@@ -349,8 +351,9 @@ class PluginPortTests(unittest.TestCase):
         (source / "old-agent-copy").symlink_to(".codex/agents/old.toml")
         output = self.root / "archived-alias"
         plugin_port.convert_plugin(source, "codex", output, mode="strict", overwrite=False)
-        self.assertEqual(text, (output / "old-agent-copy").read_text())
+        self.assertEqual(text, (output / ".plugin-portability/original-agents/old-agent-copy").read_text())
         plugin_port.validate_symlink_tree(output)
+        plugin_port.convert_plugin(output, "codex", self.root / "archived-alias-again", mode="strict", overwrite=False)
 
     def test_a_manifest_agent_path_that_climbs_is_refused_and_nothing_is_overwritten(self) -> None:
         base = self.root / "climb"

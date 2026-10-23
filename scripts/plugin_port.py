@@ -1576,7 +1576,11 @@ def mark_preserved_host_specific(root: Path, target: str, report: Report) -> Non
 
 
 def archive_superseded_agents(out_root: Path, host: str, report: Report, kind: str, note: str) -> None:
-    """Move a host's superseded agent definitions out of discovery; a retained link to one follows it into the archive."""
+    """Move a host's superseded agent definitions out of discovery, each link to one with it.
+
+    A link to a superseded definition is superseded too: it is archived beside the definition and still names it, so
+    nothing outside the archive points into the converter's state and the archive stays out of discovery.
+    """
     moved: dict[Path, Path] = {}
     archive_root = (out_root / PORTABILITY_DIR / "original-agents").resolve()
     for old_path in _agent_files(out_root, host):
@@ -1590,10 +1594,15 @@ def archive_superseded_agents(out_root: Path, host: str, report: Report, kind: s
         report.add_preserved(kind, archive.relative_to(out_root).as_posix(), note)
     if moved:
         for link in [path for path in out_root.rglob("*") if path.is_symlink()]:
+            if link.is_relative_to(out_root / PORTABILITY_DIR):
+                continue
             target = Path(os.path.normpath(link.parent / os.readlink(link)))
             if target in moved:
+                archived_link = archive_root / link.relative_to(out_root)
+                archived_link.parent.mkdir(parents=True, exist_ok=True)
+                archived_link.symlink_to(os.path.relpath(moved[target], archived_link.parent))
                 link.unlink()
-                link.symlink_to(os.path.relpath(moved[target], link.parent))
+                report.add_preserved(kind, archived_link.relative_to(out_root).as_posix(), note)
 
 
 def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwrite: bool, explicit_host: str | None = None, model_map: dict[str, str] | None = None) -> Report:
