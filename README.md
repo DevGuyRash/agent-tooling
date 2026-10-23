@@ -64,7 +64,16 @@ Claude plugin agents are Markdown files with YAML frontmatter. Codex custom agen
 
 Codex does not load agents from a plugin manifest. Converted definitions live under `.codex/agents/` inside the package until an installer projects them into `$CODEX_HOME/agents/`, or `~/.codex/agents/` when `CODEX_HOME` is unset. Claude loads converted `agents/*.md` through its native plugin installation. A copied definition is not proof that either host invoked it.
 
-A source model other than `inherit` requires an explicit mapping such as `--agent-model SOURCE=TARGET`. The converter does not select a supposedly equivalent model or check account availability. Unmapped tool restrictions, permission modes, isolation, hooks, MCP declarations and unknown fields stop cross-host conversion rather than produce a more privileged agent. Advisory display and background-scheduling metadata produces warnings when the destination cannot enforce it.
+Three rules keep conversion independent of each host's growing list of settings:
+
+- **Same host:** a definition projected to its own host keeps every key unchanged, so the host decides what it honors, exactly as for a file installed by hand. Only the fields that host needs to register an agent are checked.
+- **Across hosts:** conversion translates only what both hosts' agents share, which is the name, description, instructions, model and effort. Any other key stops the conversion of that agent, because the other host cannot honor it, and dropping a restriction such as `tools` would produce a more privileged agent. Display and background-scheduling metadata (`color`, `background`, Codex `nickname_candidates`) is dropped with a warning instead.
+- **Per agent:** a dual package (both manifests) that ships an agent's native definition for the target uses it instead of converting that agent; its other agents are still converted. A native definition is how an author keeps an agent whose settings do not convert.
+- **Single host:** a package with one manifest defines exactly that host's agents, even when it defines none. Agent files it carries for the other host are leftovers: they are never installed, and conversion keeps them inactive under `.plugin-portability/original-agents/`. Conversion never writes an agent through a link that leaves the converted package.
+
+Names follow Claude's runtime registration: `agents/review/security.md` named `internal-label` in plugin `kit` is `kit:review:internal-label`, and the Codex projection registers the same name. A Codex name `team:review` becomes `agents/team/review.md` named `review`, which Claude registers as `kit:team:review`.
+
+A source model other than `inherit` requires an explicit mapping such as `--agent-model SOURCE=TARGET`. The converter does not select a supposedly equivalent model or check account availability.
 
 After native Codex plugin installation, project agents from its installed root:
 
@@ -74,7 +83,7 @@ python3 scripts/plugin_port.py install-agents /path/to/installed/plugin --owner 
 python3 scripts/plugin_port.py install-agents --owner example@marketplace --remove
 ```
 
-This supplemental command does not replace the plugin's marketplace or vendor its upstream source. It registers names as `plugin:agent`, matching Claude's plugin namespace. Rerun it after a native plugin update, and remove its owned copies when uninstalling that plugin. Run it again after a partial failure. It refuses local edits, duplicate registered names, symlinked agent paths and stale plans. File writes and its ownership receipt roll back together on a handled write failure. It never overwrites a user-managed agent, including with the marketplace installer's `--force` option.
+This supplemental command does not replace the plugin's marketplace or vendor its upstream source. It registers names as `plugin:agent`, matching Claude's plugin namespace. Rerun it after a native plugin update, and remove its owned copies when uninstalling that plugin. Run it again after a partial failure. It refuses local edits to its own copies, duplicate registered names, symlinks in place of its own files, and stale plans. A user's own agents, including ones a dotfile manager links in, are read only to detect name collisions and are never changed. File writes and its ownership receipt roll back together on a handled write failure. It never overwrites a user-managed agent, including with the marketplace installer's `--force` option.
 
 `scripts/install-all` performs this projection automatically for selected Codex plugins after verifying their installed contents. It preflights mappings and collisions before native plugin mutations. The existing Claude installation path already loads native agent files. `--agent-model` is also accepted by `install-all`. Only selected plugins are reconciled; unselected agents remain unchanged. Installation uses POSIX `fcntl` locking and does not support native Windows; package conversion is independent of that lock. The native plugin transaction and agent projection are separate. If projection or the final installer receipt fails after native installation, the error reports that partial outcome. Resolve any reported local-agent conflict and rerun the same command. Already verified native plugins remain installed and are not rolled back.
 

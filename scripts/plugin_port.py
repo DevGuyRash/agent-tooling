@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import errno
+import datetime
 import json
 import os
 import re
@@ -219,6 +220,7 @@ class AgentDocument:
     path: Path
     content: str
     warnings: tuple[str, ...] = ()
+    origin: str = ""
 
 
 def _agent_files(root: Path, host: str) -> list[Path]:
@@ -236,8 +238,8 @@ def _agent_files(root: Path, host: str) -> list[Path]:
             die(f"{manifest_path}: agents must be a path or list of paths")
         for item in declared:
             path = root / item
-            if not item.startswith("./") or not path.resolve().is_relative_to(root.resolve()):
-                die(f"{manifest_path}: agent path escapes the plugin root or lacks ./ prefix: {item}")
+            if not item.startswith("./") or ".." in Path(item).parts or not path.resolve().is_relative_to(root.resolve()):
+                die(f"{manifest_path}: agent path escapes the plugin root, climbs with .., or lacks ./ prefix: {item}")
             if not path.is_file() or path.suffix != ".md":
                 die(f"{manifest_path}: agent path must name an existing Markdown file: {item}")
             files.add(path)
@@ -266,56 +268,59 @@ def _agent_frontmatter(path: Path) -> tuple[dict[str, Any], str]:
     return load_yaml_text(match.group(1), path=path), text[match.end():]
 
 
+def _toml_string(value: str) -> str:
+    # JSON escapes every control character TOML forbids except DEL, which a TOML basic string must escape too.
+    return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
+
+
 def _toml_value(value: Any) -> str:
     if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
+        return _toml_string(value)
     if isinstance(value, bool):
         return "true" if value else "false"
+    if isinstance(value, (datetime.date, datetime.time)):  # datetime.datetime is a date; isoformat is TOML's own form
+        return value.isoformat()
     if isinstance(value, (int, float)):
         return repr(value)
     if isinstance(value, list):
         return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     if isinstance(value, dict):
-        return "{ " + ", ".join(f"{json.dumps(key)} = {_toml_value(item)}" for key, item in value.items()) + " }"
+        return "{ " + ", ".join(f"{_toml_string(key)} = {_toml_value(item)}" for key, item in value.items()) + " }"
     die(f"unsupported agent TOML value: {type(value).__name__}")
 
 
-def _validate_codex_agent(fields: dict[str, Any], path: Path) -> None:
-    allowed = {"name", "description", "developer_instructions", "model", "model_reasoning_effort", "model_reasoning_summary", "model_verbosity", "personality", "service_tier", "nickname_candidates", "features", "skills"}
-    unknown = set(fields) - allowed
-    if unknown:
-        die(f"{path}: cannot preserve unsupported Codex agent fields: {', '.join(sorted(unknown))}")
-    for key in ("model", "model_reasoning_effort", "service_tier"):
-        if key in fields:
-            _agent_string(fields[key], key, path)
-    for key, choices in {
-        "model_reasoning_summary": {"auto", "concise", "detailed", "none"},
-        "model_verbosity": {"low", "medium", "high"},
-        "personality": {"none", "friendly", "pragmatic"},
-    }.items():
-        if key in fields and (not isinstance(fields[key], str) or fields[key] not in choices):
-            die(f"{path}: invalid agent {key}; expected {', '.join(sorted(choices))}")
-    if "nickname_candidates" in fields:
-        candidates = fields["nickname_candidates"]
-        if not isinstance(candidates, list) or not candidates or any(not isinstance(item, str) or not item.strip() for item in candidates):
-            die(f"{path}: agent nickname_candidates must contain non-empty strings")
-    if "features" in fields:
-        features = fields["features"]
-        allowed_features = {"shell_tool", "apps", "plugins", "memories", "request_permissions_tool"}
-        if not isinstance(features, dict) or any(key not in allowed_features or value is not False for key, value in features.items()):
-            die(f"{path}: cannot preserve Codex agent features except supported capability disables")
-    if "skills" in fields:
-        skills = fields["skills"]
-        if not isinstance(skills, dict) or set(skills) - {"config", "bundled", "include_instructions"}:
-            die(f"{path}: cannot preserve unsupported Codex agent skills settings")
-        if "include_instructions" in skills and skills["include_instructions"] is not False:
-            die(f"{path}: cannot preserve skills.include_instructions except false")
-        if "bundled" in skills and skills["bundled"] != {"enabled": False}:
-            die(f"{path}: cannot preserve skills.bundled except enabled=false")
-        if "config" in skills:
-            entries = skills["config"]
-            if not isinstance(entries, list) or any(not isinstance(item, dict) or set(item) != {"path", "enabled"} or item["enabled"] is not False or not isinstance(item["path"], str) or not item["path"].strip() for item in entries):
-                die(f"{path}: cannot preserve skills.config except path-based disables")
+# The only concepts both hosts' agents share. Conversion translates these and nothing else: every other key belongs to
+# its own host, and a host that does not know a key cannot honor it. Same-host projection keeps every key unchanged.
+PORTABLE_AGENT_FIELDS = {"claude": {"name", "description", "model", "effort"},
+                         "codex": {"name", "description", "developer_instructions", "model", "model_reasoning_effort"}}
+# Keys whose loss changes no permission: conversion drops them with a warning instead of refusing the agent.
+ADVISORY_AGENT_FIELDS = {"claude": {"background", "is_background", "color"}, "codex": {"nickname_candidates"}}
+
+
+def _read_agent(root: Path, host: str, path: Path, *, relocating: bool) -> tuple[str, dict[str, Any], str, str]:
+    """Return (identity, fields, description, instructions); identity is the name the host registers, without a plugin prefix."""
+    if host == "claude":
+        metadata, body = _agent_frontmatter(path)
+        name = _agent_string(metadata.get("name", path.stem), "name", path).strip()
+        description = _agent_string(metadata.get("description", first_text_paragraph(body) or f"{name} agent."), "description", path)
+        _agent_string(body, "instructions", path)
+        # Claude registers agents/review/security.md named internal-label as plugin:review:internal-label.
+        agent_root = root / "agents"
+        subdirectories = path.parent.relative_to(agent_root).parts if path.is_relative_to(agent_root) else ()
+        return ":".join((*subdirectories, name)), dict(metadata), description, body
+    try:
+        fields = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (tomllib.TOMLDecodeError, UnicodeError) as exc:
+        die(f"{path}: invalid agent TOML: {exc}")
+    # Codex ignores a discovered role file without these, so a projection without them would register nothing.
+    name = _agent_string(fields.get("name"), "name", path).strip()
+    description = _agent_string(fields.get("description"), "description", path)
+    body = _agent_string(fields.get("developer_instructions"), "developer_instructions", path)
+    skills = fields.get("skills")
+    entries = skills.get("config") if isinstance(skills, dict) else None
+    if relocating and isinstance(entries, list) and any(isinstance(entry, dict) and isinstance(entry.get("path"), str) and not Path(entry["path"]).is_absolute() for entry in entries):
+        die(f"{path.relative_to(root)}: cannot preserve relative skills.config paths when projecting an agent; use absolute skill paths")
+    return name, fields, description, body
 
 
 def agent_documents(
@@ -326,61 +331,43 @@ def agent_documents(
     namespace: str | None = None,
     source_host: str | None = None,
 ) -> list[AgentDocument]:
-    """Render native definitions without registering them or modifying the source."""
+    """Render native definitions without registering them or modifying the source.
+
+    A package's own host is authoritative when it names one. A dual package uses each agent's native definition for the
+    target and converts only the agents that have none, so shipping a native file is how an author keeps an agent whose
+    settings cannot be converted.
+    """
     if target not in {"codex", "claude"} or source_host not in {None, "dual", "codex", "claude"}:
         die("agent host must be codex or claude")
     if namespace is not None and (target != "codex" or not re.fullmatch(r"[a-z0-9][a-z0-9._-]*", namespace)):
         die("agent namespace requires Codex and a lowercase plugin identifier")
     root = root.resolve()
-    origin = target if source_host in {None, "dual"} else source_host
-    paths = _agent_files(root, origin)
-    if not paths:
-        origin = "claude" if origin == "codex" else "codex"
-        paths = _agent_files(root, origin)
+    other = "claude" if target == "codex" else "codex"
+    if source_host in {target, other}:
+        # A single-host package's own definitions are its agents, even when there are none: the other host's files are stale.
+        plan = [(source_host, path) for path in _agent_files(root, source_host)]
+    else:
+        plan = [(target, path) for path in _agent_files(root, target)] + [(other, path) for path in _agent_files(root, other)]
     documents: list[AgentDocument] = []
+    native_identities: set[str] = set()
     names: set[str] = set()
     outputs: set[Path] = set()
-    for path in paths:
+    for origin, path in plan:
         source_path = path.relative_to(root)
+        identity, fields, description, body = _read_agent(root, origin, path, relocating=namespace is not None)
+        if origin == target:
+            native_identities.add(identity)
+        elif identity in native_identities:
+            continue  # this agent's native definition for the target supersedes converting it
         warnings: list[str] = []
-        if origin == "claude":
-            metadata, body = _agent_frontmatter(path)
-            name = _agent_string(metadata.get("name", path.stem), "name", path).strip()
-            description = _agent_string(metadata.get("description", first_text_paragraph(body) or f"{name} agent."), "description", path)
-            _agent_string(body, "instructions", path)
-            prompt_key = "developer_instructions"
-            fields = dict(metadata)
-            fields.update(name=name, description=description)
-            if target == "codex":
-                agent_root = root / "agents"
-                identity_path = path.relative_to(agent_root) if path.is_relative_to(agent_root) else Path(path.name)
-                invocation_name = ":".join(identity_path.with_suffix("").parts)
-                if name != invocation_name:
-                    warnings.append(f"{source_path}: Claude plugin invocation {invocation_name!r} supplies the Codex name instead of frontmatter label {name!r}")
-                name = invocation_name
-                fields["name"] = name
-        else:
-            try:
-                fields = tomllib.loads(path.read_text(encoding="utf-8"))
-            except (tomllib.TOMLDecodeError, UnicodeError) as exc:
-                die(f"{path}: invalid agent TOML: {exc}")
-            name = _agent_string(fields.get("name"), "name", path).strip()
-            description = _agent_string(fields.get("description"), "description", path)
-            body = _agent_string(fields.get("developer_instructions"), "developer_instructions", path)
-            _validate_codex_agent(fields, path)
-            if namespace is not None and any(not Path(entry["path"]).is_absolute() for entry in fields.get("skills", {}).get("config", [])):
-                die(f"{source_path}: cannot preserve relative skills.config paths when projecting an agent; use absolute skill paths")
-            prompt_key = "developer_instructions"
-        source_name = name
         if origin != target:
-            portable = {"name", "description", "model", "effort"} if origin == "claude" else {"name", "description", "developer_instructions", "model", "model_reasoning_effort"}
-            advisory = {"background", "is_background", "color"} if origin == "claude" else set()
-            unsupported = set(fields) - portable - advisory
+            unsupported = set(fields) - PORTABLE_AGENT_FIELDS[origin] - ADVISORY_AGENT_FIELDS[origin]
             if unsupported:
-                die(f"{source_path}: cannot preserve agent fields in {target}: {', '.join(sorted(unsupported))}; keep this agent on {origin}")
-            for key in sorted(set(fields) & advisory):
+                die(f"{source_path}: cannot preserve agent fields in {target}: {', '.join(sorted(unsupported))}; "
+                    f"keep this agent on {origin}, or add a native {target} definition for it, which is used instead of converting it")
+            for key in sorted(set(fields) & ADVISORY_AGENT_FIELDS[origin]):
                 warnings.append(f"{source_path}: {key} is advisory metadata and is not enforced in {target}")
-            converted: dict[str, Any] = {"name": name, "description": description}
+            converted: dict[str, Any] = {"name": identity, "description": description}
             model = fields.get("model")
             if model is not None:
                 _agent_string(model, "model", path)
@@ -400,38 +387,33 @@ def agent_documents(
                 warnings.append(f"{source_path}: effort {effort!r} retains its label; support depends on the target model")
             fields = converted
         if target == "codex":
-            if namespace and not name.startswith(namespace + ":"):
-                name = f"{namespace}:{name}"
-            fields.update(name=name, description=description)
-            fields[prompt_key] = body
-            content = "".join(f"{json.dumps(key)} = {_toml_value(value)}\n" for key, value in fields.items())
+            invocation = f"{namespace}:{identity}" if namespace else identity
+            fields = {**fields, "name": invocation, "description": description, "developer_instructions": body}
+            content = "".join(f"{_toml_string(key)} = {_toml_value(value)}\n" for key, value in fields.items())
             base = root / (".codex/agents" if origin == "codex" else "agents")
             relative = path.relative_to(base) if path.is_relative_to(base) else Path(path.name)
             destination = Path(".codex/agents") / relative.with_suffix(".toml")
         else:
-            if origin == "codex" and any(part in {"", ".", ".."} or any(character in part for character in ("/", "\\", "\x00")) for part in source_name.split(":")):
-                die(f"{source_path}: cannot preserve agent name {source_name!r} as a Claude filename")
-            if origin == "codex" and ":" in name:
-                identity_path = path.relative_to(root / ".codex/agents")
-                if name == ":".join(identity_path.with_suffix("").parts):
-                    name = path.stem
-            if ":" in name or name.startswith("-") or len(name) > 256:
+            parts = identity.split(":")
+            if any(part in {"", ".", ".."} or any(character in part for character in ("/", "\\", "\x00")) for part in parts):
+                die(f"{source_path}: cannot preserve agent name {identity!r} as a Claude filename")
+            name = parts[-1]
+            if name.startswith("-") or len(name) > 256:
                 die(f"{source_path}: cannot preserve agent name {name!r} in Claude; use a name without colons, at most 256 characters")
-            fields.pop("developer_instructions", None)
+            fields = {key: value for key, value in fields.items() if key != "developer_instructions"}
             fields.update(name=name, description=description)
             content = f"---\n{dump_yaml_data(fields)}\n---\n{body}"
-            base = root / ("agents" if origin == "claude" else ".codex/agents")
-            relative = path.relative_to(base) if path.is_relative_to(base) else Path(path.name)
-            if origin == "codex":
-                identity = source_name.split(":")
-                destination = Path("agents", *identity[:-1], identity[-1] + ".md")
+            if origin == "claude":
+                destination = source_path  # a native Claude agent stays where its plugin declares it
             else:
-                destination = Path("agents") / relative.with_suffix(".md")
-        if name in names or destination in outputs:
-            die(f"{root}: duplicate agent name or output path: {name}")
-        names.add(name)
-        outputs.add(destination)
-        documents.append(AgentDocument(name, source_name, source_path, destination, content, tuple(warnings)))
+                destination = Path("agents", *parts[:-1], name + ".md")
+            invocation = identity
+        real_destination = (root / destination).resolve()  # a folder alias can give two spellings one file
+        if invocation in names or real_destination in outputs:
+            die(f"{root}: duplicate agent name or output path: {invocation}")
+        names.add(invocation)
+        outputs.add(real_destination)
+        documents.append(AgentDocument(invocation, identity, source_path, destination, content, tuple(warnings), origin))
     return documents
 
 
@@ -449,9 +431,16 @@ def load_json(path: Path, *, exit_code: int = EXIT_USER_ERROR) -> dict[str, Any]
     return data
 
 
-def write_json(path: Path, data: dict[str, Any]) -> None:
+def write_generated_text(path: Path, text: str) -> None:
+    """Write a file the converter produces as a regular file, replacing a link a package left there, never following it."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, sort_keys=False) + "\n", encoding="utf-8")
+    if path.is_symlink():
+        path.unlink()
+    path.write_text(text, encoding="utf-8")
+
+
+def write_json(path: Path, data: dict[str, Any]) -> None:
+    write_generated_text(path, json.dumps(data, indent=2, sort_keys=False) + "\n")
 
 
 def slugify(value: str, *, fallback: str = "plugin") -> str:
@@ -561,7 +550,7 @@ def split_component_frontmatter(
 
 def write_frontmatter(path: Path, data: dict[str, Any], body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(f"---\n{dump_yaml_data(data)}\n---\n\n{body.lstrip()}", encoding="utf-8")
+    write_generated_text(path, f"---\n{dump_yaml_data(data)}\n---\n\n{body.lstrip()}")
 
 
 # A command already written against the dual-host fallback is correct on BOTH
@@ -1068,6 +1057,16 @@ def prepare_output(source: Path, output: Path, *, overwrite: bool) -> None:
     if output == source or source in output.parents:
         die("output path must not be the source path or inside the source tree")
     validate_symlink_tree(source)
+    # The copy leaves generated output out, so a link to it would dangle in a package the converter itself rejects.
+    # The portability folder is the converter's own state, so a link into it from elsewhere could steer what is
+    # discovered or written there.
+    state = source / PORTABILITY_DIR
+    for link in [path for path in source.rglob("*") if path.is_symlink() and not is_generated_junk(path, source)]:
+        resolved = link.resolve()
+        if resolved != source and is_generated_junk(resolved, source):
+            die(f"{link.relative_to(source)}: this link points at {resolved.relative_to(source)}, generated output the conversion leaves out; remove the link or point it at kept content")
+        if not link.is_relative_to(state) and (resolved == state.resolve() or resolved.is_relative_to(state.resolve())):
+            die(f"{link.relative_to(source)}: this link points into {PORTABILITY_DIR}, the converter's own state; remove the link")
     if output.exists():
         if not overwrite:
             die(f"{output}: output already exists; pass --overwrite to replace it")
@@ -1082,6 +1081,21 @@ def prepare_output(source: Path, output: Path, *, overwrite: bool) -> None:
         symlinks=True,
         ignore=copytree_generated_junk_ignore(source),
     )
+    # The portability folder is the converter's own state; a package link there would steer its writes elsewhere.
+    portability = output / PORTABILITY_DIR
+    if portability.is_symlink():
+        portability.unlink()
+    elif portability.is_dir():
+        for link in [path for path in portability.rglob("*") if path.is_symlink()]:
+            link.unlink()
+    # A copied link can still reach the source: absolute, spelled through ../source, or chained through another link.
+    # Every source link resolves inside the source (validate_symlink_tree), so each copied link is pointed, relatively,
+    # at the output path matching its source link's final destination, and no later write can leave the output.
+    for link in [path for path in output.rglob("*") if path.is_symlink()]:
+        resolved = (source / link.relative_to(output)).resolve()
+        if resolved == source or resolved.is_relative_to(source):
+            link.unlink()
+            link.symlink_to(os.path.relpath(output / resolved.relative_to(source), link.parent))
     # Conversion rewrites active target-host surfaces. Frozen evaluation inputs
     # and release artifacts may legitimately be read-only, but preserving that
     # mode in the staging copy makes normalization fail before conversion can
@@ -1136,7 +1150,7 @@ def merge_openai_yaml_policy(skill_dir: Path, *, allow_implicit: bool, name: str
     data.setdefault("policy", {})
     data["policy"]["allow_implicit_invocation"] = allow_implicit
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(dump_yaml_data(data) + "\n", encoding="utf-8")
+    write_generated_text(path, dump_yaml_data(data) + "\n")
 
 
 def normalize_skill_entrypoint_filenames(root: Path, report: Report) -> None:
@@ -1421,13 +1435,23 @@ def write_hooks(root: Path, data: dict[str, Any]) -> None:
         (root / "hooks.json").unlink()
 
 
+def move_within_output(source: Path, destination: Path) -> None:
+    """Move a file inside the output; a moved link is rebased so it still names what it named."""
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_symlink():
+        target = Path(os.path.normpath(source.parent / os.readlink(source)))
+        source.unlink()
+        destination.symlink_to(os.path.relpath(target, destination.parent))
+    else:
+        shutil.move(str(source), str(destination))
+
+
 def quarantine_root_claude_context(root: Path, report: Report) -> None:
     context = root / "CLAUDE.md"
     if not context.exists():
         return
     target = root / PORTABILITY_DIR / "preserved" / "CLAUDE.md"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(context), str(target))
+    move_within_output(context, target)
     report.add_mapping(
         "CLAUDE.md",
         target.relative_to(root).as_posix(),
@@ -1551,6 +1575,36 @@ def mark_preserved_host_specific(root: Path, target: str, report: Report) -> Non
             report.add_preserved("codex-manifest", ".codex-plugin/plugin.json", "Codex manifest preserved for round-trip metadata")
 
 
+def archive_superseded_agents(out_root: Path, host: str, report: Report, kind: str, note: str) -> None:
+    """Move a host's superseded agent definitions out of discovery, each link to one with it.
+
+    A link to a superseded definition is superseded too: it is archived beside the definition and still names it, so
+    nothing outside the archive points into the converter's state and the archive stays out of discovery.
+    """
+    moved: dict[Path, Path] = {}
+    archive_root = (out_root / PORTABILITY_DIR / "original-agents").resolve()
+    for old_path in _agent_files(out_root, host):
+        real_path = old_path.resolve()  # a retained link names the real path, which differs under a folder alias
+        # The archive copies the real path's place in the package, never a spelling that could climb out of it.
+        archive = archive_root / real_path.relative_to(out_root.resolve())
+        if not archive.resolve().is_relative_to(archive_root):
+            die(f"{old_path.relative_to(out_root)}: archiving this agent would write outside the converted package")
+        move_within_output(old_path, archive)
+        moved[old_path] = moved[real_path] = archive
+        report.add_preserved(kind, archive.relative_to(out_root).as_posix(), note)
+    if moved:
+        for link in [path for path in out_root.rglob("*") if path.is_symlink()]:
+            if link.is_relative_to(out_root / PORTABILITY_DIR):
+                continue
+            target = Path(os.path.normpath(link.parent / os.readlink(link)))
+            if target in moved:
+                archived_link = archive_root / link.relative_to(out_root)
+                archived_link.parent.mkdir(parents=True, exist_ok=True)
+                archived_link.symlink_to(os.path.relpath(moved[target], archived_link.parent))
+                link.unlink()
+                report.add_preserved(kind, archived_link.relative_to(out_root).as_posix(), note)
+
+
 def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwrite: bool, explicit_host: str | None = None, model_map: dict[str, str] | None = None) -> Report:
     pkg = detect_plugin(source, explicit_host=explicit_host)
     agents = agent_documents(pkg.root, target, model_map, source_host=pkg.host)
@@ -1566,6 +1620,8 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
     )
 
     if target == "codex":
+        if pkg.host == "claude":  # Claude definitions are authoritative, so copied Codex ones are superseded
+            archive_superseded_agents(out_root, "codex", report, "original-codex-agent", "Superseded agent source is inactive; the current Claude definition supplies the Codex agent")
         convert_commands_to_codex_skills(out_root, report, mode=mode)
         normalize_codex_skills(out_root, report, mode=mode)
         hooks = load_hooks_from_plugin(out_root, pkg.claude_manifest or pkg.codex_manifest)
@@ -1575,14 +1631,9 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
             write_json(out_root / ".mcp.json", normalize_mcp_config(load_json(out_root / ".mcp.json"), target="codex"))
         write_json(out_root / CODEX_MANIFEST, build_codex_manifest(pkg, out_root))
     elif target == "claude":
-        from_native_codex = bool(agents) and all(document.source_path.is_relative_to(".codex/agents") for document in agents)
+        from_native_codex = pkg.host == "codex"  # Codex definitions are authoritative, so copied Claude ones are superseded
         if from_native_codex:
-            for old_path in _agent_files(out_root, "claude"):
-                relative = old_path.relative_to(out_root)
-                archive = out_root / PORTABILITY_DIR / "original-agents" / relative
-                archive.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(old_path), str(archive))
-                report.add_preserved("original-claude-agent", archive.relative_to(out_root).as_posix(), "Superseded agent source is inactive; the current Codex definition supplies the Claude agent")
+            archive_superseded_agents(out_root, "claude", report, "original-claude-agent", "Superseded agent source is inactive; the current Codex definition supplies the Claude agent")
         quarantine_root_claude_context(out_root, report)
         normalize_claude_skills(out_root, report, mode=mode)
         normalize_claude_markdown_components(out_root, report, mode=mode)
@@ -1598,6 +1649,14 @@ def convert_plugin(source: Path, target: str, output: Path, *, mode: str, overwr
     else:
         die(f"unsupported target host: {target}")
 
+    written: set[Path] = set()
+    for document in agents:
+        destination = out_root / document.path
+        if destination.is_symlink() or not destination.resolve().is_relative_to(out_root):
+            die(f"{document.path}: writing this agent would follow a link outside the converted package; replace the link with the files it points to")
+        if destination.resolve() in written:
+            die(f"{document.path}: duplicate agent output path through a link; two agents would write one file")
+        written.add(destination.resolve())
     for document in agents:
         destination = out_root / document.path
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1692,7 +1751,10 @@ def convert_marketplace(source: Path, target: str, output: Path, *, mode: str, o
                 die(reason)
             report.add_unsupported("marketplace-source", plugin_name_for_error, reason)
             continue
-        child_pkg = detect_plugin(plugin_source, explicit_host=source_host)
+        # A child keeps the host its own manifests declare; one without a manifest of its own takes the catalog's host.
+        own_manifest = any((plugin_source / relative).is_file() for relative in (CLAUDE_MANIFEST, CODEX_MANIFEST, "plugin.json"))
+        child_host = explicit_host if explicit_host is not None or own_manifest else source_host
+        child_pkg = detect_plugin(plugin_source, explicit_host=child_host)
         plugin_name = target_manifest_name(child_pkg, target)
         if any(item.get("name") == plugin_name for item in target_entries):
             reason = f"duplicate target marketplace plugin name: {plugin_name}"
@@ -1707,7 +1769,7 @@ def convert_marketplace(source: Path, target: str, output: Path, *, mode: str, o
             out_plugin,
             mode=mode,
             overwrite=True,
-            explicit_host=source_host,
+            explicit_host=child_host,
             model_map=model_map,
         )
         report.mappings.append(

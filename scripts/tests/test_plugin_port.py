@@ -154,13 +154,296 @@ class PluginPortTests(unittest.TestCase):
         plugin_port.convert_plugin(source, "codex", output, mode="strict", overwrite=False)
         self.assertEqual("Codex instructions.", tomllib.loads((output / ".codex/agents/reviewer.toml").read_text())["developer_instructions"])
 
-    def test_native_codex_ignored_restrictions_are_rejected(self) -> None:
+    def test_codex_projection_keeps_every_key_and_codex_decides(self) -> None:
+        # Same-host projection is the file as its author wrote it: keys Codex adds later, or ignores in roles, stay.
         source = self.root / "source"
-        for setting in ('sandbox_mode="read-only"', 'unknownPolicy=true', '[features]\nshell_tool=true'):
-            with self.subTest(setting=setting):
-                write(source / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Review."\n' + setting + '\n')
-                with self.assertRaisesRegex(plugin_port.PluginPortError, "cannot preserve"):
-                    plugin_port.agent_documents(source, "codex")
+        settings = 'sandbox_mode="read-only"\nfuture_setting=7\n[features]\nshell_tool=false\n'
+        write(source / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Review."\n' + settings)
+        document, = plugin_port.agent_documents(source, "codex", namespace="kit")
+        definition = tomllib.loads(document.content)
+        self.assertEqual(("read-only", 7, {"shell_tool": False}), (definition["sandbox_mode"], definition["future_setting"], definition["features"]))
+        self.assertEqual("kit:reviewer", definition["name"])
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "cannot preserve.*future_setting.*native claude definition"):
+            plugin_port.agent_documents(source, "claude")
+        write(source / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\n')
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "developer_instructions"):
+            plugin_port.agent_documents(source, "codex", namespace="kit")
+
+    def test_native_definition_is_the_per_agent_escape_hatch(self) -> None:
+        source = self.root / "source"
+        write(source / "agents/plain.md", "---\nname: plain\ndescription: Plain.\n---\nPlain body.\n")
+        write(source / "agents/locked.md", "---\nname: locked\ndescription: Locked.\ntools: Read, Grep\n---\nLocked body.\n")
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "locked.md.*tools.*native codex definition"):
+            plugin_port.agent_documents(source, "codex", namespace="kit")
+        write(source / ".codex/agents/locked.toml", 'name="locked"\ndescription="Locked."\ndeveloper_instructions="Native locked body."\n[features]\nshell_tool=false\n')
+        documents = {document.name: tomllib.loads(document.content) for document in plugin_port.agent_documents(source, "codex", namespace="kit")}
+        self.assertEqual({"kit:plain", "kit:locked"}, set(documents))
+        self.assertEqual("Native locked body.", documents["kit:locked"]["developer_instructions"])
+        self.assertEqual("Plain body.\n", documents["kit:plain"]["developer_instructions"])
+
+    def test_codex_display_names_drop_with_a_warning(self) -> None:
+        source = self.root / "source"
+        write(source / ".codex/agents/scout.toml", 'name="scout"\ndescription="Scout."\nnickname_candidates=["Ada"]\ndeveloper_instructions="Look."\n')
+        document, = plugin_port.agent_documents(source, "claude")
+        self.assertNotIn("nickname_candidates", document.content)
+        self.assertTrue(any("nickname_candidates" in warning for warning in document.warnings))
+
+    def test_round_trips_never_leave_two_definitions_of_one_agent(self) -> None:
+        for name, start in (("codex", {".codex/agents/team.toml": 'name="team:review"\ndescription="Review."\ndeveloper_instructions="Review."\n'}),
+                            ("claude", {"agents/filename.md": "---\nname: frontname\ndescription: Review.\n---\nReview.\n"})):
+            with self.subTest(start=name):
+                source = self.root / f"start-{name}"
+                write(source / f".{name}-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+                for relative, text in start.items():
+                    write(source / relative, text)
+                hosts = ["claude", "codex", "claude", "codex"] if name == "codex" else ["codex", "claude", "codex"]
+                previous, previous_host = source, name
+                for step, host in enumerate(hosts):
+                    output = self.root / f"{name}-{step}-{host}"
+                    plugin_port.convert_plugin(previous, host, output, mode="strict", overwrite=False, explicit_host=previous_host)
+                    previous, previous_host = output, host
+                expected = "kit:team:review" if name == "codex" else "kit:frontname"
+                self.assertEqual([expected], [document.name for document in plugin_port.agent_documents(previous, "codex", namespace="kit")])
+
+    def test_installer_honours_the_package_host_over_a_stale_native_copy(self) -> None:
+        # A Claude-only package whose old Codex copy is unrestricted must not install that copy over its restricted agent.
+        from scripts import agent_install
+        source = self.root / "claude-only"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / "agents/reviewer.md", "---\nname: reviewer\ndescription: Review.\ntools: Read\n---\nRead only.\n")
+        write(source / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Old."\ndeveloper_instructions="Do anything."\n')
+        home = self.root / "codex-home"
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            status = agent_install.main([str(source), "--owner", "kit@market", "--codex-home", str(home), "--dry-run"])
+        self.assertEqual(1, status)
+        self.assertIn("cannot preserve agent fields in codex: tools", stderr.getvalue())
+
+    def test_dual_package_keeps_a_custom_path_agent_where_it_is(self) -> None:
+        source = self.root / "dual"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0","agents":["./custom/reviewer.md"]}')
+        write(source / ".codex-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / "custom/reviewer.md", "---\nname: reviewer\ndescription: Review.\n---\nReview.\n")
+        write(source / ".codex/agents/scout.toml", 'name="scout"\ndescription="Scout."\ndeveloper_instructions="Look."\n')
+        output = self.root / "converted"
+        plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
+        self.assertEqual(["reviewer", "scout"], sorted(document.name for document in plugin_port.agent_documents(output, "claude", source_host="claude")))
+        self.assertFalse((output / "agents/reviewer.md").exists())
+
+    def test_codex_projection_keeps_dates_and_times(self) -> None:
+        source = self.root / "source"
+        write(source / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Review."\npublished=2026-10-23\nat=07:30:00\nstamp=2026-10-23T07:30:00Z\n')
+        document, = plugin_port.agent_documents(source, "codex", namespace="kit")
+        original = tomllib.loads((source / ".codex/agents/reviewer.toml").read_text())
+        projected = tomllib.loads(document.content)
+        self.assertEqual([original[key] for key in ("published", "at", "stamp")], [projected[key] for key in ("published", "at", "stamp")])
+
+    def test_conversion_never_writes_through_a_link_into_the_source(self) -> None:
+        source = self.root / "linked"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0","agents":["./custom/reviewer.md"]}')
+        # Quoted, extra-spaced YAML that a re-render would normalise, so any write through the link changes these bytes.
+        write(source / "definitions/reviewer.md", '---\nname:    "reviewer"\ndescription:   "Review."\n---\nReview.\n')
+        (source / "custom").symlink_to(source / "definitions")
+        before = (source / "definitions/reviewer.md").read_bytes()
+        try:
+            plugin_port.convert_plugin(source, "claude", self.root / "converted", mode="strict", overwrite=False)
+        except plugin_port.PluginPortError as exc:
+            self.assertIn("outside", str(exc))
+        self.assertEqual(before, (source / "definitions/reviewer.md").read_bytes())
+
+    def test_marketplace_conversion_keeps_a_dual_childs_native_restriction(self) -> None:
+        market = self.root / "market"
+        plugin = market / "plugins/kit"
+        write(market / ".claude-plugin/marketplace.json", json.dumps({"name": "team", "owner": {"name": "Team"}, "plugins": [{"name": "kit", "source": "./plugins/kit"}]}))
+        write(plugin / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(plugin / ".codex-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(plugin / "agents/reviewer.md", "---\nname: reviewer\ndescription: Review.\n---\nReview.\n")
+        write(plugin / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Review."\n[features]\nshell_tool=false\n')
+        out = self.root / "codex-market"
+        plugin_port.convert_marketplace(market, "codex", out, mode="strict", overwrite=False)
+        (projected,) = (out / "plugins/kit/.codex/agents").rglob("*.toml")
+        self.assertEqual({"shell_tool": False}, tomllib.loads(projected.read_text())["features"])
+
+    def test_an_authoritative_host_without_agents_installs_none(self) -> None:
+        from scripts import agent_install
+        source = self.root / "claude-only"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / ".codex/agents/old.toml", 'name="retired"\ndescription="Old."\ndeveloper_instructions="Old."\n')
+        home = self.root / "codex-home"
+        stdout = io.StringIO()
+        with contextlib.redirect_stdout(stdout):
+            self.assertEqual(0, agent_install.main([str(source), "--owner", "kit@market", "--codex-home", str(home), "--dry-run"]))
+        self.assertEqual(0, json.loads(stdout.getvalue())["agent_file_changes"])
+        output = self.root / "converted"
+        plugin_port.convert_plugin(source, "codex", output, mode="strict", overwrite=False)
+        self.assertEqual([], list((output / ".codex/agents").rglob("*.toml")) if (output / ".codex/agents").exists() else [])
+
+    def test_a_copied_absolute_link_never_reaches_back_into_the_source(self) -> None:
+        # Any conversion step that writes, normalization included, must stay inside the output.
+        source = self.root / "abs-linked"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / "definitions/reviewer.md", '---\nname: reviewer\ndescription: "Review.  "\n---\nReview.\n')
+        (source / "agents").symlink_to(source / "definitions")
+        before = (source / "definitions/reviewer.md").read_bytes()
+        output = self.root / "converted"
+        plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
+        self.assertEqual(before, (source / "definitions/reviewer.md").read_bytes())
+        self.assertFalse(Path(os.readlink(output / "agents")).is_absolute())
+        self.assertTrue((output / "agents").resolve().is_relative_to(output.resolve()))
+
+    def test_relative_and_chained_links_never_reach_back_into_the_source(self) -> None:
+        for shape in ("relative-escape", "chain"):
+            with self.subTest(shape=shape):
+                base = self.root / shape
+                source = base / "source"
+                write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+                write(source / "definitions/reviewer.md", '---\nname: reviewer\ndescription: "Review.  "\n---\nReview.\n')
+                if shape == "relative-escape":
+                    (source / "agents").symlink_to("../source/definitions")
+                else:
+                    (source / "alias").symlink_to(source / "definitions")
+                    (source / "agents").symlink_to("../source/alias")
+                before = (source / "definitions/reviewer.md").read_bytes()
+                output = base / "output"
+                plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
+                self.assertEqual(before, (source / "definitions/reviewer.md").read_bytes())
+                self.assertTrue((output / "agents").resolve().is_relative_to(output.resolve()))
+
+    def test_a_link_to_generated_output_is_refused_before_anything_is_written(self) -> None:
+        for name, target in (("file", "scripts/worker.pyc"), ("directory", "scripts/__pycache__")):
+            with self.subTest(target=name):
+                source = self.root / f"junk-{name}"
+                write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+                if name == "file":
+                    write(source / target, "compiled")
+                else:
+                    write(source / target / "worker.cpython.pyc", "compiled")
+                (source / "scripts/link").symlink_to(source / target)
+                output = self.root / f"out-{name}"
+                with self.assertRaisesRegex(plugin_port.PluginPortError, "scripts/link.*generated"):
+                    plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
+                self.assertFalse(output.exists())
+
+    def test_a_link_to_an_archived_agent_follows_it(self) -> None:
+        cases = {"codex": ('.claude-plugin/plugin.json', '.codex/agents/old.toml', 'name="retired"\ndescription="Old."\ndeveloper_instructions="Old."\n'),
+                 "claude": ('.codex-plugin/plugin.json', 'agents/old.md', '---\nname: retired\ndescription: Old.\n---\nOld.\n')}
+        for target, (manifest, agent, text) in cases.items():
+            with self.subTest(target=target):
+                source = self.root / f"archive-link-{target}"
+                write(source / manifest, '{"name":"kit","version":"1.0.0"}')
+                write(source / agent, text)
+                (source / "old-agent-copy").symlink_to(agent)
+                output = self.root / f"archived-{target}"
+                plugin_port.convert_plugin(source, target, output, mode="strict", overwrite=False)
+                # A link to a superseded agent is superseded with it: archived beside it, still naming it.
+                self.assertFalse((output / "old-agent-copy").exists() or (output / "old-agent-copy").is_symlink())
+                self.assertEqual(text, (output / ".plugin-portability/original-agents/old-agent-copy").read_text())
+                plugin_port.validate_symlink_tree(output)
+                plugin_port.convert_plugin(output, target, self.root / f"again-{target}", mode="strict", overwrite=False)
+
+    def test_a_link_to_an_archived_agent_follows_it_through_a_folder_alias(self) -> None:
+        source = self.root / "archive-alias"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        text = 'name="retired"\ndescription="Old."\ndeveloper_instructions="Old."\n'
+        write(source / "definitions/old.toml", text)
+        (source / ".codex").mkdir()
+        (source / ".codex/agents").symlink_to("../definitions")
+        (source / "old-agent-copy").symlink_to(".codex/agents/old.toml")
+        output = self.root / "archived-alias"
+        plugin_port.convert_plugin(source, "codex", output, mode="strict", overwrite=False)
+        self.assertEqual(text, (output / ".plugin-portability/original-agents/old-agent-copy").read_text())
+        plugin_port.validate_symlink_tree(output)
+        plugin_port.convert_plugin(output, "codex", self.root / "archived-alias-again", mode="strict", overwrite=False)
+
+    def test_a_manifest_agent_path_that_climbs_is_refused_and_nothing_is_overwritten(self) -> None:
+        base = self.root / "climb"
+        source = base / "source"
+        write(source / ".codex-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / ".claude-plugin/plugin.json", json.dumps({"name": "kit", "version": "1.0.0", "agents": ["./alias/../../../../source/victim.md"]}))
+        (source / "a/b/c/d").mkdir(parents=True)
+        (source / "alias").symlink_to("a/b/c/d")
+        write(source / "source/victim.md", "---\nname: victim\ndescription: Victim.\n---\nOriginal.\n")
+        before = (source / "source/victim.md").read_bytes()
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "agent path"):
+            plugin_port.convert_plugin(source, "claude", base / "output", mode="strict", overwrite=False, explicit_host="codex")
+        self.assertEqual(before, (source / "source/victim.md").read_bytes())
+
+    def test_two_render_paths_to_one_file_are_refused(self) -> None:
+        source = self.root / "aliased-render"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / ".codex-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        locked = "---\nname: review\ndescription: Locked.\ntools: Read\n---\nRead only.\n"
+        write(source / "agents/locked/review.md", locked)
+        (source / "agents/alias").symlink_to("locked")
+        write(source / ".codex/agents/review.toml", 'name="alias:review"\ndescription="Open."\ndeveloper_instructions="Do anything."\n')
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "duplicate agent"):
+            plugin_port.agent_documents(source, "claude")
+        output = self.root / "aliased-out"
+        with self.assertRaises(plugin_port.PluginPortError):
+            plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
+        self.assertEqual(locked, (source / "agents/locked/review.md").read_text())
+
+    def test_converter_state_is_never_written_through_a_package_link(self) -> None:
+        for shape in ("report-link", "archive-folder-link"):
+            with self.subTest(shape=shape):
+                # The Codex case needs a convertible agent; the link, not the restriction, is what it tests.
+                locked = "---\nname: review\ndescription: Locked.\n" + ("tools: Read\n" if shape == "report-link" else "") + "---\nRead only.\n"
+                source = self.root / f"state-{shape}"
+                write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+                write(source / "agents/locked/review.md", locked)
+                if shape == "report-link":
+                    (source / ".plugin-portability").mkdir()
+                    (source / ".plugin-portability/report.json").symlink_to("../agents/locked/review.md")
+                    target, host = "claude", None
+                else:
+                    write(source / ".codex/agents/old.toml", 'name="retired"\ndescription="Old."\ndeveloper_instructions="Old."\n')
+                    (source / ".plugin-portability").mkdir()
+                    (source / ".plugin-portability/original-agents").symlink_to("../agents/locked")
+                    target, host = "codex", None
+                output = self.root / f"state-out-{shape}"
+                plugin_port.convert_plugin(source, target, output, mode="strict", overwrite=False, explicit_host=host)
+                self.assertEqual(locked, (output / "agents/locked/review.md").read_text())
+                self.assertEqual(["review.md"], sorted(path.name for path in (output / "agents/locked").iterdir()))
+                self.assertFalse((output / ".plugin-portability").is_symlink())
+                plugin_port.validate_symlink_tree(output)
+
+    def test_no_package_link_may_reach_into_the_converters_state(self) -> None:
+        source = self.root / "into-state"
+        write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / ".plugin-portability/old.toml", 'name="retired"\ndescription="Old."\ndeveloper_instructions="Old."\n')
+        (source / ".codex").mkdir()
+        (source / ".codex/agents").symlink_to("../.plugin-portability")
+        output = self.root / "into-state-out"
+        with self.assertRaisesRegex(plugin_port.PluginPortError, "\\.codex/agents.*plugin-portability"):
+            plugin_port.convert_plugin(source, "codex", output, mode="strict", overwrite=False)
+        self.assertFalse(output.exists())
+
+    def test_a_moved_root_context_link_keeps_its_referent(self) -> None:
+        source = self.root / "context-link"
+        write(source / ".codex-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+        write(source / "docs/context.md", "Context.\n")
+        (source / "CLAUDE.md").symlink_to("docs/context.md")
+        output = self.root / "context-out"
+        plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
+        self.assertEqual("Context.\n", (output / ".plugin-portability/preserved/CLAUDE.md").read_text())
+        plugin_port.validate_symlink_tree(output)
+
+    def test_marketplace_child_without_a_manifest_takes_the_catalogs_host(self) -> None:
+        market = self.root / "codex-market-src"
+        child = market / "plugins/kit"
+        write(market / ".agents/plugins/marketplace.json", json.dumps({"name": "team", "plugins": [{"name": "kit", "source": {"source": "local", "path": "./plugins/kit"}, "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"}, "category": "Testing"}]}))
+        (child / "skills").mkdir(parents=True)
+        write(child / ".codex/agents/reviewer.toml", 'name="reviewer"\ndescription="Review."\ndeveloper_instructions="Review."\n')
+        out = self.root / "codex-out"
+        plugin_port.convert_marketplace(market, "codex", out, mode="strict", overwrite=False)
+        self.assertEqual(["reviewer"], [tomllib.loads(path.read_text())["name"] for path in (out / "plugins/kit/.codex/agents").rglob("*.toml")])
+
+    def test_a_directory_named_like_the_plugin_keeps_its_segment(self) -> None:
+        source = self.root / "source"
+        write(source / "agents/probe/filename.md", "---\nname: review\ndescription: Nested.\n---\nNested.\n")
+        write(source / "agents/review.md", "---\nname: review\ndescription: Root.\n---\nRoot.\n")
+        names = sorted(document.name for document in plugin_port.agent_documents(source, "codex", namespace="probe"))
+        self.assertEqual(["probe:probe:review", "probe:review"], names)
 
     def test_codex_projection_rejects_relative_skill_disable_paths(self) -> None:
         source = self.root / "source"
@@ -205,14 +488,38 @@ class PluginPortTests(unittest.TestCase):
         source = self.root / "source"
         write(source / ".claude-plugin/plugin.json", '{"name":"inspectors"}')
         write(source / "agents/review/security.md", "---\nname: internal-label\ndescription: Review security.\n---\nReview.\n")
+        # Claude 2.1.299 registers this agent as inspectors:review:internal-label (subdirectories, then the
+        # frontmatter name) and reports "Agent type 'inspectors:review:security' not found"; Codex must match.
         document, = plugin_port.agent_documents(source, "codex", namespace="inspectors")
-        self.assertEqual("inspectors:review:security", document.name)
+        self.assertEqual("inspectors:review:internal-label", document.name)
         codex = self.root / "codex"
         plugin_port.convert_plugin(source, "codex", codex, mode="strict", overwrite=False)
         claude = self.root / "claude"
         plugin_port.convert_plugin(codex, "claude", claude, mode="strict", overwrite=False, explicit_host="codex")
-        self.assertTrue((claude / "agents/review/security.md").is_file())
-        self.assertNotIn(":", plugin_port.split_frontmatter(claude / "agents/review/security.md")[0]["name"])
+        (claude_agent,) = (claude / "agents").rglob("*.md")
+        self.assertEqual(Path("review"), claude_agent.parent.relative_to(claude / "agents"))
+        self.assertEqual("internal-label", plugin_port.split_frontmatter(claude_agent)[0]["name"])
+
+    def test_claude_frontmatter_name_is_the_codex_name(self) -> None:
+        source = self.root / "source"
+        write(source / "agents/filename.md", "---\nname: frontname\ndescription: Review.\n---\nReview.\n")
+        document, = plugin_port.agent_documents(source, "codex", namespace="probe")
+        self.assertEqual("probe:frontname", tomllib.loads(document.content)["name"])
+        self.assertFalse(any("frontmatter label" in warning for warning in document.warnings))
+
+    def test_codex_colon_name_becomes_claude_subdirectory_and_label(self) -> None:
+        source = self.root / "source"
+        write(source / ".codex/agents/team.toml", 'name="team:review"\ndescription="Review."\ndeveloper_instructions="Review."\n')
+        document, = plugin_port.agent_documents(source, "claude")
+        self.assertEqual(Path("agents/team/review.md"), document.path)
+        self.assertIn("name: review\n", document.content)
+
+    def test_agent_text_with_toml_forbidden_characters_stays_valid(self) -> None:
+        source = self.root / "source"
+        body = "Delete\x7fmarker, bell\x07, tab\t, nul-free.\n"
+        write(source / "agents/reviewer.md", "---\nname: reviewer\ndescription: Review.\n---\n" + body)
+        document, = plugin_port.agent_documents(source, "codex")
+        self.assertEqual(body, tomllib.loads(document.content)["developer_instructions"])
 
     def test_codex_to_claude_filename_uses_declared_agent_identity(self) -> None:
         source = self.root / "source"
@@ -486,9 +793,10 @@ class PluginPortTests(unittest.TestCase):
         converted_command = (out / "commands" / "implement.md").read_text(encoding="utf-8")
         self.assertTrue(converted_command.startswith("---\n"))
         self.assertIn("description:", converted_command)
-        converted_agent = (out / "agents" / "reviewer.md").read_text(encoding="utf-8")
-        self.assertTrue(converted_agent.startswith("---\n"))
-        self.assertIn("description:", converted_agent)
+        # A Codex-only package's agents are its Codex definitions (here none), so its root agents/*.md is not an agent:
+        # it is kept inactive under the portability folder, as it already was whenever the package defined Codex agents.
+        self.assertFalse((out / "agents" / "reviewer.md").exists())
+        self.assertIn("You are a reviewer agent.", (out / ".plugin-portability/original-agents/agents/reviewer.md").read_text(encoding="utf-8"))
         skill_text = (out / "skills" / "authoring-goals" / "SKILL.md").read_text(encoding="utf-8")
         self.assertIn("disable-model-invocation: true", skill_text)
         self.assertTrue((out / ".app.json").exists())
