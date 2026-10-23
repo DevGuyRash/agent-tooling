@@ -6046,13 +6046,15 @@ def _probe_values() -> dict:
 
 def _placed_skills(arm: dict) -> set[str]:
     """The skills an arm places in a run's private home, named as Run.exposed names them (see _Material): a resource
-    that is a skill directory (one holding SKILL.md) by its own place's name, a resource holding skill directories by
-    theirs, and each stub skill."""
+    that is a skill directory (one holding SKILL.md) by its own place's name, a SKILL.md placed alone by the name of
+    the directory it is placed in, a resource holding skill directories by theirs, and each stub skill."""
     names = {Path(d).name for d, _ in _stub_files(arm)}
     for rel, src in (arm.get("resources") or {}).items():
         src = Path(src)
         if (src / "SKILL.md").is_file():
             names.add(Path(rel).name)
+        elif Path(rel).name == "SKILL.md" and src.is_file():
+            names.add(Path(rel).parent.name)
         elif src.is_dir():
             with contextlib.suppress(OSError):
                 names |= {d.name for d in src.iterdir() if d.is_dir() and (d / "SKILL.md").is_file()}
