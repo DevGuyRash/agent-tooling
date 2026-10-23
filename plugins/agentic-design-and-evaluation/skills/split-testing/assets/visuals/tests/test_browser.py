@@ -421,13 +421,14 @@ return { page: Math.round(document.querySelector(".av-sections").getBoundingClie
         self.assertGreaterEqual(wide["story"], 88, "the story's text stays in a narrow column on a wide screen")
         self.assertLessEqual(wide["story"], 92.6, "the story's lines grow past a readable length")
         self.assertGreaterEqual(wide["summary"], 76, "the summary stays in a narrow column on a wide screen")
+        self.assertLessEqual(wide["summary"], 92.6, "the summary's lines grow past a readable length")
         self.assertGreaterEqual(wide["storyShown"], 85, "the story's text is drawn narrow on a wide screen whatever its cap says")
         # Each view's own explanation ("This view", "How to read it", "Here") keeps the same readable limit as the rest of
         # the prose, however wide the view it explains.
         self.assertTrue(wide["readCaps"], "no view explanation found to measure")
         self.assertLessEqual(max(wide["readCaps"]), 92.6, "a view's explanation has no readable limit on a wide screen")
         self.assertLessEqual(max(wide["readShown"]), 92.6, "a view's explanation is drawn past a readable length")
-        # The sizes respond to the screen rather than to one breakpoint: two nearby wide screens get different widths.
+        # The sizes respond to the screen: two nearby wide screens get different widths.
         nearer, farther = (self.drive(page, width=w, script=script)["result"] for w in (1650, 1750))
         self.assertLess(nearer["page"], farther["page"], "the page width does not respond to the screen between 1650 and 1750 px")
         self.assertLess(nearer["summary"], farther["summary"], "the measure does not respond to the screen between 1650 and 1750 px")
