@@ -887,6 +887,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             with lock:
                 receipt = read_receipt(receipt_file)
                 plans: list[HostPlan] = []
+                codex_state = None
                 for host, plugins in selected.items():
                     if not plugins:
                         continue
@@ -895,8 +896,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     if command is None:
                         raise InstallError(f"missing required command: {command_name}")
                     state = discover(host, str(Path(command).resolve()), environment, claude_scope=args.claude_scope, claude_project_path=args.claude_project_path)
+                    if host == "codex":
+                        codex_state = state
+                        disabled = sorted(p for p in plugins if p in state.installed and not state.installed[p].enabled)
+                        for plugin_id in disabled:  # Codex enables what it installs, so updating it would undo the user's choice
+                            log(f"codex: {plugin_id} is disabled; it is left as installed, with no custom agents, until it is enabled")
+                        plugins = {p: identity for p, identity in plugins.items() if p not in disabled}
                     plans.append(plan_host(host, state, plugins, receipt, args))
-                codex_state = next((plan.state for plan in plans if plan.host == "codex"), None)
                 agents = selected_agent_plan(root, selected["codex"], args, environment, codex_state) if selected.get("codex") else None
                 if agents and agents.changes:
                     log(f"Codex custom agents: {len(agents.changes) - (agent_install.RECEIPT in agents.changes)} owned file change(s)")
@@ -911,6 +917,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 next_hosts: dict[str, object] = dict(receipt.get("hosts", {}))
                 for plan in plans:
                     observed = discover(plan.host, plan.state.command, environment, claude_scope=args.claude_scope, claude_project_path=args.claude_project_path)
+                    if plan.host == "codex":
+                        codex_state = observed
                     if not observed.marketplace_present or normalize_source(observed.marketplace_source) != normalize_source(args.resolved_source):
                         raise InstallError(f"{plan.host} marketplace verification failed")
                     for plugin_id, identity in plan.selected.items():
@@ -929,6 +937,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     }
                 if agents is not None:
                     try:
+                        # What Codex reports now decides which plugins hold agents: an install may have left one disabled.
+                        agents = selected_agent_plan(root, selected["codex"], args, environment, codex_state)
                         agent_install.apply(agents)
                     except (agent_install.AgentInstallError, OSError) as exc:
                         raise InstallError(f'native plugins were verified, but custom-agent synchronization failed: {exc}; resolve the reported agent conflict and rerun the same command; native plugin changes were not rolled back') from exc

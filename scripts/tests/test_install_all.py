@@ -91,12 +91,15 @@ def write_fake_cli(path: Path, command_name: str) -> None:
                 scope = args[args.index("--scope") + 1] if "--scope" in args else "user"
                 project_path = os.getcwd() if scope != "user" else None
                 current = next((item for item in state["installed"] if item["pluginId"] == selector and item.get("scope", "user") == scope and item.get("projectPath") == project_path), None)
+                enabled = os.environ.get("AGENT_TOOLING_FAKE_INSTALL_ENABLED", "1") == "1"
                 if current is None:
-                    record = {{"pluginId": selector, "version": versions[selector], "enabled": True, "scope": scope}}
+                    record = {{"pluginId": selector, "version": versions[selector], "enabled": enabled, "scope": scope}}
                     if project_path: record["projectPath"] = project_path
                     state["installed"].append(record)
                 else:
                     current["version"] = versions[selector]
+                    if {command_name!r} == "codex":
+                        current["enabled"] = enabled  # Codex enables a plugin it installs or updates
                 save()
             else:
                 raise SystemExit("unexpected arguments: " + " ".join(sys.argv[1:]))
@@ -392,6 +395,7 @@ class InstallAllTests(unittest.TestCase):
         fake_installed: dict[str, list[dict[str, object]]] | None = None,
         client_runs_git: bool = False,
         fail_plugin: str | None = None,
+        install_enabled: bool = True,
     ) -> tuple[subprocess.CompletedProcess[str], list[dict[str, object]]]:
         install_all = repo_root / "scripts" / "install-all"
         bin_dir = temp_root / "bin"
@@ -423,6 +427,7 @@ class InstallAllTests(unittest.TestCase):
             "AGENT_TOOLING_FAKE_INSTALLED": json.dumps(fake_installed or {}),
             "AGENT_TOOLING_FAKE_CLIENT_RUNS_GIT": "1" if client_runs_git else "0",
             "AGENT_TOOLING_FAKE_FAIL_PLUGIN": fail_plugin or "",
+            "AGENT_TOOLING_FAKE_INSTALL_ENABLED": "1" if install_enabled else "0",
             "AGENT_TOOLING_FAKE_VERSIONS": json.dumps(versions),
             "AGENT_TOOLING_FAKE_GIT_SOURCE": str(repo_root),
             "AGENT_TOOLING_FAKE_GIT_LOG": str(git_log_path),
@@ -532,7 +537,9 @@ class InstallAllTests(unittest.TestCase):
         import tomllib
         user_agent = 'name = "mine"\ndescription = "Mine."\ndeveloper_instructions = "Do my thing."\n'
         plugin_id = 'visualization@agent-tooling'
-        for label in ('disabled before its first projection', 'disabled after its agents were installed'):
+        labels = ('disabled before its first projection', 'disabled after its agents were installed', 'disabled and out of date',
+                  'left disabled by the host as it installs')
+        for label in labels:
             with self.subTest(label), tempfile.TemporaryDirectory(prefix="install-all-disabled-") as tmp:
                 root = Path(tmp)
                 repo = root / "repo"
@@ -549,6 +556,15 @@ class InstallAllTests(unittest.TestCase):
                 if label.startswith('disabled before'):
                     installed = {'codex': [{'pluginId': plugin_id, 'version': version, 'enabled': False}]}
                     proc, _ = self._run_install_all_process(repo, root, *run, fake_installed=installed)
+                elif label.startswith('disabled and out of date'):
+                    # Updating would enable it (Codex enables what it installs), so it is left as installed.
+                    installed = {'codex': [{'pluginId': plugin_id, 'version': '0.0.1', 'enabled': False}]}
+                    proc, calls = self._run_install_all_process(repo, root, *run, fake_installed=installed)
+                    self.assertEqual([], [c['args'] for c in mutation_calls(calls) if any(plugin_id in str(a) for a in c['args'])])
+                    self.assertEqual(['0.0.1'], [i['version'] for i in json.loads(state.read_text())['installed'] if i['pluginId'] == plugin_id])
+                    self.assertIn('disabled', proc.stderr)
+                elif label.startswith('left disabled'):
+                    proc, _ = self._run_install_all_process(repo, root, *run, install_enabled=False)
                 else:
                     proc, _ = self._run_install_all_process(repo, root, *run)
                     self.assertEqual(proc.returncode, 0, proc.stderr)
@@ -564,6 +580,8 @@ class InstallAllTests(unittest.TestCase):
                 self.assertEqual(user_agent, (profile / 'mine.toml').read_text())
                 self.assertEqual('mine', tomllib.loads((profile / 'mine.toml').read_text())['name'])
                 self.assertEqual([False], [i['enabled'] for i in json.loads(state.read_text())['installed'] if i['pluginId'] == plugin_id])
+                if not label.startswith('disabled after'):
+                    continue
                 held = json.loads(state.read_text())
                 for item in held['installed']:
                     if item['pluginId'] == plugin_id:

@@ -160,10 +160,21 @@ def _plan(root: Path, before: dict[str, bytes], owner: str, documents: Mapping[s
     return AgentPlan(root, before, changes)
 
 
+def _records_files(root: Path, owners: Mapping[str, Mapping[str, str]]) -> bool:
+    """Whether the receipt in `root` records agents of any of `owners`; an unreadable receipt counts as recording them."""
+    try:
+        recorded = json.loads((root / RECEIPT).read_bytes())['owners']
+        return any(recorded.get(owner) for owner in owners)
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return True
+
+
 def plan_many(home: Path, owners: Mapping[str, Mapping[str, str]]) -> AgentPlan:
     root = home / 'agents'
-    if root.is_symlink() and not any(owners.values()):
-        # Nothing to project, and nothing was ever written through a linked directory: leave it alone.
+    if root.is_symlink() and not any(owners.values()) and not _records_files(root, owners):
+        # Nothing to project or remove: leave a linked directory alone (anything else is refused by snapshot).
         return AgentPlan(root, {}, {})
     before = snapshot(root)
     after = dict(before)
