@@ -826,7 +826,7 @@ def _snapshot_scripts(plan: dict, out: Path):
         target = out / "launchers" / (sha + src.suffix)
         if not target.exists():
             _mkdir(target.parent, exist_ok=True)
-            _write_atomic(target, data)
+            _write_atomic(target, data, executable=True)
             os.chmod(_unlinked(target), 0o555)
         entry.update(script=str(target), script_source=entry.get("script_source") or str(src))
 
@@ -1633,6 +1633,7 @@ def _launcher_turns(arm, spec, job_dir: Path, env, *, out: Path, stdout_path: Pa
     messages = [spec["prompt"], *spec.get("followups", [])]
     settings.update(TRIAL_TURNS=str(len(messages)), TRIAL_CONFINED="1" if confined else "0")
     timeout = spec.get("timeout_s", LAUNCHER_TIMEOUT)
+    settings["TRIAL_TIMEOUT_S"] = str(int(timeout))  # so a launcher can refuse a turn its sign-in would not outlast
     watched = _watch_paths(arm, job_dir)
     status, baseline, session = "ok", {}, None
     for turn in range(len(messages) + 1):
@@ -1687,7 +1688,7 @@ def _launcher_files(arm: dict, job_dir: Path) -> tuple[Path, Path | None]:
     read-only when confined), so the run reaches them at fixed paths and nothing else of the trial directory."""
     own = _mkdir(job_dir / "launcher", exist_ok=True)
     script = own / "run"  # a name of its own, never the source's, which could name an arm
-    _write_atomic(script, Path(arm["script"]).read_bytes())
+    _write_atomic(script, Path(arm["script"]).read_bytes(), executable=True)
     os.chmod(script, 0o555)
     instructions = None
     if arm.get("instructions"):
@@ -3155,18 +3156,37 @@ def _mkdir(path: Path, parents: bool = False, exist_ok: bool = False) -> Path:
     return path
 
 
-def _write_atomic(path: Path, data: bytes):
+# How _write_atomic writes an executable, run as a child process: standard input into a new file, never through a link.
+_WRITE_NEW = ("import os, sys\n"
+              "with os.fdopen(os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600), 'wb') as f:\n"
+              "    f.write(sys.stdin.buffer.read())\n")
+
+
+def _write_atomic(path: Path, data: bytes, *, executable: bool = False):
     """Write through a private temporary file, so a reader never sees a partial file; a link or directory an
-    agent left in the file's place is replaced, never followed, and one on the way to it refused (see _unlinked)."""
+    agent left in the file's place is replaced, never followed, and one on the way to it refused (see _unlinked).
+    A file to be executed is written by a child process: a process forked while this one holds a file open for writing
+    holds it too, until its own exec, and executing the file meanwhile fails with ETXTBSY ("Text file busy"), whether
+    the runtime executes it or bubblewrap does a moment later. Written so, it is never open here, whatever forks."""
     _unlinked(path)
     _own(path.parent)
     with contextlib.suppress(FileNotFoundError):
         if stat.S_ISDIR(os.lstat(path).st_mode):
             _remove(path)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
+    if executable:
+        tmp = str(path.parent / f"{path.name}.{os.urandom(8).hex()}.tmp")
+    else:
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".", suffix=".tmp")
     try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(data)
+        if executable:
+            done = subprocess.run([sys.executable, "-I", "-c", _WRITE_NEW, tmp], input=data, capture_output=True,
+                                  timeout=60)
+            if done.returncode:
+                why = done.stderr.decode(errors="replace").strip().splitlines() or ["the writer failed"]
+                raise OSError(errno.EIO, why[-1], tmp)
+        else:
+            with os.fdopen(fd, "wb") as f:
+                f.write(data)
         os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):

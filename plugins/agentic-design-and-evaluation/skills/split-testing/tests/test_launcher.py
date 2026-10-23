@@ -424,6 +424,17 @@ class LauncherTest(unittest.TestCase):
         given = [entry["workdir"], entry["instructions"], entry["reply"], entry["record"], *entry["env"].values()]
         self.assertFalse([v for v in given for l in labels if l in v], given)
 
+    def test_a_launcher_is_told_how_long_its_turn_may_run(self):
+        # A launcher whose executor's sign-in could need a refresh mid-turn must know the turn's time limit to avoid it.
+        write(self.tmp / "scenarios" / "timed" / "scenario.json", json.dumps({"prompt": "create out.txt", "timeout_s": 1234, "required": ["made_file"]}))
+        write(self.tmp / "scenarios" / "timed" / "check.py", "def check(run):\n    return {'made_file': run.file('out.txt').strip() == 'hi'}\n")
+        self.plan({"a": self.arm()}, scenarios=["scenarios/timed"])
+        r = self.run_plan("show-env")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        seen = [json.loads(p.read_text()) for p in self.out.rglob("seen-env-*.json") if "runs" in p.parts and not p.parent.parent.is_symlink()]
+        self.assertTrue(seen)
+        self.assertEqual({"1234"}, {view["env"].get("TRIAL_TIMEOUT_S") for view in seen})
+
     def test_a_run_directory_named_by_default_names_nothing_of_the_plan(self):
         # The run directory's own path is part of every path an executor is given, so its default name tells nothing of
         # the plan (which may be named after its arms), while summarize and report still name the plan.

@@ -2,6 +2,8 @@
 judge, checked against what the removed drivers passed, with the executor itself replaced by a recorder."""
 import importlib.util
 import json
+import contextlib
+import io
 import os
 import sys
 import tempfile
@@ -139,6 +141,52 @@ class ClaudeInvocationTest(LauncherCase):
         self.assertEqual(self.turn(module, 2, launched, **env), 0)
         second = launched.calls[1]["cmd"]
         self.assertEqual(second[second.index("--resume"):second.index("--resume") + 2], ["--resume", "S7"])
+
+    def test_a_copied_login_that_would_need_a_refresh_inside_the_run_is_refused(self):
+        # A claude.ai login refreshes by rotating its refresh token. A refresh inside the run hands the new tokens to the
+        # copy, which is removed afterwards, and leaves the owner's own login holding a revoked token: signed out.
+        # So a turn starts only while the copied access token outlasts the turn's time limit and a margin.
+        import time
+        init = {"type": "system", "subtype": "init", "session_id": "S1", "model": "model-a"}
+        result = {"type": "result", "subtype": "success", "is_error": False, "result": "done", "session_id": "S1", "usage": {}}
+        (self.home / ".launcher").mkdir(exist_ok=True)
+        (self.home / ".launcher" / "settings.json").write_text('{"bare": false}')
+        (self.home / ".claude").mkdir(exist_ok=True)
+        default, elsewhere = self.home / ".claude" / ".credentials.json", self.home / "config" / ".credentials.json"
+        elsewhere.parent.mkdir()
+        now_ms = int(time.time() * 1000)
+
+        def turns(expiries, limit, **env):
+            """Run turn 0, then one turn per expiry, the login rewritten to it first; each turn's (exit, claude started)."""
+            module = self.launcher()
+            with mock.patch.dict(os.environ, {**self.env, "TRIAL_TURN": "0", **env}):
+                self.assertEqual(module.main(), 0)
+            outcomes = []
+            for turn, (login, expires) in enumerate(expiries, 1):
+                login.write_text(json.dumps({"claudeAiOauth": {"accessToken": "a", "refreshToken": "r", "expiresAt": expires}}))
+                launched = Launched([[init, result]])
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr):
+                    code = self.turn(module, turn, launched, TRIAL_TURNS=str(len(expiries)), TRIAL_TIMEOUT_S=limit, **env)
+                started = len([call for call in launched.calls if call["cmd"][0] == "claude"])  # the last turn also cleans caches
+                outcomes.append((code, started))
+                if code == 77:
+                    self.assertIn("refresh", stderr.getvalue())
+                login.unlink()
+            return outcomes
+
+        hours, minutes = 3_600_000, 60_000
+        for label, expiries, limit, env, expected in (
+                ("expires within the turn", [(default, now_ms + 20 * minutes)], "1800", {}, [(77, 0)]),
+                ("expires after the turn, within ten minutes of its end", [(default, now_ms + 35 * minutes)], "1800", {}, [(77, 0)]),
+                ("already marked expired", [(default, 0)], "900", {}, [(77, 0)]),
+                ("outlasts the turn", [(default, now_ms + 8 * hours)], "1800", {}, [(0, 1)]),
+                ("outlasts the first turn but not the follow-up", [(default, now_ms + 8 * hours), (default, now_ms + 20 * minutes)],
+                 "1800", {}, [(0, 1), (77, 0)]),
+                ("held where CLAUDE_CONFIG_DIR says", [(elsewhere, now_ms + 20 * minutes)], "1800",
+                 {"CLAUDE_CONFIG_DIR": str(elsewhere.parent)}, [(77, 0)])):
+            with self.subTest(label):
+                self.assertEqual(expected, turns(expiries, limit, **env))
 
     def test_a_signed_in_run_turns_off_everything_its_account_brings_that_claude_code_can_and_a_bare_run_is_unchanged(self):
         # A signed-in login (not bare) would bring its claude.ai account into every run. Every control Claude Code 2.1.299

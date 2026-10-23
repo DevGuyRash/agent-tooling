@@ -61,6 +61,7 @@ The script runs in the working directory with this environment:
 |---|---|
 | `TRIAL_TURN` | `0` for setup, then `1` for the prompt and one more for each follow-up |
 | `TRIAL_TURNS` | how many turns the run has, so the last one can clean up |
+| `TRIAL_TIMEOUT_S` | how many seconds a turn may run before the runtime stops it, so a launcher can refuse a turn its executor's sign-in would not outlast |
 | `TRIAL_CONFINED` | `1` when the runtime confined the run, `0` when it did not |
 | `TRIAL_PROMPT_FILE` | this turn's message (also on standard input); absent at setup |
 | `TRIAL_INSTRUCTIONS` | the arm's instructions, read-only; absent without them |
