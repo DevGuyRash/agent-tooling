@@ -818,6 +818,25 @@ class LauncherTest(unittest.TestCase):
         self.assertTrue((home / "skills" / "helper" / "SKILL.md").is_file())  # a resource, which exposure is read against
         self._no_credential_left(secret, r.stdout + r.stderr)
 
+    def test_what_setup_planted_in_the_home_stays_for_the_checks_while_it_is_as_planted(self):
+        # a scenario's setup.sh can plant records its checks read after the run in the private home (session logs a
+        # healing pass has to find where a harness keeps them): clearing a signed-in run's home keeps each one the run
+        # left byte for byte as setup wrote it, which can hold nothing the run was given, and removes one the run
+        # changed or replaced, as it removes everything else
+        secret = "".join(["sess", "-", os.urandom(16).hex()])
+        self._signed_in(secret)
+        write(self.tmp / "scenarios" / "make-file" / "setup.sh",
+              'mkdir -p "$HOME/.store/deep"\n'
+              'for f in deep/kept edited linked; do printf "%s\\n" "$f" > "$HOME/.store/$f.jsonl"; done\n')
+        r = self.run_plan("signed-in-planted", FAKE_LAUNCHER_MARK=secret)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIs(self.result()["passed"], True)
+        store = (self.out / "runs" / "make-file__a__r1").resolve() / "harness" / "home" / ".store"
+        self.assertEqual((store / "deep" / "kept.jsonl").read_text(), "deep/kept\n")
+        self.assertFalse(os.path.lexists(store / "edited.jsonl"))  # it holds the sign-in now
+        self.assertFalse(os.path.lexists(store / "linked.jsonl"))  # a link the run put in its place
+        self._no_credential_left(secret, r.stdout + r.stderr)
+
     def test_a_credential_passed_by_name_never_enters_a_digest(self):
         # secret_env passes a value on without digesting it: two runs with two values hold one set of conditions
         first, second = ("".join(["sess", "-", os.urandom(16).hex()]) for _ in range(2))
@@ -1002,6 +1021,27 @@ class LauncherTest(unittest.TestCase):
         trial._sweep_copies(out, "recheck")
         self.assertFalse(marker.exists() or trial._held(out, job) or (home / ".tool" / "stash").exists())
         self.assertEqual((home / ".tool" / "session.jsonl").read_text(), "a session\n")  # the transcript stays
+
+    def test_only_a_home_noted_before_any_use_keeps_what_was_planted_in_it(self):
+        # what the home held when its run was noted before any turn stays while it is unchanged, through a sweep too;
+        # a home noted only after an executor used it (a host job collected without its note) keeps nothing of it,
+        # since what was there by then could hold what the executor was given
+        out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
+        home = job / "harness" / "home"
+        arm = {"secret_env": ["TOKEN"]}
+        for before_use in (True, False):
+            with self.subTest(before_use=before_use):
+                write(home / ".store" / "planted.jsonl", "planted\n")
+                write(home / ".store" / "changed.jsonl", "planted\n")
+                entry, marker = trial._start_copies(out, job, arm, keep_planted=before_use)
+                write(home / ".store" / "changed.jsonl", "planted\nand the run's own line\n")
+                write(home / ".tool" / "cache", "".join(["sess", "-", os.urandom(16).hex()]))  # a tool's, during the run
+                (marker.parent / "copy.json").write_text(marker.read_text())  # the same note, left for a sweep
+                self.assertTrue(trial._end_copies(out, entry, marker))
+                trial._sweep_copies(out, "recheck")
+                self.assertEqual((home / ".store" / "planted.jsonl").exists(), before_use)
+                self.assertFalse((home / ".store" / "changed.jsonl").exists() or (home / ".tool").exists())
+                shutil.rmtree(out)
 
     def test_an_expanded_key_variable_is_held_apart_from_configuration_like_a_written_one(self):
         self.plan({"a": dict(self.arm(), api_key_var="${FAKE_KEY_NAME}")})  # whose pass_env holds FAKE_LAUNCHER_MARK
