@@ -48,6 +48,21 @@ for (const el of document.querySelectorAll(".av-report *")) {
 return out.slice(0, 8);
 """
 
+# Content of a checks table's row head or corner heading that runs past its cell's right edge: a chip, which cannot wrap,
+# spilling into the first arm's cell under the sticky row head.
+SPILL = """
+const out = [];
+const tables = [...document.querySelectorAll(".av-heatmap")].filter(t => t.getBoundingClientRect().width);
+for (const t of tables) for (const cell of t.querySelectorAll("tbody th, thead th:first-child")) {
+  if (cell.colSpan > 1) continue;
+  const edge = cell.getBoundingClientRect().right;
+  for (const el of cell.querySelectorAll("*")) {
+    const r = el.getBoundingClientRect();
+    if (r.width && r.right > edge + 0.5) out.push(String(el.className || el.tagName.toLowerCase()).split(" ")[0] + ' "' + el.textContent.trim().slice(0, 30) + '" ends ' + Math.round(r.right - edge) + " px past its cell");
+  }
+}
+return { chips: [...document.querySelectorAll(".av-heatmap .av-chip--req")].map(c => c.textContent), variants: [...new Set(tables.map(t => t.className))].sort(), spills: [...new Set(out)].slice(0, 8) };
+"""
 
 def kinds_trial(*, invalid: bool, hostile: bool = False) -> dict:
     """Two arms, two cases, three repeats: a required check that fails with a
@@ -349,6 +364,30 @@ class BrowserRenderTest(unittest.TestCase):
         # The glyphs stay drawn above the names.
         glyphs = self.drive(checks, width=1440, script='return [...document.querySelectorAll(".av-heatmap thead .av-glyph")].map(g => Math.round(g.getBoundingClientRect().width));')["result"]
         self.assertTrue(glyphs and all(w >= 10 for w in glyphs), f"each arm's glyph in the table head is drawn: {glyphs}")
+
+    def test_phone_width_keeps_each_row_head_inside_its_cell(self) -> None:
+        # Two arms and twenty cases, one check required in ten of them: its pooled row head carries the chip "in 10 of 20
+        # cases", which cannot wrap. At 320 px a cap of 44% of the box once squeezed the name column below the chip, which
+        # ran into the first arm's cell under the sticky row head. Every checks table (pooled, by case, and the recorded
+        # measures) keeps each row head and its heading inside its cell.
+        cases = [f"c{i:02d}" for i in range(1, 21)]
+        runs = []
+        for i, case in enumerate(cases):
+            for j, arm in enumerate(("a", "b")):
+                cites = (i + j) % 3 != 0
+                runs.append({"job": f"{case}__{arm}__r1", "scenario": case, "arm": arm, "repeat": 1, "status": "ok", "valid": True, "passed": cites or i >= 10,
+                             "checks": {"reply_written": True, "cites_the_source": cites, "under_budget": (i + j) % 2 == 0}})
+        trial = {"name": "chips", "plan": {"arms": {a: {"executor": "command", "model": "m"} for a in ("a", "b")},
+                                           "scenarios": [{"name": c, "prompt": "Reply.", "required": ["reply_written", "cites_the_source"] if i < 10 else ["reply_written"]} for i, c in enumerate(cases)]}, "runs": runs}
+        spec = {"title": "Row heads", "sections": [{"title": "Pooled", "blocks": [{"type": "checks", "by": "check"}]}, {"title": "By case", "blocks": [{"type": "checks", "by": "case"}]},
+                                                   {"title": "Measures", "blocks": [{"type": "checks", "required": False}]}]}
+        spec_file = self.dir / "row-heads.json"
+        spec_file.write_text(json.dumps(spec), encoding="utf-8")
+        page = self.build("--trial", self.trial_file(trial), "--spec", spec_file)
+        out = self.drive(page, width=320, script=SPILL)["result"]
+        self.assertIn("in 10 of 20 cases", out["chips"], "the pooled row head carries its chip")
+        self.assertEqual(out["variants"], ["av-heatmap", "av-heatmap av-heatmap--case", "av-heatmap av-heatmap--measures"], "each checks table drawn")
+        self.assertEqual(out["spills"], [], "a row head running into the first arm's cell at 320 px")
 
     def test_phone_width_never_scrolls_the_page_sideways(self) -> None:
         reports = {

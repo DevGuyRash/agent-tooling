@@ -3053,14 +3053,14 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
     }
     /** One case's measures: true/false shares, and medians with their range for numbers. */
     function measuresTable(ctx, t, arms, armHead) {
-        return `<div class="av-scroll-x av-ck-box"><table class="av-heatmap av-heatmap--measures" style="--arms:${arms.length}">${colgroup(ctx, arms, "Measure", t.measures.map(m => ({ code: m.name })))}<thead><tr><th scope="col">Measure</th>${armHead}</tr></thead><tbody>${t.measures.map(m => `<tr><th scope="row">${checkName(m.name)}</th>${arms.map(a => {
+        return heatTable(ctx, "av-heatmap av-heatmap--measures", arms, "Measure", t.measures.map(m => ({ code: m.name })), `<thead><tr><th scope="col">Measure</th>${armHead}</tr></thead><tbody>${t.measures.map(m => `<tr><th scope="row">${checkName(m.name)}</th>${arms.map(a => {
             const c = m.cells[a];
             if (!c || !c.n)
                 return `<td class="av-heat av-heat--none"><span>—</span></td>`;
             if (m.kind === "boolean")
                 return heat(c.k, c.n, true);
             return `<td class="av-ck-numeric"><span class="av-num-median">${(0, core_7.esc)((0, core_7.fmtNum)(c.median))}</span>${c.min !== c.max ? `<span class="av-muted">${(0, core_7.esc)((0, core_7.fmtNum)(c.min))}–${(0, core_7.esc)((0, core_7.fmtNum)(c.max))}</span>` : ""}</td>`;
-        }).join("")}</tr>`).join("")}</tbody></table></div>`;
+        }).join("")}</tr>`).join("")}</tbody>`);
     }
     function measuresByCase(input, ctx, data, arms, cases, only) {
         const variantOf = new Map(pairsOf(input.pairs).map(p => [p.variant, p]));
@@ -3103,21 +3103,22 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
                 return width;
         }
     }
-    /** The checks tables' columns. Each arm's column wants room for its name on three lines. The name column takes its
-     * heading and row heads on one line while the arms keep that room, and otherwise gives way to them, down to its longest
-     * piece that cannot break (a check name breaks after its underscores, a chip not at all), and never takes more than 44%
-     * of the box. The widths are estimates for a wide font, measured against the box (container units), so a wider font
-     * cannot crush the arms' names; the arms share whatever the name column leaves. */
-    function colgroup(ctx, arms, heading, rows) {
-        const chip = (r) => r.chip ? r.chip.length * EST.chip + EST.chipPad : 0;
+    /** A checks table in the box it scrolls in. The name column's sizes go on the table as custom properties, which
+     * trial-views.css combines in a fixed priority (.av-ck-col-name there): `--ck-hard`, its widest piece that cannot
+     * break (a chip, a word of the heading), which always gets its room; `--ck-soft`, its widest piece of a check name
+     * between underscores or word of other text; `--ck-full`, its heading and row heads each on one line; and `--ck-arms`,
+     * the room the arms want, each for its name on three lines. The arms share what the name column leaves. */
+    function heatTable(ctx, cls, arms, heading, rows, inner) {
+        const chip = (r) => "chip" in r && r.chip ? r.chip.length * EST.chip + EST.chipPad : 0;
         const oneLine = (r) => "text" in r ? r.text.length * EST.text : r.code.length * EST.mono + EST.code + (r.chip ? 0.3 + chip(r) : 0);
-        const least = (r) => "text" in r ? longest(words(r.text)) * EST.text : Math.max(longest(r.code.split(/(?<=_)/)) * EST.mono + EST.code, chip(r));
-        const floor = EST.cell + Math.max(longest(words(heading)) * EST.head, ...rows.map(least));
+        const piece = (r) => "text" in r ? longest(words(r.text)) * EST.text : longest(r.code.split(/(?<=_)/)) * EST.mono + EST.code;
+        const hard = EST.cell + Math.max(longest(words(heading)) * EST.head, ...rows.map(chip));
+        const soft = EST.cell + Math.max(0, ...rows.map(piece));
         const full = EST.cell + Math.max(heading.length * EST.head, ...rows.map(oneLine));
         const armRoom = Math.max(0, ...arms.map(a => EST.cell + lineChars(words(ctx.arms.label(a)), 3) * EST.arm));
         const rem = (v) => `${Math.round(v * 100) / 100}rem`;
-        const name = `min(44cqw, clamp(${rem(floor)}, calc(100cqw - ${rem(arms.length * armRoom)}), ${rem(Math.max(floor, full))}))`;
-        return `<colgroup><col class="av-ck-col-name" style="width:${name}">${arms.map(() => '<col class="av-ck-col-arm">').join("")}</colgroup>`;
+        const sizes = `--arms:${arms.length};--ck-hard:${rem(hard)};--ck-soft:${rem(soft)};--ck-full:${rem(full)};--ck-arms:${rem(arms.length * armRoom)}`;
+        return `<div class="av-scroll-x av-ck-box"><table class="${cls}" style="${sizes}"><colgroup><col class="av-ck-col-name">${arms.map(() => '<col class="av-ck-col-arm">').join("")}</colgroup>${inner}</table></div>`;
     }
     function checksByCheck(input, ctx, data, arms, only) {
         let rows = (0, trial_model_3.checkTable)(data, arms);
@@ -3144,7 +3145,7 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
             + judgeRow
             + group("Recorded measures", "recorded true or false, not required for a pass; shaded by share, not by merit", measShown, fold(`${plural(steady.length, "measure")} never changed: ${steady.filter(always).length} always true, ${steady.filter(never).length} never true`, steady.map(r => `${r.name} ${always(r) ? "true" : "false"}`)));
         const heads = [...[...reqShown, ...measShown].map(r => ({ code: r.name, chip: chipOf(r) })), ...(judged.length ? [{ text: "verdict = pass" }] : [])];
-        return (0, frame_1.frame)("checks", input, `<div class="av-scroll-x av-ck-box"><table class="av-heatmap" style="--arms:${arms.length}">${colgroup(ctx, arms, "Check", heads)}${head}<tbody>${body}</tbody></table></div>`, { "data-by": "check" });
+        return (0, frame_1.frame)("checks", input, heatTable(ctx, "av-heatmap", arms, "Check", heads, `${head}<tbody>${body}</tbody>`), { "data-by": "check" });
     }
     function checksByCase(input, ctx, data, arms, cases, only) {
         const pairs = pairsOf(input.pairs), variantOf = new Map(pairs.map(p => [p.variant, p]));
@@ -3176,7 +3177,7 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
             const rows = failing.map(r => row(`${checkName(r.name)}`, r.cells, "av-ck-failing")).join("");
             const fold = held.length ? `<tr class="av-ck-fold"><td colspan="${span}"><details><summary>${plural(held.length, "more required check")} held in every valid run</summary>${chipList(held.map(r => r.name))}</details></td></tr>` : "";
             const heads = [...failing.map(r => ({ code: r.name })), ...(t.judge ? [{ text: "Judge says pass" }] : [])];
-            const table = `<div class="av-scroll-x av-ck-box"><table class="av-heatmap av-heatmap--case" style="--arms:${arms.length}">${colgroup(ctx, arms, "Must hold", heads)}<thead><tr><th scope="col">Must hold</th>${armHead}</tr></thead><tbody>${rows}${judgeRow}${fold}</tbody></table></div>`;
+            const table = heatTable(ctx, "av-heatmap av-heatmap--case", arms, "Must hold", heads, `<thead><tr><th scope="col">Must hold</th>${armHead}</tr></thead><tbody>${rows}${judgeRow}${fold}</tbody>`);
             return `<section class="av-ck-case${v ? " av-ck-case--variant" : ""}"${(0, core_7.attrs)({ "data-case": cs })}>${head}${table}${measures}</section>`;
         }).join("");
         const legend = `<p class="av-legend"><span>Each case's required checks and judge, over its valid runs; checks that failed somewhere come first.</span><span>Cells: runs where the check held / valid runs.</span></p>`;
