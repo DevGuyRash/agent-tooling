@@ -881,6 +881,16 @@ def named_ids(value, field, out: dict) -> None:
             named_ids(value.get(k), f, out)
 
 
+def trial_scenarios(c, trial, where: str) -> None:
+    """Trial runs that name no scenario (left out, null, empty or only spaces): trial.py never writes one, so such a run
+    is malformed input, refused rather than read as a case of its own or as evidence naming no case."""
+    if not isinstance(trial, dict) or not isinstance(trial.get("runs"), list):
+        return
+    for i, r in enumerate(trial["runs"]):
+        if isinstance(r, dict) and (r.get("scenario") is None or (isinstance(r.get("scenario"), str) and not r["scenario"].strip())):
+            c.add("error", f"{where}.runs[{i}].scenario", "a trial run must name its scenario", "write the trial with trial.py report RUN_DIR --out FILE, which names each run's scenario")
+
+
 def comparison_cases(data: dict) -> list:
     """A comparison's cases as the composition finds them: those it declares, then every case its data name."""
     out: list = []
@@ -1347,6 +1357,8 @@ def validate_spec(spec, trial=None, comparison=None, collection=None) -> list[di
     def check_trial(value, where: str) -> None:
         if not isinstance(value, dict) or not isinstance(value.get("runs"), list):
             c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE")
+        else:
+            trial_scenarios(c, value, where)
 
     def check_comparison(value, where: str) -> None:
         if not is_comparison(value):
@@ -1881,6 +1893,7 @@ def validate_narrative(narrative, trial=None) -> list[dict]:
     c.shape(narrative, NARRATIVE, "narrative", {
         "decision": decision, "arms": arms, "identical": identical, "pairs": pairs, "threshold": threshold, "include": section_ids, "exclude": section_ids, "sections": sections, "append": append,
     })
+    trial_scenarios(c, trial, "trial")
     story_checks(c, narrative, "narrative", story_obligations(c.known, trial, None, blocks_of(narrative), {}, True))
     pointed_rule(c, narrative, trial["plan"].get("decision_rule") if isinstance(trial, dict) and isinstance(trial.get("plan"), dict) else None, "the plan's")
     readings_checks(c, narrative, "narrative", trial_sections_shown(trial, narrative, kept), SECTION_NAMES, section_key)

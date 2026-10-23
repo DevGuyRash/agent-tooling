@@ -114,6 +114,9 @@ def written_corpus() -> list[dict]:
         s([{"type": "cost", "measures": ["output_token"]}]),
         s([{"type": "text", "text": "x"}], None, trial={"runs": "no"}),
         s([{"type": "tapestry"}], trial, trial={"runs": []}),
+        # Runs naming no scenario (left out, null, empty, only spaces) are refused; the context trial, its narrative too.
+        s([{"type": "text", "text": "x"}], None, trial={"runs": [{"arm": "a", "scenario": "c1"}, {"arm": "a"}, {"arm": "a", "scenario": None}, {"arm": "a", "scenario": ""}, {"arm": "a", "scenario": "   "}, "not a run"]}),
+        n({}, "blank"),
         s([{"type": "text", "text": "x"}], None, arms=[{"id": "a"}, {"id": "a"}], meta=[{"label": "L"}], cases={"zz": "Z"}),
         {"kind": "spec", "input": {"title": "T", "sections": [{"id": "a", "title": "A", "blocks": []}, {"id": "a", "title": "B", "blocks": []}, {"id": "1", "title": "C", "blocks": []}, None, {"title": "D", "blocks": {}}]}, "trial": None},
         {"kind": "spec", "input": {"title": "T", "sections": [], "problems": [{"level": "error", "where": "narrative.x", "message": "m", "hint": "h"}, {"level": "fatal", "where": "w", "message": "m"}, {"where": 3}, None]}, "trial": None},
@@ -247,6 +250,7 @@ def collection_corpus() -> list[dict]:
     for name, field in R.COLLECTION["fields"].items():
         for v in unique(probes(field)):
             corpus.append({"kind": "collection", "input": {**COLLECTION, name: v}})
+    corpus.append({"kind": "collection", "input": {**COLLECTION, "members": [{"id": "m1", "trial": {**TINY, "runs": [*TINY["runs"], {**TINY["runs"][0], "scenario": " "}]}}, COLLECTION["members"][2]]}})
     for name, field in R.MEMBER["fields"].items():
         for v in unique(probes(field)):
             corpus.append({"kind": "collection", "input": {**COLLECTION, "members": [{"id": "m1", "trial": TINY, name: v}, COLLECTION["members"][2]]}})
@@ -384,6 +388,10 @@ class CheckerAgreementTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.trials = {"fictional": json.loads((EXAMPLES / "fictional-trial.json").read_text(encoding="utf-8"))}
+        blank = json.loads(json.dumps(cls.trials["fictional"]))
+        blank["runs"][0].pop("scenario", None)
+        blank["runs"][1]["scenario"] = ""
+        cls.trials["blank"] = blank
 
     def test_block_types_match_the_registry(self) -> None:
         self.compare([{"kind": "types"}], {})

@@ -209,4 +209,18 @@ test("a narrative threshold is a share, the run grid is opt-in, and a setup bloc
   H.equal(where(V.validateSpec(one([{ type: "checks", required: false }]), { trial: example })), [], "measures only");
 });
 
+test("a trial run that names no scenario is refused by every check that reads trial data", () => {
+  // Five runs on c1; runs 1 to 4 then lose their scenario: left out, null, empty and only spaces. trial.py never writes these.
+  const t = F.gridTrial({ a: { c1: "PPPPP" } });
+  delete t.runs[1].scenario; t.runs[2].scenario = null; t.runs[3].scenario = ""; t.runs[4].scenario = "   ";
+  const said = (problems, prefix) => H.plain(problems).filter(p => /scenario/.test(p.where)).map(p => `${p.level} ${p.where}: ${p.message}`);
+  const owed = prefix => [1, 2, 3, 4].map(i => `error ${prefix}runs[${i}].scenario: a trial run must name its scenario`);
+  H.equal(said(V.validateSpec({ title: "T", sections: [], trial: t })), owed("trial."), "a specification carrying the trial");
+  H.equal(said(V.validateNarrative({}, t)), owed("trial."), "a narrative checked against it");
+  H.equal(said(V.validateSpec(V.trialReport(t, {}))), owed("trial."), "the composed report, each run once");
+  H.equal(said(V.validateCollection({ members: [{ id: "m", trial: t }] })), owed("collection.members[0].trial."), "a collection's member");
+  H.includes(V.renderReport(V.trialReport(t, {})), "<p class=\"av-problem-msg\">a trial run must name its scenario</p>", "the page's input check says so");
+  H.equal(said(V.validateNarrative({}, F.gridTrial({ a: { c1: "PP" } }))), [], "runs that name their scenario pass");
+});
+
 H.report();

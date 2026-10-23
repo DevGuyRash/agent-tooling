@@ -963,6 +963,14 @@ export function reportCases(spec: ReportSpec | unknown, options: { trial?: unkno
   const trial = spec.trial ? spec.trial : options.trial, comparison = spec.comparison ? spec.comparison : options.comparison;
   return specNeeds(spec, knownFrom(trial, comparison), trial, comparison).cases || [];
 }
+/** Trial runs that name no scenario (left out, null, empty or only spaces): trial.py never writes one, so such a run is
+ * malformed input, refused rather than read as a case of its own or as evidence naming no case. */
+function trialScenarios(c: Checker, trial: unknown, where: string): void {
+  if (!isObj(trial) || !Array.isArray(trial.runs)) return;
+  trial.runs.forEach((r, i) => {
+    if (isObj(r) && caseKey(r.scenario) === NO_CASE) c.add("error", `${where}.runs[${i}].scenario`, "a trial run must name its scenario", "write the trial with trial.py report RUN_DIR --out FILE, which names each run's scenario");
+  });
+}
 /** Every block of a specification's or a narrative's own sections, and of its appended blocks. */
 function blocksOf(owner: Obj): unknown[] {
   const out: unknown[] = [];
@@ -1002,7 +1010,7 @@ export function validateSpec(spec: ReportSpec | unknown, options: { trial?: unkn
   const collection = (spec as Obj).collection ? (spec as Obj).collection : options.collection;
   const c = new Checker(knownFrom(trial, comparison, collection), registered(), "spec");
   c.shape(spec, SPEC, "", {
-    trial: (value, where) => { if (!isObj(value) || !Array.isArray(value.runs)) c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE"); },
+    trial: (value, where) => { if (!isObj(value) || !Array.isArray(value.runs)) c.add("error", where, "is not trial report data", "write it with trial.py report RUN_DIR --out FILE"); else trialScenarios(c, value, where); },
     comparison: (value, where) => {
       if (!isComparison(value)) c.add("error", where, "is not comparison data", 'a comparison is {"alternatives": [ … ], "metrics": [ … ]}; see catalog.md');
       else c.problems.push(...validateComparison(value));
@@ -1127,6 +1135,7 @@ export function validateNarrative(narrative: unknown, trial?: unknown): Problem[
       }
     },
   });
+  trialScenarios(c, trial, "trial");
   storyChecks(c, narrative, "narrative", storyObligations(c.known, trial, undefined, blocksOf(narrative), {}, true));
   pointedRule(c, narrative, isObj(trial) && isObj(trial.plan) ? trial.plan.decision_rule : undefined, "the plan's");
   readingsChecks(c, narrative, "narrative", trialSectionsShown(trial, narrative, kept), SECTION_NAMES, sectionKey);
