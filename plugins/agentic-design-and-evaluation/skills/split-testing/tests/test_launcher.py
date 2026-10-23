@@ -781,19 +781,27 @@ class LauncherTest(unittest.TestCase):
         self.assertEqual(self._copies_left(), [])
 
     def test_an_interruption_while_a_run_is_noted_leaves_nothing_the_journal_does_not_name(self):
+        # its copies' directory is made first, under a name no other run holds, then noted: interrupted as it is noted,
+        # the directory, empty, goes with the interruption, and a note whose own writing was interrupted is swept
         out, job = self.tmp / "out-unit", self.tmp / "out-unit" / "runs" / "r0123456789abcdef"
         (job / "harness" / "home").mkdir(parents=True)
         write(self.tmp / "sign-in", "".join(["sess", "-", os.urandom(16).hex()]))
         arm = {"copy": {".fake-sign-in": str(self.tmp / "sign-in")}}
-        real = os.mkdir
+        made, real_mkdir = [], os.mkdir
 
-        def stopped(path, *args, **kwargs):  # interrupted once noted, before its copies' directory is made
-            if Path(path).parent.name.startswith("trial-copies-"):
-                raise KeyboardInterrupt
-            return real(path, *args, **kwargs)
-        with mock.patch.object(trial.os, "mkdir", stopped), self.assertRaises(KeyboardInterrupt):
+        def recording(path, *args, **kwargs):
+            real_mkdir(path, *args, **kwargs)
+            made.append(Path(path))
+
+        def stopped(path, obj):  # interrupted as it notes the run, once its copies' directory is made
+            raise KeyboardInterrupt
+        with mock.patch.object(trial.os, "mkdir", recording), mock.patch.object(trial, "_write_json", stopped), \
+                self.assertRaises(KeyboardInterrupt):
             trial._start_copies(out, job, arm)
-        self.assertEqual(self._copies_left(), [])  # nothing made that is not noted
+        privates = [p for p in made if p.parent.name.startswith("trial-copies-")]
+        self.assertTrue(privates)
+        self.assertFalse(any(os.path.lexists(p) for p in privates))  # nothing made that is not noted
+        self.assertEqual(list((out / ".copies").glob("*.json")), [])
         write(out / ".copies" / "0123abcd.json.k3j2.tmp", '{"private"')  # a note whose own writing was interrupted
         trial._sweep_copies(out, "run")
         self.assertEqual(list((out / ".copies").iterdir()), [])
@@ -989,6 +997,53 @@ class LauncherTest(unittest.TestCase):
         self.assertTrue((out / ".copies" / "0123456789abcdef.json").exists() and trial._held(out, job))
         self.assertTrue((real / "0").is_file())  # never followed
         self.assertFalse((home / ".tool").exists())
+
+    def test_a_copies_place_reached_through_a_link_is_never_used_or_exposed(self):
+        # the user's runtime directory a link to somewhere confinement does not hide: copies never go through it, a run
+        # directory that recorded it is refused before anything is made there, and the place it leads is never given
+        uid = os.getuid()
+        physical = self.tmp / "srv-user-runtime"
+        physical.mkdir(mode=0o700)
+        linked = self.tmp / "run-user"
+        os.symlink(physical, linked)
+        safe = Path(tempfile.mkdtemp(prefix="tmp-", dir="/tmp"))
+        self.addCleanup(shutil.rmtree, safe, True)
+        places = (linked / f"trial-copies-{uid}", safe / f"trial-copies-{uid}")
+        out = self.tmp / "out-unit"
+        out.mkdir()
+        with mock.patch.object(trial, "_copies_places", lambda: places):
+            self.assertEqual(trial._copies_root(out), places[1])  # its own place apart from the link
+            other = self.tmp / "out-other"
+            other.mkdir()
+            (other / ".copies-root").write_text(f"{places[0]}\n")
+            with self.assertRaises(trial.TrialError):
+                trial._copies_root(other)
+            for given in (physical, physical / f"trial-copies-{uid}"):
+                with self.subTest(given=str(given)), self.assertRaises(trial.TrialError):
+                    trial._check_off_copies([given], "a test")
+        self.assertEqual(list(physical.iterdir()), [])  # nothing was ever made where the link leads
+
+    def test_a_copies_directory_name_another_run_holds_is_never_claimed(self):
+        # two run directories, one run's copies live in this user's one container: another run whose new name
+        # collides takes another name, and nothing it notes, or its sweep removes, is the first run's
+        taken, fresh = "aaaaaaaa", "bbbbbbbb"
+        first = self.root / taken
+        first.mkdir(parents=True)
+        self.addCleanup(shutil.rmtree, first, True)
+        write(first / "0", "".join(["sess", "-", os.urandom(16).hex()]))
+        out, job = self.tmp / "out-b", self.tmp / "out-b" / "runs" / "r0123456789abcdef"
+        (job / "harness" / "home").mkdir(parents=True)
+        write(self.tmp / "sign-in", "".join(["sess", "-", os.urandom(16).hex()]))
+        arm = {"copy": {".fake-sign-in": str(self.tmp / "sign-in")}}
+        with mock.patch.object(trial.random.SystemRandom, "choices", side_effect=[list(taken), list(fresh)]):
+            with contextlib.suppress(FileExistsError):
+                entry, _ = trial._start_copies(out, job, arm)
+                self.addCleanup(shutil.rmtree, entry["private"], True)
+                self.assertEqual(entry["private"], str(self.root / fresh))
+        for note in (out / ".copies").glob("*.json"):
+            self.assertNotEqual(json.loads(note.read_text())["private"], str(first))
+        trial._sweep_copies(out, "recheck")
+        self.assertTrue((first / "0").is_file())  # the first run's copies stand
 
     def test_a_key_is_read_once_and_the_value_the_run_is_given_is_the_one_replaced_in_what_it_prints(self):
         # an env_file whose value depends on where it is read: the runtime reads it once, gives the run that value, and
