@@ -1049,6 +1049,11 @@ def prepare_output(source: Path, output: Path, *, overwrite: bool) -> None:
     if output == source or source in output.parents:
         die("output path must not be the source path or inside the source tree")
     validate_symlink_tree(source)
+    # The copy leaves generated output out, so a link to it would dangle in a package the converter itself rejects.
+    for link in [path for path in source.rglob("*") if path.is_symlink() and not is_generated_junk(path, source)]:
+        resolved = link.resolve()
+        if resolved != source and is_generated_junk(resolved, source):
+            die(f"{link.relative_to(source)}: this link points at {resolved.relative_to(source)}, generated output the conversion leaves out; remove the link or point it at kept content")
     if output.exists():
         if not overwrite:
             die(f"{output}: output already exists; pass --overwrite to replace it")

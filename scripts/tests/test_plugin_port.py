@@ -309,6 +309,21 @@ class PluginPortTests(unittest.TestCase):
                 self.assertEqual(before, (source / "definitions/reviewer.md").read_bytes())
                 self.assertTrue((output / "agents").resolve().is_relative_to(output.resolve()))
 
+    def test_a_link_to_generated_output_is_refused_before_anything_is_written(self) -> None:
+        for name, target in (("file", "scripts/worker.pyc"), ("directory", "scripts/__pycache__")):
+            with self.subTest(target=name):
+                source = self.root / f"junk-{name}"
+                write(source / ".claude-plugin/plugin.json", '{"name":"kit","version":"1.0.0"}')
+                if name == "file":
+                    write(source / target, "compiled")
+                else:
+                    write(source / target / "worker.cpython.pyc", "compiled")
+                (source / "scripts/link").symlink_to(source / target)
+                output = self.root / f"out-{name}"
+                with self.assertRaisesRegex(plugin_port.PluginPortError, "scripts/link.*generated"):
+                    plugin_port.convert_plugin(source, "claude", output, mode="strict", overwrite=False)
+                self.assertFalse(output.exists())
+
     def test_marketplace_child_without_a_manifest_takes_the_catalogs_host(self) -> None:
         market = self.root / "codex-market-src"
         child = market / "plugins/kit"
