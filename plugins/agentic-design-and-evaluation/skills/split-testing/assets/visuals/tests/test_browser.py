@@ -465,13 +465,17 @@ out.beforeScrollAway = tip().shown;
 window.scrollBy({ top: -innerHeight * 3, behavior: "instant" }); await frames();
 out.afterScrollAway = tip().shown;
 // A mark scrolled out of the box that clips it, though still inside the window, takes its card with it.
-const box = document.createElement("div"); box.style.cssText = "width:200px;overflow-x:auto;white-space:nowrap";
+const box = document.createElement("div"); box.style.cssText = "width:200px;overflow-x:auto;white-space:nowrap;border-left:20px solid";
 const wide = document.createElement("div"); wide.style.cssText = "width:1200px;padding:10px 0";
-const inner = document.createElement("span"); inner.textContent = "mark"; inner.style.cssText = "display:inline-block;margin-left:60px"; inner.setAttribute("data-av-tip", "a mark in a box");
+const inner = document.createElement("span"); inner.style.cssText = "display:inline-block;width:8px;height:10px;margin-left:60px;background:currentColor"; inner.setAttribute("data-av-tip", "a mark in a box");
 wide.appendChild(inner); box.appendChild(wide); document.querySelector(".av-block").prepend(box);
 box.scrollIntoView({ block: "center", behavior: "instant" }); await frames(); await frames();
 point(inner, "pointerdown", "touch"); out.boxShown = tip().shown;
-box.scrollLeft = 500; await frames();
+// Scrolled until the 8px mark lies on the box's 20px left border, 6px in: inside the window and the box's outer edge,
+// yet hidden.
+box.scrollLeft = 20 + 60 - 6; await frames();
+const m = inner.getBoundingClientRect(), b = box.getBoundingClientRect();
+out.parked = { inWindow: m.left >= 0 && m.right <= innerWidth, onBorder: m.left >= b.left - 0.5 && m.right <= b.left + 20.5 };
 out.afterBoxScroll = tip().shown;
 
 return out;
@@ -496,12 +500,13 @@ return out;
         self.assertTrue(out["beforeScrollAway"], "no card was open to scroll away")
         self.assertFalse(out["afterScrollAway"], "the card stays after its mark has left the window")
         self.assertTrue(out["boxShown"])
+        self.assertEqual(out["parked"], {"inWindow": True, "onBorder": True}, "the mark was not left on the box's border, in the window")
         self.assertFalse(out["afterBoxScroll"], "the card stays after its mark has scrolled out of the box that clips it")
 
     def test_a_card_longer_than_a_short_window_still_fits_it_whole(self) -> None:
         # In a window 420 px high, under the top bar: a run's very long reason, and a card whose value and note each run far
-        # past a screen, whether opened by a touch or the pointer; and again when the window shrinks to 260 px with a card
-        # open.
+        # past a screen, whether opened by a touch or the pointer; and again when the window shrinks to 160 px with a card
+        # open, leaving less than 120 px under the top bar.
         trial = json.loads((EXAMPLES / "fictional-trial.json").read_text(encoding="utf-8"))
         long_run = next(r for r in trial["runs"] if r.get("passed") is True and isinstance(r.get("judge"), dict))
         long_run["judge"]["reason"] = " ".join(["The reply names the harbour, the light and the mood, and invents nothing the photograph does not show."] * 60)
@@ -517,7 +522,7 @@ const big = document.createElement("span"); big.textContent = "x"; big.setAttrib
 document.querySelector(".av-block").appendChild(big); point(big, "pointerover"); out.huge = box();
 // The window shrinks with the card open, and nothing else happens: the card is fitted again to the room left.
 const resized = new Promise(done => addEventListener("resize", done, { once: true }));
-avDriveResize("1440x260"); await resized;
+avDriveResize("1440x160"); await resized;
 await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))); out.shrunk = box();
 return out;
 """

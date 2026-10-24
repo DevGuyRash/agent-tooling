@@ -12621,7 +12621,12 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 return;
             const top = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
             const vw = doc.documentElement.clientWidth || win.innerWidth, vh = doc.documentElement.clientHeight || win.innerHeight;
-            tip.style.maxHeight = `${Math.max(0, vh - top - 12)}px`;
+            // Below the room a card needs for its frame and a line, it is not shown at all rather than spill past the window.
+            if (vh - top - 12 < 48) {
+                tip.removeAttribute("data-show");
+                return;
+            }
+            tip.style.maxHeight = `${vh - top - 12}px`;
             // Measured from the window's left edge, so its width is its own and not what room its last place left it; and by its
             // own size, not its box mid-animation (it opens from slightly smaller), so it lands exactly where placed. A row's
             // card points at the row's own mark (data-av-tip-at), not at the middle of the row.
