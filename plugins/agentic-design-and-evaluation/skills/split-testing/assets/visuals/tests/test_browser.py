@@ -498,10 +498,16 @@ class BrowserRenderTest(unittest.TestCase):
             survivors: list[int] = []
             try:
                 if freeze_browser:
-                    for pid in self.browser_pids(profile, but=process.pid):
-                        with contextlib.suppress(OSError):
-                            os.kill(pid, signal.SIGSTOP)
-                    states = subprocess.run(["ps", "-o", "stat=", "-p", ",".join(map(str, self.browser_pids(profile, but=process.pid)))], capture_output=True, text=True).stdout.split()
+                    states: list[str] = []
+                    for _ in range(50):  # a process in uninterruptible sleep (D) stops only once it wakes
+                        pids = self.browser_pids(profile, but=process.pid)
+                        for pid in pids:
+                            with contextlib.suppress(OSError):
+                                os.kill(pid, signal.SIGSTOP)
+                        states = subprocess.run(["ps", "-o", "stat=", "-p", ",".join(map(str, pids))], capture_output=True, text=True).stdout.split() if pids else []
+                        if states and all(state.startswith("T") for state in states):
+                            break
+                        time.sleep(0.1)
                     self.assertTrue(states and all(state.startswith("T") for state in states), f"the browser was not frozen: {states}")
                 process.send_signal(signal.SIGTERM)
                 process.communicate(timeout=60)
