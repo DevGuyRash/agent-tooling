@@ -88,7 +88,10 @@ def run_node(*args: object, timeout: int = 60) -> subprocess.CompletedProcess:
 # (com.google.Chrome.chrome_chrome_url_fetcher_.*, com.microsoft.Edge.
 # msedge_url_fetcher_.*) in its temp directory: its TMPDIR, or /tmp when a
 # wrapper such as firejail strips that variable. It never removes the folder,
-# however it is stopped.
+# however it is stopped. A browser that keeps running removes its own about
+# three seconds after making it (3.1 s measured), so a folder older than
+# FETCHER_GRACE was left by a browser that has ended.
+FETCHER_GRACE = 5.0
 FETCHER_LEFTOVER = re.compile(r"^(?:com|org)\.[\w-]+\.[\w-]+\.\w*url_fetcher_\.\w+$")
 
 
@@ -112,19 +115,36 @@ def fetcher_leftovers() -> set[Path]:
 @contextlib.contextmanager
 def no_fetcher_leftovers():
     """Remove, when the block ends, the empty fetcher folders that appeared
-    while it ran. A folder is attributed by time, not by process: one that
-    another browser made during the block goes too, which is harmless because
-    those folders stay empty; rmdir keeps any folder that holds something."""
+    while it ran, each once it is FETCHER_GRACE seconds old. A folder is
+    attributed by time, not by process, so the wait spares the folder of a
+    browser that is still running, which removes its own by then; what is left
+    belongs to a browser that has ended, the block's or another's. rmdir keeps
+    any folder that holds something."""
     since, before = time.time() - 1, fetcher_leftovers()
     try:
         yield
     finally:
+        made = {}
         for folder in fetcher_leftovers() - before:
-            try:
-                if folder.stat().st_mtime >= since:
+            with contextlib.suppress(OSError):
+                if (mtime := folder.stat().st_mtime) >= since:
+                    made[folder] = mtime
+        if made:
+            time.sleep(max(0.0, max(made.values()) + FETCHER_GRACE - time.time()))
+        for folder in made:
+            with contextlib.suppress(OSError):
+                if folder.stat().st_mtime + FETCHER_GRACE <= time.time():
                     folder.rmdir()
-            except OSError:
-                continue
+
+
+def remove_singleton(profile: Path) -> None:
+    """Remove the singleton folder of a browser that did not close itself, as
+    its profile's SingletonSocket link names it; a folder that holds more than
+    the browser's Singleton* entries is kept."""
+    with contextlib.suppress(OSError):
+        folder = Path(os.readlink(profile / "SingletonSocket")).parent
+        if all(entry.name.startswith("Singleton") for entry in folder.iterdir()):
+            shutil.rmtree(folder)
 
 
 _CASES: dict[str, list[dict]] = {}
