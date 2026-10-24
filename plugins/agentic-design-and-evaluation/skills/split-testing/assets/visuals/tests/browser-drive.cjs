@@ -12,11 +12,13 @@
 // or a killed wrapper such as firejail, flatpak or snap, leaves that folder for
 // good. The drive waits for the browser's whole process group to end, signals
 // it only when it has not, and always finishes with a kill of whatever the
-// launcher left in that group. The JSON line says how the browser stopped
-// ("stopped": "closed", "terminated" or "killed") and names its singleton
-// folder ("singleton", null when the browser keeps no link to one) for the
-// caller to check. SIGTERM, SIGINT or SIGHUP to this driver stops the browser
-// the same way before it exits. test_browser.py removes the empty fetcher
+// launcher left in that group; a browser that did not close itself has the
+// singleton folder its profile's SingletonSocket link names removed, unless
+// the link named it before this launch. The JSON
+// line says how the browser stopped ("stopped": "closed", "terminated" or
+// "killed") and names its singleton folder ("singleton", null when the browser
+// keeps no link to one) for the caller to check. SIGTERM, SIGINT or SIGHUP to
+// this driver stops the browser the same way before it exits. test_browser.py removes the empty fetcher
 // folder a short-lived browser also leaves in the temp directory.
 //
 // --script FILE holds the body of an async function evaluated in the page once
@@ -34,7 +36,24 @@ const args = process.argv.slice(2);
 const option = (name, fallback) => { const i = args.indexOf(name); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : fallback; };
 const print = value => process.stdout.write(JSON.stringify(value) + "\n");
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-const within = (ms, promise) => Promise.race([promise, sleep(ms).then(() => { throw new Error("timed out"); })]);
+const within = (ms, promise) => { let timer; return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timed out")), ms); })]).finally(() => clearTimeout(timer)); }; // a pending timer would keep the driver alive
+
+// [process group, state] of every process: from /proc where it lists this one
+// (Linux, a slim container without ps included), else from ps; null when
+// neither answers.
+function processes() {
+  try {
+    const pids = fs.readdirSync("/proc").filter(name => /^\d+$/.test(name));
+    if (pids.includes(String(process.pid))) return pids.flatMap(pid => {
+      try { const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8"); const [state, , pgid] = stat.slice(stat.lastIndexOf(")") + 2).split(" "); return [[Number(pgid), state]]; }
+      catch { return []; } // ended while listed
+    });
+  } catch { /* no /proc */ }
+  try {
+    return execFileSync("ps", ["-A", "-o", "pgid=", "-o", "stat="], { encoding: "utf8", timeout: 5000, killSignal: "SIGKILL" }).trim().split("\n")
+      .map(row => { const [pgid, stat] = row.trim().split(/\s+/); return [Number(pgid), stat || ""]; });
+  } catch { return null; }
+}
 
 async function stop(browser, port) {
   // The browser has ended when nothing that can still run is left in its
@@ -44,10 +63,8 @@ async function stop(browser, port) {
   const running = () => {
     if (process.platform === "win32") return browser.exitCode === null && browser.signalCode === null;
     try { process.kill(-browser.pid, 0); } catch { return false; }
-    try {
-      return execFileSync("ps", ["-A", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" }).split("\n")
-        .some(row => { const [pgid, stat] = row.trim().split(/\s+/); return Number(pgid) === browser.pid && !!stat && !stat.startsWith("Z"); });
-    } catch { return true; } // no ps: the group still exists
+    const all = processes(); // null: the group still exists, so it counts as running
+    return all === null || all.some(([pgid, state]) => pgid === browser.pid && !state.startsWith("Z"));
   };
   const ended = async ms => { for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (!running()) return true; return !running(); };
   const group = signal => { try { process.kill(-browser.pid, signal); } catch { try { browser.kill(signal); } catch { /* already gone */ } } };
@@ -85,13 +102,22 @@ async function main() {
   const flags = ["--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", "--disable-extensions",
     "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"];
   if (typeof process.getuid === "function" && process.getuid() === 0) flags.unshift("--no-sandbox"); // Chromium refuses its sandbox as root
+  const singletonFolder = () => { try { return path.dirname(fs.readlinkSync(path.join(profile, "SingletonSocket"))); } catch { return null; } };
+  const before = singletonFolder(); // another browser's, or a stale one: never this launch's to remove
   const browser = spawn(browserPath, flags, { stdio: "ignore", detached: process.platform !== "win32" });
   let ws, out, port = "", singleton = null, stopping = null;
-  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.once(signal, () => (stopping ??= stop(browser, port)).finally(() => process.exit(1)));
+  // Stop the browser once, and remove the singleton folder of one that did not
+  // close itself, keeping a folder that holds more than its Singleton* entries.
+  const finish = () => (stopping ??= stop(browser, port).then(outcome => {
+    const folder = outcome === "closed" ? null : singleton ?? singletonFolder();
+    try { if (folder && folder !== before && path.isAbsolute(folder) && fs.readdirSync(folder).every(name => name.startsWith("Singleton"))) fs.rmSync(folder, { recursive: true, force: true }); } catch { /* already gone */ }
+    return outcome;
+  }));
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.once(signal, () => finish().finally(() => process.exit(1)));
   try {
     for (let i = 0; i < 150 && !port; i++) { await sleep(100); try { port = fs.readFileSync(portFile, "utf8").split("\n")[0].trim(); } catch { /* not yet written */ } }
     if (!port) throw new Error("the browser did not open a DevTools port within 15 seconds");
-    try { singleton = path.dirname(fs.readlinkSync(path.join(profile, "SingletonSocket"))); } catch { /* this browser keeps no singleton link */ }
+    singleton = singletonFolder();
     const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
     const page = targets.find(t => t.type === "page");
     if (!page) throw new Error("the browser has no page target");
@@ -138,7 +164,7 @@ async function main() {
     out = { error: error instanceof Error ? error.message : String(error) };
   } finally {
     try { ws?.close(); } catch { /* already closed */ }
-    out.stopped = await (stopping ??= stop(browser, port));
+    out.stopped = await finish();
     out.singleton = singleton;
     print(out);
   }

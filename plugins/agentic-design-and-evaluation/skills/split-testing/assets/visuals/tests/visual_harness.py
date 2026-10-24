@@ -1,6 +1,7 @@
 """Shared paths and helpers for the visual library's tests."""
 from __future__ import annotations
 
+import atexit
 import contextlib
 import json
 import os
@@ -88,7 +89,10 @@ def run_node(*args: object, timeout: int = 60) -> subprocess.CompletedProcess:
 # (com.google.Chrome.chrome_chrome_url_fetcher_.*, com.microsoft.Edge.
 # msedge_url_fetcher_.*) in its temp directory: its TMPDIR, or /tmp when a
 # wrapper such as firejail strips that variable. It never removes the folder,
-# however it is stopped.
+# however it is stopped. A browser that keeps running removes its own about
+# three seconds after making it (3.1 s measured); FETCHER_GRACE gives it three
+# times that before a folder counts as left by a browser that has ended.
+FETCHER_GRACE = 10.0
 FETCHER_LEFTOVER = re.compile(r"^(?:com|org)\.[\w-]+\.[\w-]+\.\w*url_fetcher_\.\w+$")
 
 
@@ -109,22 +113,70 @@ def fetcher_leftovers() -> set[Path]:
     return found
 
 
+# A browser's last processes can outlive its launcher by a moment and still
+# make their fetcher folder.
+FETCHER_LATE = 3.0
+_WINDOWS: list[tuple[float, float]] = []
+
+
 @contextlib.contextmanager
 def no_fetcher_leftovers():
-    """Remove, when the block ends, the empty fetcher folders that appeared
-    while it ran. A folder is attributed by time, not by process: one that
-    another browser made during the block goes too, which is harmless because
-    those folders stay empty; rmdir keeps any folder that holds something."""
-    since, before = time.time() - 1, fetcher_leftovers()
+    """Note the span in which the block's browsers run, for
+    sweep_fetcher_leftovers to remove the fetcher folders made in it; this
+    module sweeps once more at exit."""
+    since = time.time() - 1
     try:
         yield
     finally:
-        for folder in fetcher_leftovers() - before:
-            try:
-                if folder.stat().st_mtime >= since:
-                    folder.rmdir()
-            except OSError:
-                continue
+        _WINDOWS.append((since, time.time() + FETCHER_LATE))
+
+
+def sweep_fetcher_leftovers() -> None:
+    """Remove the empty fetcher folders made in the noted spans, each once it
+    is FETCHER_GRACE seconds old. A folder is attributed by time, not by
+    process, so the wait spares the folder of another browser that is still
+    running, which removes its own well within that span; what is left
+    belongs to a browser that has ended, a test's or another's. A browser
+    stalled for longer than FETCHER_GRACE after making its folder can still
+    lose it. rmdir keeps any folder that holds something."""
+    if not _WINDOWS:
+        return
+    time.sleep(max(0.0, max(end for _, end in _WINDOWS) - time.time()))
+    made = {}
+    for folder in fetcher_leftovers():
+        with contextlib.suppress(OSError):
+            if any(start <= (mtime := folder.stat().st_mtime) <= end for start, end in _WINDOWS):
+                made[folder] = mtime
+    if made:
+        time.sleep(max(0.0, max(made.values()) + FETCHER_GRACE - time.time()))
+    for folder in made:
+        with contextlib.suppress(OSError):
+            if folder.stat().st_mtime + FETCHER_GRACE <= time.time():
+                folder.rmdir()
+    _WINDOWS.clear()  # only now, so an interrupted sweep is repeated at exit
+
+
+atexit.register(sweep_fetcher_leftovers)
+
+
+def singleton_folder(profile: Path) -> Path | None:
+    """The folder a profile's SingletonSocket link names, if it has one."""
+    try:
+        return Path(os.readlink(profile / "SingletonSocket")).parent
+    except OSError:
+        return None
+
+
+def remove_singleton(profile: Path, before: Path | None) -> None:
+    """Remove the singleton folder of a browser that did not close itself, as
+    its profile's SingletonSocket link names it. A folder the link named
+    before that browser started (`before`, another browser's or a stale one),
+    a relative one, or one that holds more than Singleton* entries is kept."""
+    folder = singleton_folder(profile)
+    if folder and folder != before and folder.is_absolute():
+        with contextlib.suppress(OSError):
+            if all(entry.name.startswith("Singleton") for entry in folder.iterdir()):
+                shutil.rmtree(folder)
 
 
 _CASES: dict[str, list[dict]] = {}
