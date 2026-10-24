@@ -461,6 +461,9 @@ const before = [reason.getBoundingClientRect().top, document.querySelector(".av-
 window.scrollBy({ top: -40, behavior: "instant" }); await frames();
 const after = [reason.getBoundingClientRect().top, document.querySelector(".av-tip").getBoundingClientRect().top];
 out.follows = { shown: tip().shown, mark: after[0] - before[0], card: after[1] - before[1] };
+out.beforeScrollAway = tip().shown;
+window.scrollBy({ top: -innerHeight * 3, behavior: "instant" }); await frames();
+out.afterScrollAway = tip().shown;
 // A mark scrolled out of the box that clips it, though still inside the window, takes its card with it.
 const box = document.createElement("div"); box.style.cssText = "width:200px;overflow-x:auto;white-space:nowrap";
 const wide = document.createElement("div"); wide.style.cssText = "width:1200px;padding:10px 0";
@@ -470,8 +473,6 @@ box.scrollIntoView({ block: "center", behavior: "instant" }); await frames(); aw
 point(inner, "pointerdown", "touch"); out.boxShown = tip().shown;
 box.scrollLeft = 500; await frames();
 out.afterBoxScroll = tip().shown;
-window.scrollBy({ top: -innerHeight * 3, behavior: "instant" }); await frames();
-out.afterScrollAway = tip().shown;
 
 return out;
 """
@@ -492,13 +493,15 @@ return out;
         self.assertEqual(out["follows"]["mark"], 40, "the page did not scroll the mark")
         self.assertTrue(out["follows"]["shown"], "a small scroll puts the card away")
         self.assertLessEqual(abs(out["follows"]["card"] - out["follows"]["mark"]), 2, f"the card is stranded when its mark moves: {out['follows']}")
+        self.assertTrue(out["beforeScrollAway"], "no card was open to scroll away")
         self.assertFalse(out["afterScrollAway"], "the card stays after its mark has left the window")
         self.assertTrue(out["boxShown"])
         self.assertFalse(out["afterBoxScroll"], "the card stays after its mark has scrolled out of the box that clips it")
 
     def test_a_card_longer_than_a_short_window_still_fits_it_whole(self) -> None:
         # In a window 420 px high, under the top bar: a run's very long reason, and a card whose value and note each run far
-        # past a screen, whether opened by a touch or the pointer; and again after the window shrinks with a card open.
+        # past a screen, whether opened by a touch or the pointer; and again when the window shrinks to 260 px with a card
+        # open.
         trial = json.loads((EXAMPLES / "fictional-trial.json").read_text(encoding="utf-8"))
         long_run = next(r for r in trial["runs"] if r.get("passed") is True and isinstance(r.get("judge"), dict))
         long_run["judge"]["reason"] = " ".join(["The reply names the harbour, the light and the mood, and invents nothing the photograph does not show."] * 60)
@@ -512,10 +515,14 @@ const reason = [...document.querySelectorAll(".av-ledger .av-why > span[data-av-
 point(reason, "pointerdown", "touch"); out.reason = box();
 const big = document.createElement("span"); big.textContent = "x"; big.setAttribute("data-av-tip", JSON.stringify({ title: "A long value", rows: [["Value", "word ".repeat(2000)], ["More", "word ".repeat(2000)], ["Still more", "word ".repeat(2000)]], note: "note ".repeat(2000) }));
 document.querySelector(".av-block").appendChild(big); point(big, "pointerover"); out.huge = box();
+// The window shrinks with the card open, and nothing else happens: the card is fitted again to the room left.
+const resized = new Promise(done => addEventListener("resize", done, { once: true }));
+avDriveResize("1440x260"); await resized;
+await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))); out.shrunk = box();
 return out;
 """
         out = self.drive(page, width=1440, height=420, script=script)["result"]
-        for name in ("reason", "huge"):
+        for name in ("reason", "huge", "shrunk"):
             card = out[name]
             with self.subTest(card=name):
                 self.assertTrue(card["shown"], "the card does not open")

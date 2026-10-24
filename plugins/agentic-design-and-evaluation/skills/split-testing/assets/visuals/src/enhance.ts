@@ -367,7 +367,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     if (!tip) return;
     const top = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
     const vw = doc.documentElement.clientWidth || win.innerWidth, vh = doc.documentElement.clientHeight || win.innerHeight;
-    tip.style.maxHeight = `${Math.max(120, vh - top - 12)}px`;
+    tip.style.maxHeight = `${Math.max(0, vh - top - 12)}px`;
     // Measured from the window's left edge, so its width is its own and not what room its last place left it; and by its
     // own size, not its box mid-animation (it opens from slightly smaller), so it lands exactly where placed. A row's
     // card points at the row's own mark (data-av-tip-at), not at the middle of the row.
@@ -392,7 +392,8 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
   on(report, "focusin", (e: FocusEvent) => { const el = (e.target as Element).closest?.<HTMLElement>(TIPPED); if (el) showTip(el); else hideTip(); });
   on(report, "focusout", (e: FocusEvent) => { if (!(e.relatedTarget instanceof Element && e.relatedTarget.closest(TIPPED))) hideTip(); });
   on(doc, "keydown", (e: KeyboardEvent) => { if (e.key === "Escape") hideTip(); });
-  /** Whether any of a mark is in view: inside the window and every box around it that clips what overflows it. */
+  /** Whether any of a mark is in view: inside the window and the inside of every box around it that clips what overflows
+   * it (within its border and scrollbars). */
   const seen = (mark: HTMLElement) => {
     if (!mark.getClientRects().length) return false;
     const r = mark.getBoundingClientRect();
@@ -402,8 +403,8 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     for (let box = mark.parentElement; box && box !== doc.body && left < right && top < bottom; box = box.parentElement) {
       const cs = win.getComputedStyle(box);
       if (cs.overflowX === "visible" && cs.overflowY === "visible") continue;
-      const b = box.getBoundingClientRect();
-      left = Math.max(left, b.left); top = Math.max(top, b.top); right = Math.min(right, b.right); bottom = Math.min(bottom, b.bottom);
+      const b = box.getBoundingClientRect(), x = b.left + box.clientLeft, y = b.top + box.clientTop;
+      left = Math.max(left, x); top = Math.max(top, y); right = Math.min(right, x + box.clientWidth); bottom = Math.min(bottom, y + box.clientHeight);
     }
     return left < right && top < bottom;
   };
