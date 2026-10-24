@@ -124,7 +124,8 @@
       const first = marks.find(m => m.tabIndex === 0);
       first.focus();
       const tip = $(".av-tip");
-      out.tip = { shown: tip?.hasAttribute("data-show") || false, text: tip?.textContent || "", label: first.getAttribute("aria-label") };
+      out.tip = { shown: tip?.hasAttribute("data-show") || false, over: tip?.querySelector(".av-tip-over")?.textContent || "", title: tip?.querySelector(".av-tip-title")?.textContent || "",
+        outcome: [...(tip?.querySelectorAll(".av-tip-rows dt") || [])].find(d => d.textContent === "Outcome")?.nextElementSibling?.textContent || "", label: first.getAttribute("aria-label") };
       key(first, "ArrowRight");
       const second = document.activeElement;
       out.rightMoved = second !== first && marks.includes(second);

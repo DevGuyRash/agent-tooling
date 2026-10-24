@@ -6,7 +6,7 @@
  * assumes what an alternative is: a sandwich, an ad, a prompt, a research
  * direction. Values the author did not supply are shown as missing, never
  * filled in, and totals appear only when the author supplied the weights. */
-import { attrs, count as whole, esc, fmtInt, fmtPct, inline, isNum, num, prose, wilson, entriesOf, keysIn, stripText } from "../core";
+import { attrs, count as whole, esc, fmtInt, fmtPct, inline, isNum, num, prose, wilson, entriesOf, keysIn, stripText, ticksHtml, tipAttr } from "../core";
 import { diffRuns, diffStats, DiffLine, lineDiff, splitLines, wordDiff } from "../diff";
 import { fingerprint } from "../identity";
 import type { Alternative, Comparison, Metric, MetricSummary, Observation } from "../comparison-model";
@@ -255,7 +255,8 @@ interface WinCounts { wins: number; losses: number; ties: number }
 
 function prefTrack(ctx: RenderContext, id: string, p: number, ci: [number, number] | null, what = "Win rate"): string {
   const c = ctx.arms.color(id);
-  return `<span class="av-jv-track" role="img" aria-label="${esc(ci ? `${what} ${fmtPct(p)}, 95% interval ${fmtPct(ci[0])} to ${fmtPct(ci[1])}` : `${what} ${fmtPct(p)}`)}" style="--c:${c}">${ci ? `<span class="av-ci" style="--c:${c};--lo:${pos(ci[0])};--hi:${pos(ci[1])};--p:${pos(p)}"></span>` : ""}<span class="av-pt" style="--c:${c};--p:${pos(p)}"></span></span>`;
+  // Its own small axis (0, 50 and 100%) beneath it, since a table row has no shared one.
+  return `<span class="av-jv-track" role="img" aria-label="${esc(ci ? `${what} ${fmtPct(p)}, 95% interval ${fmtPct(ci[0])} to ${fmtPct(ci[1])}` : `${what} ${fmtPct(p)}`)}" style="--c:${c}"${tipAttr({ over: what, title: ctx.arms.label(id), mark: ctx.arms.mark(id), rows: [[what, fmtPct(p)], ["95% interval", ci ? `${fmtPct(ci[0])} to ${fmtPct(ci[1])}` : "none"]] })}>${ci ? `<span class="av-ci" style="--c:${c};--lo:${pos(ci[0])};--hi:${pos(ci[1])};--p:${pos(p)}"></span>` : ""}<span class="av-pt" style="--c:${c};--p:${pos(p)}" data-av-tip-at></span></span>${ticksHtml([0, .5, 1].map(x => ({ x, label: fmtPct(x) })))}`;
 }
 
 export function preferences(input: PreferencesInput, ctx: RenderContext): string {

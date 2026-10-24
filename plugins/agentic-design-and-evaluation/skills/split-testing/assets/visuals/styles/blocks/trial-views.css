@@ -132,7 +132,7 @@
 .av-inv-remedy code, .av-inv-gloss code { overflow-wrap: anywhere; }
 
 /* ----------------------------------------------------------------- ledger */
-.av-why-chip { display: inline-block; margin: 0 4px 2px 0; padding: 0 6px; border-radius: 4px; background: var(--av-fail-soft); color: var(--st-fail, var(--av-fail)); font: 600 .72rem/1.6 var(--av-font-mono); }
+.av-why-chip { display: inline-block; max-width: 100%; overflow-wrap: anywhere; margin: 0 4px 2px 0; padding: 0 6px; border-radius: 4px; background: var(--av-fail-soft); color: var(--st-fail, var(--av-fail)); font: 600 .72rem/1.6 var(--av-font-mono); }
 .av-why-chip--more { background: var(--av-sunken); color: var(--av-ink-2); }
 .av-why-code { font-size: .74rem !important; }
 
@@ -155,7 +155,7 @@
   /* The name column keeps to 44% of the box and to the 9rem the minimum width budgets for it (its one-line width, if
      less); a word that cannot break still gets its room. */
   .av-heatmap .av-ck-col-name { width: max(var(--ck-hard), min(44cqw, 9rem, var(--ck-full))); }
-  .av-heatmap thead th .av-arm-label { overflow-wrap: anywhere; hyphens: auto; }
+  .av-heatmap thead th .av-arm-label { overflow-wrap: break-word; hyphens: auto; }
   .av-mention-list { grid-template-columns: 1fr; }
 }
 @media print {

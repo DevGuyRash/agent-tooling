@@ -3,14 +3,15 @@
  * pairwise preferences, cost, invalid runs, the run ledger and the plan. Each
  * reads the trial in the render context and accepts explicit data where a
  * caller has its own. */
-import { attrs, axisTicks, count, esc, fmtDelta, fmtInt, fmtNum, fmtPct, fmtSeconds, fmtUsd, inline, isNum, logTicks, median, num, Outcome, secondsUnit, outcomeBadge, outcomeLabel, outcomeMark, prose, quantile, wilson, entriesOf, keysIn, valuesIn, stripText } from "../core";
+import { attrs, axisTicks, count, esc, gridlines, niceTicks, ticksHtml, tipAttr, fmtDelta, fmtInt, fmtNum, fmtPct, fmtSeconds, fmtUsd, inline, isNum, logTicks, median, num, Outcome, secondsUnit, outcomeBadge, outcomeLabel, outcomeMark, prose, quantile, wilson, entriesOf, keysIn, valuesIn, stripText } from "../core";
 import type { RenderContext } from "../model";
 import { failureCause } from "../failure";
 import { casesWords, countPooling } from "../stats";
 import { armCases, armTally, CasePair, caseChecks, checkTable, costMeasures, displayPath, invalidReason, judgePassWhen, judgeQuestion, outcomeOf, pairedOrder, scenarioOf, tally, TrialReport, TrialRun, trialAxes, wellFormedPairs } from "../trial-model";
-import { empty, frame, FrameInput, pos } from "./frame";
+import { empty, frame, FrameInput, pos, runCard } from "./frame";
 
 const caseLabel = (ctx: RenderContext, id: string) => ctx.caseLabels[id] || id;
+const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
 function trialOf(ctx: RenderContext, block: string): TrialReport {
   if (!ctx.trial) throw new TypeError(`A ${block} block needs trial data: supply the report spec's "trial" field (trialReport() does).`);
   return ctx.trial;
@@ -267,7 +268,9 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
     const seg = noise ? `<span class="av-noise-seg" aria-hidden="true" style="--nlo:${pos(noise[0])};--nhi:${pos(noise[1])}"></span>` : "";
     return `<div class="av-ladder-row${variant ? " av-ladder-row--variant" : ""}" role="row"${attrs(byCase ? { "data-case": r.case } : { "data-arm": r.arm })}>
 <div class="av-ladder-label" role="rowheader">${name}${note ? `<span class="av-ladder-note">${esc(note)}</span>` : ""}${flags}</div>
-<div class="av-ladder-track${p === null ? " av-ladder-track--empty" : ""}" role="cell" style="${style}" aria-label="${esc(label)}">${seg}${ci ? '<span class="av-ci"></span>' : ""}${p === null ? `<span class="av-ladder-none">${bad ? "counts invalid" : "no valid runs"}</span>` : pooled ? '<span class="av-share"></span>' : '<span class="av-pt"></span>'}</div>
+<div class="av-ladder-track${p === null ? " av-ladder-track--empty" : ""}" role="cell" style="${style}" aria-label="${esc(label)}"${tipAttr({ over: byCase ? "Pass rate, by case" : "Pass rate", title: byCase ? caseLabel(ctx, r.case!) : ctx.arms.label(r.arm!), mark: byCase ? undefined : ctx.arms.mark(r.arm!),
+  rows: [["Passed", bad ? `counts invalid: ${r.k} of ${r.n}` : `${r.k} of ${r.n} valid runs${pooled ? ` across ${casesWords(across, false)}` : ""}`], ["Pass rate", pooled || p === null ? "" : fmtPct(p)], ["95% interval", ci ? `${fmtPct(ci[0])} to ${fmtPct(ci[1])}` : pooled ? "none: runs on one case repeat it" : "none"], ["Invalid", r.invalid ? fmtInt(r.invalid) : ""]],
+  note: isBase ? "The baseline." : note })}>${seg}${ci ? '<span class="av-ci"></span>' : ""}${p === null ? `<span class="av-ladder-none">${bad ? "counts invalid" : "no valid runs"}</span>` : pooled ? '<span class="av-share" data-av-tip-at></span>' : '<span class="av-pt" data-av-tip-at></span>'}</div>
 <div class="av-ladder-num" role="cell"><span class="av-frac${bad ? " av-frac--bad" : ""}"><b>${r.k}</b>/${r.n}</span>${pooled && !bad ? `<span class="av-across">across ${casesWords(across, false)}</span>` : `<span class="av-rate">${bad ? "—" : fmtPct(p)}</span>`}${ci ? `<span class="av-ci-text">${fmtPct(ci[0])}–${fmtPct(ci[1])}</span>` : r.unstated && !pooled && !bad && p !== null ? '<span class="av-across">no interval</span>' : ""}</div>
 </div>`;
   };
@@ -278,7 +281,8 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
     const spread = pts.length > 1 ? `${Math.round((hi - lo) * 100)} points apart` : "spread not measurable";
     return `<div class="av-ladder-group" role="rowgroup"><div class="av-ladder-group-label"><span class="av-eyebrow">Identical arms</span><span>${esc(spread)}: the noise between copies of the same material</span></div><div class="av-ladder-group-rows">${item.rows.map(r => row(r, pts.length > 1 ? [lo, hi] : undefined)).join("")}</div></div>`;
   }).join("");
-  const ticks = [0, .25, .5, .75, 1].map(t => `<span style="--x:${pos(t)}">${t * 100}%</span>`).join("");
+  const tickList = [0, .25, .5, .75, 1].map(t => ({ x: t, label: fmtPct(t) }));
+  const axisRow = (top: boolean) => `<div class="av-ladder-axis${top ? "" : " av-ladder-axis--bottom"}" role="row" aria-hidden="true"><span class="av-axis-title">pass rate</span>${ticksHtml(tickList, { top })}<span></span></div>`;
   const references = (Array.isArray(input.references) ? input.references : []).filter(r => r && isNum(r.value));
   const refs = [
     ...(baseRate !== null ? [{ value: baseRate, label: `${ctx.arms.label(input.baseline!)} ${base && count(base.cases ?? 1) > 1 ? `${base.k}/${base.n}` : fmtPct(baseRate)}`, kind: "base" }] : []),
@@ -288,7 +292,7 @@ export function ladder(input: LadderInput, ctx: RenderContext): string {
   const pooledRow = (r: LadderRow) => count(r.cases ?? 1) > 1;
   const legend = `<p class="av-legend">${rows.some(r => !pooledRow(r)) ? '<span><span class="av-legend-ci"></span>95% Wilson interval</span><span><span class="av-legend-pt"></span>pass rate over valid runs</span>' : ""}${rows.some(pooledRow) ? '<span><span class="av-legend-share"></span>share of runs passed, pooled over cases: plain counts, no interval</span>' : ""}${groups.length ? '<span><span class="av-legend-noise"></span>spread between identical arms</span>' : ""}${baseRate !== null ? '<span class="av-legend-item--ref"><span class="av-legend-ref"></span>baseline</span>' : ""}${references.length ? '<span class="av-legend-item--ref"><span class="av-legend-ref av-legend-ref--rule"></span>threshold</span>' : ""}</p>`;
   return frame("ladder", { title: input.title, description: input.description, note: input.note, id: input.id, read: input.read },
-    `${legend}<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}${byCase ? " av-ladder-grid--cases" : ""}" role="table" aria-label="${esc(input.title || (byCase ? "Pass rate by case" : "Pass rate by arm"))}"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks}</div><span></span></div>${body}${ref}</div>`, byCase ? { "data-by": "case" } : {});
+    `${legend}<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}${byCase ? " av-ladder-grid--cases" : ""}" role="table" aria-label="${esc(input.title || (byCase ? "Pass rate by case" : "Pass rate by arm"))}">${axisRow(true)}${body}${ref}${rows.length > 4 ? axisRow(false) : ""}</div>`, byCase ? { "data-by": "case" } : {});
 }
 
 // ------------------------------------------------------------------ tapestry
@@ -316,7 +320,7 @@ export function tapestry(input: TapestryInput, ctx: RenderContext): string {
       const why = causePhrase(r, data);
       const judge = o === "pass" && r.judge?.verdict ? " · judge pass" : "";
       const label = `${caseLabel(ctx, cs)} · ${ctx.arms.label(arm)} · repeat ${num(r.repeat) ?? "?"}: ${outcomeLabel[o]}${judge}${why ? ` · ${why}` : ""}`;
-      return `<button type="button" class="av-run av-run--${o}"${attrs({ "data-run": i, title: label, "aria-label": label })}></button>`;
+      return `<button type="button" class="av-run av-run--${o}"${attrs({ "data-run": i, "aria-label": label })}${runCard(ctx, r, [...(judge ? [["Judge", "pass"]] : []), ...(why ? [["Why", why]] : [])] as Array<[string, string]>)}></button>`;
     }).join("");
     const share = t.valid ? t.pass / t.valid : null;
     const ci = t.interval;
@@ -528,8 +532,10 @@ export function pairwise(input: PairwiseInput, ctx: RenderContext): string {
     const rate = num(st?.a_win_rate), iv = Array.isArray(st?.a_win_rate_interval) ? (st!.a_win_rate_interval as unknown[]).map(num) : null;
     return { ...o, total: segs.reduce((n, k) => n + o[k], 0), rate, interval: iv && iv[0] !== null && iv[1] !== null ? [iv[0], iv[1]] as [number, number] : null };
   };
-  let maxTotal = 1;
-  for (const [, p] of pairs) for (const st of [p.overall, ...valuesIn(p.scenarios || {})]) maxTotal = Math.max(maxTotal, clean(st as never).total);
+  let most = 1;
+  for (const [, p] of pairs) for (const st of [p.overall, ...valuesIn(p.scenarios || {})]) most = Math.max(most, clean(st as never).total);
+  // Bars are drawn against the round tick at or past the most pairs, so the axis under them reads to its end.
+  const scale = axisTicks(0, most, 4).filter(Number.isInteger), maxTotal = scale[scale.length - 1] || most;
   const html = pairs.map(([key, p]) => {
     const [a, b] = (Array.isArray(p.arms) ? p.arms : ["A", "B"]).map(String);
     const present = new Set<string>();
@@ -540,7 +546,7 @@ export function pairwise(input: PairwiseInput, ctx: RenderContext): string {
     const line = (label: string, raw: unknown, strong = false) => {
       const s = clean(raw as never), total = s.total || 1;
       const pooledCases = strong && decisiveCases > 1 ? decisiveCases : 0;
-      const bar = segs.map(k => s[k] ? `<span class="av-duel-seg av-duel-seg--${k}" style="flex:${s[k]}" title="${esc(`${words[k]}: ${s[k]}`)}">${s[k] / total > .1 && k !== "inconsistent" ? s[k] : ""}</span>` : "").join("");
+      const bar = segs.map(k => s[k] ? `<span class="av-duel-seg av-duel-seg--${k}" style="flex:${s[k]}"${tipAttr({ over: `${label} · ${ctx.arms.label(a)} against ${ctx.arms.label(b)}`, title: cap(words[k]), mark: k === "a_wins" ? ctx.arms.mark(a) : k === "b_wins" ? ctx.arms.mark(b) : undefined, rows: [["Pairs", `${s[k]} of ${s.total}`], ["Share of pairs", fmtPct(s[k] / total)]] })}>${s[k] / total > .1 && k !== "inconsistent" ? s[k] : ""}</span>` : "").join("");
       const decisive = s.a_wins + s.b_wins;
       const rate = !decisive ? '<span class="av-muted">no decisive pairs</span>'
         : pooledCases ? `<span class="av-frac"><b>${s.a_wins}</b>/${decisive}</span> <span class="av-across">decisive pairs won, across ${casesWords(pooledCases, false)}</span>`
@@ -550,7 +556,9 @@ export function pairwise(input: PairwiseInput, ctx: RenderContext): string {
     // One scale for every row, the overall row included, so a bar's length always means the same number of pairs.
     const scen = entriesOf(p.scenarios || {}).map(([s, st]) => line(caseLabel(ctx, s), st)).join("");
     const legend = `<p class="av-legend av-duel-legend">${segs.filter(k => present.has(k)).map(k => `<span><span class="av-sw av-duel-seg--${k}"></span>${k === "a_wins" ? ctx.arms.glyph(a) : k === "b_wins" ? ctx.arms.glyph(b) : ""}${esc(words[k])}</span>`).join("")}<span>Bar length is the number of pairs, on one scale for every row.</span></p>`;
-    return `<div class="av-duel" data-pair="${esc(key)}" style="--c-a:${ctx.arms.color(a)};--c-b:${ctx.arms.color(b)}"><div class="av-duel-head">${ctx.arms.tag(a)}<span class="av-duel-vs">preferred over</span>${ctx.arms.tag(b)}<span class="av-duel-rate-head">${esc(ctx.arms.label(a))} win rate</span></div>${legend}${line("All cases", p.overall, true)}${scen}</div>`;
+    // Bar length counts pairs, on one scale for every row: its axis runs under the rows.
+    const axis = `<div class="av-duel-row av-duel-axis" aria-hidden="true"><span class="av-axis-title">pairs judged</span><div class="av-duel-track">${ticksHtml(scale.map(t => ({ x: t / maxTotal, label: String(t) })))}</div><span></span></div>`;
+    return `<div class="av-duel" data-pair="${esc(key)}" style="--c-a:${ctx.arms.color(a)};--c-b:${ctx.arms.color(b)}"><div class="av-duel-head">${ctx.arms.tag(a)}<span class="av-duel-vs">preferred over</span>${ctx.arms.tag(b)}<span class="av-duel-rate-head">${esc(ctx.arms.label(a))} win rate</span></div>${legend}${line("All cases", p.overall, true)}${scen}${axis}</div>`;
   }).join("");
   return frame("pairwise", input, html);
 }
@@ -590,6 +598,7 @@ export function cost(input: CostInput, ctx: RenderContext): string {
     const x = (v: number) => log ? (Math.log10(Math.max(v, lo)) - Math.log10(lo)) / Math.max(1e-9, Math.log10(hi) - Math.log10(lo)) : (v - d0) / Math.max(1e-12, d1 - d0);
     const fmt = (v: number | null, axis = false) => m.unit === "seconds" ? (axis ? (isNum(v) ? `${fmtNum(v / su.div)} ${su.unit}` : "—") : fmtSeconds(v)) : m.unit === "usd" ? fmtUsd(v) : fmtNum(v);
     const ticks = log ? logTicks(lo, hi, 4) : lin.filter(t => t >= d0 - 1e-9 && t <= d1 + 1e-9);
+    const tickList = ticks.map(t => ({ x: x(t), label: fmt(t, true) })), grid = gridlines(tickList);
     const rowsHtml = arms.map(a => {
       const runs = valid.filter(r => r.arm === a && isNum(m.get(r)));
       const invalidHere = data.runs.filter(r => r.arm === a && r.passed === null).length;
@@ -601,16 +610,15 @@ export function cost(input: CostInput, ctx: RenderContext): string {
       const delta = data.baseline && a !== data.baseline && !(m.id === "input_tokens" && m.note) ? num(data.pct_vs_baseline?.[a]?.[m.id === "seconds" ? "seconds_mean" : m.id === "commands" ? "commands_mean" : m.id]?.median) : null;
       const dots = shown.map((r, j) => {
         const o = outcomeOf(r), v = m.get(r)!, why = o === "fail" ? causePhrase(r, data) : "";
-        return `<button type="button" class="av-dot av-dot--${o}"${attrs({ "data-run": ctx.runIndex.get(r), style: `--x:${pos(x(v))};--j:${(j % 7) - 3}`, title: `${ctx.arms.label(a)} · ${caseLabel(ctx, r.scenario)} r${num(r.repeat) ?? "?"}: ${fmt(v)} · ${outcomeLabel[o]}${why ? ` · ${why}` : ""}`, "aria-label": `${ctx.arms.label(a)}, ${caseLabel(ctx, r.scenario)} repeat ${num(r.repeat) ?? "?"}: ${fmt(v)}, ${outcomeLabel[o]}${why ? `, ${why}` : ""}` })}></button>`;
+        return `<button type="button" class="av-dot av-dot--${o}"${runCard(ctx, r, [[cap(m.label), fmt(v)], ...(why ? [["Why", why]] : [])] as Array<[string, string]>)}${attrs({ "data-run": ctx.runIndex.get(r), style: `--x:${pos(x(v))};--j:${(j % 7) - 3}`, "aria-label": `${ctx.arms.label(a)}, ${caseLabel(ctx, r.scenario)} repeat ${num(r.repeat) ?? "?"}: ${fmt(v)}, ${outcomeLabel[o]}${why ? `, ${why}` : ""}` })}></button>`;
       }).join("");
       const q1 = quantile(vals, .25), q3 = quantile(vals, .75);
       const iqr = q1 !== null && q3 !== null && (!log || q1 > 0) ? `<span class="av-iqr" style="--lo:${pos(x(q1))};--hi:${pos(x(q3))}"></span>` : "";
       const mdMark = md !== null && (!log || md > 0) ? `<span class="av-median" style="--x:${pos(x(md))}"></span>` : "";
-      return `<div class="av-strip-row" data-arm="${esc(a)}" style="--c:${ctx.arms.color(a)}"><div class="av-strip-label">${ctx.arms.tag(a, { id: false })}</div><div class="av-strip-track">${iqr}${mdMark}${dots}</div><div class="av-strip-num">${md !== null ? `<span class="av-strong">${fmt(md)}</span><span class="av-muted">median</span>` : '<span class="av-muted">no valid runs</span>'}${delta !== null ? `<span class="av-delta" title="median across cases of the per-case difference from ${esc(data.baseline!)}">${fmtDelta(delta * 100)}</span>` : ""}${atZero ? `<span class="av-zero" title="A log scale cannot place zero">${atZero} at 0</span>` : ""}${invalidHere ? `<span class="av-zero" title="Invalid runs are not placed on this axis">${outcomeMark("invalid")} ${invalidHere} not shown</span>` : ""}</div></div>`;
+      return `<div class="av-strip-row" data-arm="${esc(a)}" style="--c:${ctx.arms.color(a)}"><div class="av-strip-label">${ctx.arms.tag(a, { id: false })}</div><div class="av-strip-track">${grid}${iqr}${mdMark}${dots}</div><div class="av-strip-num">${md !== null ? `<span class="av-strong">${fmt(md)}</span><span class="av-muted">median</span>` : '<span class="av-muted">no valid runs</span>'}${delta !== null ? `<span class="av-delta" title="median across cases of the per-case difference from ${esc(data.baseline!)}">${fmtDelta(delta * 100)}</span>` : ""}${atZero ? `<span class="av-zero" title="A log scale cannot place zero">${atZero} at 0</span>` : ""}${invalidHere ? `<span class="av-zero" title="Invalid runs are not placed on this axis">${outcomeMark("invalid")} ${invalidHere} not shown</span>` : ""}</div></div>`;
     }).join("");
     // A label aligns to its tick, and only one at the plot's edge is pulled inside it.
-    const tickClass = (at: number) => at <= 0.03 ? ' class="av-tick--start"' : at >= 0.97 ? ' class="av-tick--end"' : "";
-    const axis = `<div class="av-strip-axis" aria-hidden="true"><span></span><div class="av-strip-ticks">${ticks.map(t => `<span${tickClass(x(t))} style="--x:${pos(x(t))}">${fmt(t, true)}</span>`).join("")}</div><span></span></div>`;
+    const axis = `<div class="av-strip-axis" aria-hidden="true"><span class="av-axis-title">${esc(m.label)}${log ? ", log scale" : ""}</span>${ticksHtml(tickList)}<span></span></div>`;
     return `<div class="av-strip-panel"><h4 class="av-strip-title">${esc(m.label)}${m.note ? ` <span class="av-muted">· ${esc(m.note)}</span>` : ""}${log ? ' <span class="av-muted">· log scale</span>' : d0 > 0 ? ' <span class="av-muted">· axis starts at ' + esc(fmt(d0, true)) + "</span>" : ""}</h4>${rowsHtml}${axis}</div>`;
   }).filter(Boolean).join("");
   if (!panels) return nothing();
@@ -634,7 +642,7 @@ export function invalid(input: FrameInput, ctx: RenderContext): string {
     const chips = [...perArm.entries()].sort((a, b) => b[1] - a[1] || ctx.arms.index(a[0]) - ctx.arms.index(b[0])).map(([a, n]) => `<span class="av-inv-arm">${ctx.arms.tag(a, { id: false })}<b>${n}</b></span>`).join("");
     const excerpt = typeof runs[0]?.final_message_excerpt === "string" ? runs[0].final_message_excerpt : "";
     const sample = excerpt ? `<p class="av-inv-sample"><span class="av-eyebrow">First message</span> ${esc(clip(excerpt, 220))}</p>` : "";
-    const marks = runs.map(r => { const label = `Invalid run: ${caseLabel(ctx, r.scenario)}, ${ctx.arms.label(r.arm)}, repeat ${num(r.repeat) ?? "?"} · ${reason}`; return `<button type="button" class="av-run av-run--invalid"${attrs({ "data-run": ctx.runIndex.get(r), title: label, "aria-label": label })}></button>`; }).join("");
+    const marks = runs.map(r => { const label = `Invalid run: ${caseLabel(ctx, r.scenario)}, ${ctx.arms.label(r.arm)}, repeat ${num(r.repeat) ?? "?"} · ${reason}`; return `<button type="button" class="av-run av-run--invalid"${attrs({ "data-run": ctx.runIndex.get(r), "aria-label": label })}${runCard(ctx, r, [["Why", reason]])}></button>`; }).join("");
     return `<div class="av-inv-group"><div class="av-inv-head"><code class="av-inv-reason">${esc(reason)}</code><span class="av-inv-count">${plural(runs.length, "run")}</span></div><p class="av-inv-gloss">${inline(why.text)}</p><p class="av-inv-remedy"><span class="av-eyebrow">Remedy</span> ${inline(why.remedy)}</p><div class="av-inv-arms">${chips}</div>${sample}<div class="av-tap-marks av-inv-marks">${marks}</div></div>`;
   }).join("");
   const share = bad.length / Math.max(1, data.runs.length);
@@ -666,12 +674,13 @@ export function ledger(input: LedgerInput, ctx: RenderContext): string {
   const time = clock(Math.max(0, ...data.runs.map(r => num(r.seconds) ?? 0)));
   const reason = (r: TrialRun) => {
     const c = causeOf(r, data);
-    if (c.invalid) { const w = invalidReason(c.invalid); return `<span${attrs({ title: w.text.replace(/`/g, "") })}><code class="av-why-code">${esc(c.invalid)}</code> ${inline(w.text)}</span>`; }
+    // A reason cut to two lines here has its whole text in its card.
+    if (c.invalid) { const w = invalidReason(c.invalid); return `<span${tipAttr({ over: "Invalid run", title: c.invalid, note: w.text.replace(/`/g, "") })}><code class="av-why-code">${esc(c.invalid)}</code> ${inline(w.text)}</span>`; }
     // Judge reasons mark names as `code`, as the drawer shows them.
-    if (outcomeOf(r) === "pass") return `<span>${inline(clip(String(r.judge?.reason || ""), 240))}</span>`;
+    if (outcomeOf(r) === "pass") { const why = String(r.judge?.reason || ""); return `<span${why ? tipAttr({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Judge's reason", note: why.replace(/`/g, ""), rows: why.length > 600 ? [["Whole text", "select the run"]] : [] }) : ""}>${inline(clip(why, 240))}</span>`; }
     const chips = c.checks.slice(0, 3).map(n => `<span class="av-why-chip">✕ ${esc(n)}</span>`).join("") + (c.checks.length > 3 ? `<span class="av-why-chip av-why-chip--more">+${c.checks.length - 3}</span>` : "");
     const text = c.judge !== null ? `${c.judge ? `judge: ${c.judge}` : "judge said fail"}` : c.checks.length ? "" : c.text || "no recorded cause";
-    return `<span${attrs({ title: [c.checks.length ? `failed: ${c.checks.join(", ")}` : "", text].filter(Boolean).join(" · ") || undefined })}>${chips}${text ? `${chips ? " " : ""}${inline(clip(text, 240))}` : ""}</span>`;
+    return `<span${tipAttr({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Why it failed", rows: [["Failed checks", c.checks.join(", ")], ["Whole text", text.length > 600 || c.checks.join(", ").length > 240 ? "select the run" : ""]], note: text.replace(/`/g, "") || undefined })}>${chips}${text ? `${chips ? " " : ""}${inline(clip(text, 240))}` : ""}</span>`;
   };
   const rows = data.runs.map((r, i) => {
     const o = outcomeOf(r), tk = tokens ? num(tokens.get(r)) : null, sec = num(r.seconds);

@@ -5,11 +5,12 @@
  * browser feature is used only where present, so a partial document (or a test
  * double) gets the behaviors it can support and never an error. */
 import { esc, fmtNum, fmtSeconds, inline, isNum, outcomeBadge, outcomeLabel, outcomeMark, entriesOf, keysIn } from "./core";
+import type { Tip } from "./core";
 import { failureCause, invalidReason } from "./failure";
 import { attachMermaid, DiagramController } from "./mermaid";
 import { createContext, RenderContext, ReportSpec } from "./model";
 import { renderReport } from "./report";
-import { attachReader } from "./reader";
+import { attachReader, fitScrollReserve } from "./reader";
 import { costUsd, displayPath, judgeQuestion, outcomeOf, recordPath, TrialReport, TrialRun, TrialScenario } from "./trial-model";
 
 const THEME_KEY = "av-theme";
@@ -223,6 +224,25 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
   const sectionOf = new Map(links.map(a => [a, byIdIn(linkedId(a))] as const));
   const sections = [...sectionOf.values()].filter((s): s is HTMLElement => !!s);
   const bar = report.querySelector<HTMLElement>(".av-topbar");
+  // The section index keeps its current entry in view by scrolling sideways within itself only: scrolling the entry into
+  // view would also move the page, since the bar it sits in lies inside the page's scroll reserve.
+  const showLink = (a: HTMLElement) => {
+    const strip = a.closest<HTMLElement>(".av-toc");
+    if (!strip) return;
+    const r = a.getBoundingClientRect(), t = strip.getBoundingClientRect();
+    // An entry wider than the strip shows its beginning (its number and the start of its title).
+    if (r.left < t.left || r.width > t.width - 24) strip.scrollLeft -= t.left - r.left + 12;
+    else if (r.right > t.right) strip.scrollLeft += r.right - t.right + 12;
+  };
+  // A scroll to a section stops just under the top bar, however tall the bar has grown (a long name wraps in it). The page
+  // keeps one reserve, so it is taken from whichever report's bar is showing, and taken again whenever a bar changes
+  // size, appears or is hidden (a collection hides its own bar while a report opened in it shows, and adds a back link).
+  if (bar) {
+    const reserve = () => fitScrollReserve(doc);
+    reserve();
+    if (typeof win.ResizeObserver === "function") { const watch = new win.ResizeObserver(reserve); watch.observe(bar); offs.push(() => watch.disconnect()); }
+    else on(win, "resize", reserve);
+  }
   let spyQueued = false;
   const spy = () => {
     spyQueued = false;
@@ -231,12 +251,14 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     for (const s of sections) if (s.getBoundingClientRect().top <= line) current = s;
     for (const a of links) {
       const active = !!current && sectionOf.get(a) === current;
-      if (active !== a.hasAttribute("aria-current")) { a.toggleAttribute("aria-current", active); if (active) a.scrollIntoView?.({ block: "nearest", inline: "nearest" }); }
+      if (active !== a.hasAttribute("aria-current")) { a.toggleAttribute("aria-current", active); if (active) showLink(a); }
     }
     bar?.toggleAttribute("data-scrolled", win.scrollY > 8);
   };
   const queue = () => { if (!spyQueued) { spyQueued = true; win.requestAnimationFrame ? win.requestAnimationFrame(spy) : spy(); } };
   on(win, "scroll", queue, { passive: true }); on(win, "resize", queue);
+  // A resize can leave the current entry outside a narrower strip though it stays current.
+  on(win, "resize", () => { const a = report.querySelector<HTMLElement>(".av-toc a[aria-current]"); if (a) showLink(a); });
   if (links.length || bar) spy();
 
   // A second skip link straight to the ledger, the record of every run.
@@ -327,33 +349,166 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     }
   }
 
-  // Tooltips: run marks show their accessible name at once, in the report's
-  // own style. The native title would repeat it late, so it moves to aria-label.
+  // Hover cards: a mark shows its card at once, in the report's own style: a card written for it (data-av-tip, see
+  // tipAttr in core.ts) or else its accessible name. The native title would repeat it late, so it moves to aria-label.
+  // A touch shows the card of the mark touched; a touch elsewhere, Escape, or scrolling its mark out of the window puts it away.
   const tip = make("div", { class: "av-tip", "aria-hidden": "true" });
   if (tip) report.appendChild(tip);
   let tipFor: Element | null = null;
   for (const el of all(`${MARKS}[title]`)) { if (!el.getAttribute("aria-label")) el.setAttribute("aria-label", el.title); el.removeAttribute("title"); }
   const hideTip = () => { if (tip && tipFor) { tip.removeAttribute("data-show"); tipFor = null; } };
-  const showTip = (el: HTMLElement) => {
-    if (!tip || dialog?.open) return;
-    const text = el.getAttribute("data-av-tip") || el.getAttribute("aria-label") || "";
-    if (!text) { hideTip(); return; }
-    tipFor = el; tip.textContent = text;
-    tip.setAttribute("data-show", "");
-    const r = el.getBoundingClientRect(), t = tip.getBoundingClientRect(), vw = doc.documentElement.clientWidth || win.innerWidth;
-    const cx = r.left + r.width / 2, top = bar ? bar.getBoundingClientRect().bottom : 0;
-    const left = Math.max(8, Math.min(vw - t.width - 8, cx - t.width / 2));
-    const above = r.top - t.height - 10 >= top + 4;
+  const part = (tag: string, cls: string, text?: string) => { const el = doc.createElement(tag); el.className = cls; if (text !== undefined) el.textContent = text; return el; };
+  /** Fill the card from the mark; false when the mark has nothing to say. */
+  const fill = (el: HTMLElement): boolean => {
+    const raw = el.getAttribute("data-av-tip") || el.getAttribute("aria-label") || "";
+    let card: Tip | null = null;
+    if (raw.startsWith("{")) { try { const v = JSON.parse(raw); if (v && typeof v.title === "string") card = v; } catch { /* plain text */ } }
+    tip!.replaceChildren();
+    tip!.style.removeProperty("--c");
+    tip!.toggleAttribute("data-rich", !!card);
+    if (!card) { tip!.textContent = raw; return !!raw; }
+    if (card.over) tip!.append(part("p", "av-tip-over", card.over));
+    const head = part("p", "av-tip-head");
+    if (card.mark) {
+      const glyph = part("span", "av-glyph");
+      glyph.setAttribute("data-shape", String(card.mark.shape)); glyph.style.setProperty("--c", String(card.mark.color));
+      tip!.style.setProperty("--c", String(card.mark.color));
+      head.append(glyph);
+    }
+    head.append(part("span", "av-tip-title", card.title));
+    tip!.append(head);
+    const rows = Array.isArray(card.rows) ? card.rows.filter(r => Array.isArray(r) && r.length === 2) : [];
+    if (rows.length) { const dl = part("dl", "av-tip-rows"); for (const [k, v] of rows) dl.append(part("dt", "", String(k)), part("dd", "", String(v))); tip!.append(dl); }
+    if (card.note) tip!.append(part("p", "av-tip-note", card.note));
+    return true;
+  };
+  /** Set the card beside its mark: above it where there is room under the top bar, else below, within the window, and
+   * never taller than the room under the top bar, so it can always be placed whole. */
+  const place = (el: HTMLElement) => {
+    if (!tip) return;
+    const top = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
+    const vw = doc.documentElement.clientWidth || win.innerWidth, vh = doc.documentElement.clientHeight || win.innerHeight;
+    // Below the room a card needs for its frame and a line, it is closed rather than spill past the window; pointing at
+    // its mark again opens it once there is room.
+    if (vh - top - 12 < 48) { hideTip(); return; }
+    tip.style.maxHeight = `${vh - top - 12}px`;
+    // Measured from the window's left edge, so its width is its own and not what room its last place left it; and by its
+    // own size, not its box mid-animation (it opens from slightly smaller), so it lands exactly where placed. A row's
+    // card points at the row's own mark (data-av-tip-at), not at the middle of the row.
+    tip.style.left = "0px";
+    const r = (el.querySelector("[data-av-tip-at]") || el).getBoundingClientRect(), t = { width: tip.offsetWidth, height: tip.offsetHeight };
+    const left = Math.max(8, Math.min(vw - t.width - 8, r.left + r.width / 2 - t.width / 2));
+    const above = r.top - t.height - 12 >= top + 4;
     tip.style.left = `${Math.round(left)}px`;
-    tip.style.top = `${Math.round(above ? r.top - t.height - 10 : r.bottom + 10)}px`;
-    tip.style.setProperty("--ax", `${Math.round(cx - left)}px`);
+    tip.style.top = `${Math.round(Math.max(top + 4, Math.min(vh - t.height - 8, above ? r.top - t.height - 12 : r.bottom + 12)))}px`;
     tip.setAttribute("data-side", above ? "top" : "bottom");
   };
-  on(report, "pointerover", (e: PointerEvent) => { const el = (e.target as Element).closest?.<HTMLElement>(TIPPED); if (el && el !== tipFor) showTip(el); });
-  on(report, "pointerout", (e: PointerEvent) => { const el = (e.target as Element).closest?.(TIPPED); if (el && !(e.relatedTarget instanceof Node && el.contains(e.relatedTarget))) hideTip(); });
+  const showTip = (el: HTMLElement) => {
+    if (!tip || dialog?.open) return;
+    if (!fill(el)) { hideTip(); return; }
+    tipFor = el;
+    tip.setAttribute("data-show", "");
+    place(el);
+  };
+  on(report, "pointerover", (e: PointerEvent) => { if (e.pointerType === "touch") return; const el = (e.target as Element).closest?.<HTMLElement>(TIPPED); if (el && el !== tipFor) showTip(el); });
+  on(report, "pointerout", (e: PointerEvent) => { if (e.pointerType === "touch") return; const el = (e.target as Element).closest?.(TIPPED); if (el && !(e.relatedTarget instanceof Node && el.contains(e.relatedTarget))) hideTip(); });
+  on(doc, "pointerdown", (e: PointerEvent) => { if (e.pointerType !== "touch") return; const el = (e.target as Element).closest?.<HTMLElement>(TIPPED); if (el && report.contains(el)) showTip(el); else hideTip(); });
   on(report, "focusin", (e: FocusEvent) => { const el = (e.target as Element).closest?.<HTMLElement>(TIPPED); if (el) showTip(el); else hideTip(); });
   on(report, "focusout", (e: FocusEvent) => { if (!(e.relatedTarget instanceof Element && e.relatedTarget.closest(TIPPED))) hideTip(); });
-  on(win, "scroll", hideTip, { passive: true });
+  on(doc, "keydown", (e: KeyboardEvent) => { if (e.key === "Escape") hideTip(); });
+  /** Whether any of a mark is in view: inside the window and the inside of every box around it that clips what overflows
+   * it (within its border and scrollbars). */
+  const seen = (mark: HTMLElement) => {
+    if (!mark.getClientRects().length) return false;
+    const r = mark.getBoundingClientRect();
+    let { left, top, right, bottom } = r;
+    left = Math.max(left, 0); top = Math.max(top, 0);
+    right = Math.min(right, doc.documentElement.clientWidth || win.innerWidth); bottom = Math.min(bottom, doc.documentElement.clientHeight || win.innerHeight);
+    // The boxes that clip a mark are those that hide or scroll their overflow (the library draws no mark fixed to the
+    // window or inside a transformed or contained box).
+    for (let box = mark.parentElement; box && box !== doc.body && left < right && top < bottom; box = box.parentElement) {
+      const cs = win.getComputedStyle(box);
+      if (cs.overflowX === "visible" && cs.overflowY === "visible") continue;
+      const b = box.getBoundingClientRect(), x = b.left + box.clientLeft, y = b.top + box.clientTop;
+      left = Math.max(left, x); top = Math.max(top, y); right = Math.min(right, x + box.clientWidth); bottom = Math.min(bottom, y + box.clientHeight);
+    }
+    return left < right && top < bottom;
+  };
+  // When the page, or a box the mark is in, scrolls, the card follows its mark, and goes once the mark has left the window;
+  // other boxes scrolling (the top bar's section index following the page) leave it be.
+  let follow = 0;
+  on(doc, "scroll", (e: Event) => {
+    const t = e.target, el = tipFor as HTMLElement | null;
+    if (!el || follow || !(t === doc || t === doc.documentElement || (t instanceof Node && t.contains(el)))) return;
+    follow = win.requestAnimationFrame(() => {
+      follow = 0;
+      if (tipFor !== el) return;
+      if (seen(el.querySelector<HTMLElement>("[data-av-tip-at]") || el)) place(el); else hideTip();
+    });
+  }, { passive: true, capture: true });
+  on(win, "resize", () => { if (tipFor) place(tipFor as HTMLElement); });
+
+  // Scatter points that overlap at the plot's drawn size are set apart, every one inside the plot, and a moved point keeps
+  // a thin line back to where its values put it; again whenever the plot is resized. Two layouts are tried: pushing
+  // overlapping pairs apart, which moves points least where there is room; and seating each overlapping group on a
+  // sunflower spiral about its middle (in left-to-right order, the spiral pulled in from the edges until it fits) before
+  // pushing, which packs a crowded spot or row. Of those that separate every point, the one moving none far wins.
+  type Spot = { x: number; y: number; dx: number; dy: number };
+  const R0 = 11, GAP = 24; // a point is 22px wide
+  const layout = (start: Array<{ x: number; y: number }>, W: number, H: number, seat: boolean) => {
+    const at: Spot[] = start.map(p => ({ ...p, dx: 0, dy: 0 }));
+    const inside = (a: Spot) => { a.dx = Math.min(Math.max(a.dx, R0 - a.x), W - R0 - a.x); a.dy = Math.min(Math.max(a.dy, R0 - a.y), H - R0 - a.y); };
+    if (seat) {
+      const seen = new Set<number>();
+      at.forEach((a, i) => {
+        if (seen.has(i)) return;
+        const group = [i]; seen.add(i);
+        for (let k = 0; k < group.length; k++) at.forEach((b, j) => { if (!seen.has(j) && Math.hypot(b.x - at[group[k]].x, b.y - at[group[k]].y) < GAP) { seen.add(j); group.push(j); } });
+        if (group.length < 2) return;
+        const R = 13.5 * Math.sqrt(group.length - 1) + R0, fit = (v: number, w: number) => w >= 2 * R ? Math.min(Math.max(v, R), w - R) : w / 2;
+        const cx = fit(group.reduce((t, j) => t + at[j].x, 0) / group.length, W), cy = fit(group.reduce((t, j) => t + at[j].y, 0) / group.length, H);
+        const seats = group.map((_, k) => ({ x: cx + 13.5 * Math.sqrt(k) * Math.cos(k * 2.39996), y: cy + 13.5 * Math.sqrt(k) * Math.sin(k * 2.39996) })).sort((p, q) => p.x - q.x || p.y - q.y);
+        group.sort((p, q) => at[p].x - at[q].x || at[p].y - at[q].y).forEach((j, k) => { at[j].dx = seats[k].x - at[j].x; at[j].dy = seats[k].y - at[j].y; });
+      });
+    }
+    at.forEach(inside);
+    let clear = false;
+    for (let round = 0; round < 400 && !clear; round++) {
+      clear = true;
+      for (let i = 0; i < at.length; i++) for (let j = i + 1; j < at.length; j++) {
+        const a = at[i], b = at[j];
+        let ux = a.x + a.dx - b.x - b.dx, uy = a.y + a.dy - b.y - b.dy;
+        const d = Math.hypot(ux, uy);
+        if (d >= GAP - .01) continue;
+        if (d < .01) { const t = (i + j) * 2.39996; ux = Math.cos(t); uy = Math.sin(t); } else { ux /= d; uy /= d; }
+        const push = (GAP - d) / 2 + .1;
+        a.dx += ux * push; a.dy += uy * push; b.dx -= ux * push; b.dy -= uy * push; inside(a); inside(b); clear = false;
+      }
+    }
+    return { at, clear, far: Math.max(0, ...at.map(a => Math.hypot(a.dx, a.dy))) };
+  };
+  const spread = (plot: HTMLElement) => {
+    const pts = all<HTMLElement>(".av-cg-pt", plot);
+    for (const p of pts) for (const v of ["--dx", "--dy", "--len", "--ang"]) p.style.removeProperty(v);
+    const box = plot.getBoundingClientRect();
+    if (!box.width) return; // hidden: spread again when shown
+    const start = pts.map(p => { const r = p.getBoundingClientRect(); return { x: r.left - box.left, y: r.top - box.top }; });
+    const pushed = layout(start, box.width, box.height, false), seated = layout(start, box.width, box.height, true);
+    const { at } = pushed.clear && (!seated.clear || pushed.far <= seated.far) ? pushed : seated;
+    pts.forEach((p, i) => {
+      const { dx, dy } = at[i];
+      if (Math.hypot(dx, dy) < .5) return;
+      p.style.setProperty("--dx", `${dx.toFixed(1)}px`); p.style.setProperty("--dy", `${dy.toFixed(1)}px`);
+      p.style.setProperty("--len", `${Math.hypot(dx, dy).toFixed(1)}px`); p.style.setProperty("--ang", `${Math.atan2(dy, dx).toFixed(3)}rad`);
+    });
+  };
+  const plots = all(".av-cg-plot");
+  plots.forEach(spread);
+  if (plots.length && typeof win.ResizeObserver === "function") {
+    const watch = new win.ResizeObserver(entries => { for (const x of entries) spread(x.target as HTMLElement); });
+    plots.forEach(p => watch.observe(p));
+    offs.push(() => watch.disconnect());
+  }
 
   // Roving focus: each tapestry, cost panel and invalid group is one tab stop.
   // Arrow keys move between its marks, Home and End go to the ends, and Enter

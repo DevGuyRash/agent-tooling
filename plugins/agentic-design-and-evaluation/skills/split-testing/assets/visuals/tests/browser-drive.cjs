@@ -7,7 +7,9 @@
 //        [--width 390] [--height 900] [--script FILE] [--tab-to SELECTOR]
 //
 // --script FILE holds the body of an async function evaluated in the page once
-// the report is ready; its return value is reported as "result". --tab-to
+// the report is ready; its return value is reported as "result". The script may
+// call avDriveResize("WIDTHxHEIGHT") to have the window resized, as a reader
+// resizing it would, and wait for the page's resize event. --tab-to
 // presses Tab from the top of the page until SELECTOR has focus and reports
 // how many presses that took as "tabs" (null when it was never reached).
 "use strict";
@@ -47,7 +49,12 @@ async function main() {
     await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error("the DevTools socket did not open")); });
     let next = 0;
     const pending = new Map();
-    ws.onmessage = event => { const m = JSON.parse(event.data); if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } };
+    let resize = null;
+    ws.onmessage = event => {
+      const m = JSON.parse(event.data);
+      if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); }
+      else if (m.method === "Runtime.bindingCalled" && m.params.name === "avDriveResize") resize?.(m.params.payload);
+    };
     const send = (method, params = {}) => new Promise((resolve, reject) => {
       const id = ++next;
       const timer = setTimeout(() => { pending.delete(id); reject(new Error(`${method} timed out`)); }, 20000);
@@ -60,6 +67,8 @@ async function main() {
       return r.result.value;
     };
     await send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 1, mobile: false });
+    await send("Runtime.enable"); await send("Runtime.addBinding", { name: "avDriveResize" });
+    resize = payload => { const [w, h] = String(payload).split("x").map(Number); if (w > 0 && h > 0) send("Emulation.setDeviceMetricsOverride", { width: w, height: h, deviceScaleFactor: 1, mobile: false }).catch(() => {}); };
     await send("Page.navigate", { url });
     let ready = false;
     for (let i = 0; i < 200 && !ready; i++) { await sleep(50); try { ready = await evaluate("!!document.querySelector('[data-av-ready]')"); } catch { /* navigating */ } }

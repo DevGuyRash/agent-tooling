@@ -50,7 +50,9 @@ export function themeCss(): string {
     // The page and its running text grow with the screen, continuously: the page from 1180px to 88% of the screen (at most
     // 1800px), the measure from 68ch past a 1280px screen to 92ch, a readable limit every prose cap also keeps.
     + "--av-radius:10px;--av-radius-sm:6px;--av-measure:clamp(68ch,calc(68ch + (100vw - 1280px) * .35),92ch);"
-    + "--av-page:clamp(1180px,88vw,1800px);--av-gutter:clamp(16px,4vw,40px);";
+    + "--av-page:clamp(1180px,88vw,1800px);--av-gutter:clamp(16px,4vw,40px);"
+    // The top bar's height, the page's scroll reserve under it; enhance.ts sets the measured height once it runs.
+    + "--av-bar-h:52px;";
   return [
     "/* Generated from src/theme.ts by build.mjs. */",
     `:root{${shared}${block(light, armHues.light)}color-scheme:light;}`,

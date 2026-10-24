@@ -43,3 +43,16 @@
 @media print {
   .av-read-how { display: block; }
 }
+
+/* Long running text (prose() marks it av-flow) fills a wide row by flowing into columns of a readable width, two or more
+   where its section has room; a narrower section keeps its single measure. A reading box or theme head holding such text
+   spans its row with it. The class is doubled to outrank each block's own measure. */
+.av-section, .av-masthead-inner { container: av-page / inline-size; }
+@container av-page (min-width: 72rem) {
+  /* The cap gives way only where two 58ch columns, their gap and the block's own padding and border (up to 3rem) fit
+     (the second term is negative below that width and huge above it), so a block too narrow for two columns keeps a
+     readable line, not one the row's whole width. */
+  .av-flow.av-flow, .av-section-reading:has(> .av-flow) { max-width: min(100%, max(var(--av-measure), (100% - 116ch - 5.5rem) * 10000000)); column-width: 58ch; column-gap: 2.5rem; }
+  .av-rx-theme-head:has(.av-flow) { max-width: none; }
+}
+

@@ -87,6 +87,18 @@ function element(html, marker) {
   fail(`unclosed element at ${marker}`);
 }
 
+/** Every hover card in rendered markup, as a reader sees it: its heading above (`over`), its title, its rows as an
+ * object of label to value, and its note; a mark with plain words has them as `title`. */
+function cards(html) {
+  const unescape = v => v.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  return [...html.matchAll(/data-av-tip="([^"]*)"/g)].map(m => {
+    const raw = unescape(m[1]);
+    if (!raw.startsWith("{")) return { over: "", title: raw, rows: {}, note: "" };
+    const c = JSON.parse(raw);
+    return { over: c.over || "", title: c.title, rows: Object.fromEntries(c.rows || []), note: c.note || "" };
+  });
+}
+
 /** Section ids of a rendered report, in order. */
 function sectionIds(html) {
   return [...html.matchAll(/<section class="av-section" id="([^"]+)"/g)].map(m => m[1]);
@@ -142,6 +154,7 @@ function autoMountDocument(blocks) {
 }
 
 module.exports = {
+  cards,
   VISUALS, loadVisuals, plain, test, report,
   fail, includes, excludes, equal, ok, count, withoutStory, throws, element, sectionIds, snippet,
   drawerOpener, autoMountDocument,

@@ -26,9 +26,11 @@ class CollectionViewsTest(NodeCases):
         self.run_script_cases()
 
 
-def write_collection(directory: Path, **changes) -> Path:
+def write_collection(directory: Path, costs: bool = False, **changes) -> Path:
     """Three members by file: the fictional trial with its narrative, the same trial and narrative again, and a
-    comparison; the collection tells its own story and reads each of its sections."""
+    comparison; the collection tells its own story and reads each of its sections. With `costs`, every run of the trial
+    records a cost that differs by arm, and the trial its per-arm cost change from the baseline, so changes can be set
+    against their cost."""
     collection = {
         "title": "Collected reports",
         "story": {"background": "Two readings of one invented trial and one invented lunch.", "intent": "Show a collection to a reader new to it.", "questions": ["Does the collection read as one story?"], "covers": "Three reports.", "notCovered": "Anything real."},
@@ -46,6 +48,16 @@ def write_collection(directory: Path, **changes) -> Path:
     for name, source in (("fictional-trial.json", EXAMPLES / "fictional-trial.json"), ("narratives/fictional-narrative.json", EXAMPLES / "fictional-narrative.json"),
                          ("sandwich.json", EXAMPLES / "comparisons/sandwich.json"), ("sandwich-narrative.json", EXAMPLES / "comparisons/sandwich-narrative.json")):
         (directory / name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    if costs:
+        trial = json.loads((directory / "fictional-trial.json").read_text(encoding="utf-8"))
+        arms = list(dict.fromkeys(r["arm"] for r in trial["runs"]))
+        for r in trial["runs"]:
+            r.setdefault("usage", {})["cost_usd"] = round(0.02 * (1 + 0.35 * arms.index(r["arm"])) * (1 + 0.05 * (r.get("repeat") or 0)), 4)
+        # trial.py's per-case median difference in cost per run from the baseline, as a share, for every other arm.
+        trial["baseline"] = "current"
+        # One change costs twenty times its reference more per run (+2000%), past any fixed bound an axis might assume.
+        trial["pct_vs_baseline"] = {a: {"cost_usd": {"median": 20.0 if i == len(arms) - 1 else round(0.35 * i - 0.2, 2)}} for i, a in enumerate(arms) if a != "current"}
+        (directory / "fictional-trial.json").write_text(json.dumps(trial), encoding="utf-8")
     again = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
     again["decision"] = {**again["decision"], "verdict": "mixed", "label": "Read again"}
     (directory / "narratives/again.json").write_text(json.dumps(again), encoding="utf-8")
@@ -266,6 +278,132 @@ class CollectionBrowserTest(unittest.TestCase):
 
     setUp, tearDown, build, drive = TB.BrowserRenderTest.setUp, TB.BrowserRenderTest.tearDown, TB.BrowserRenderTest.build, TB.BrowserRenderTest.drive
 
+    def test_each_setup_reads_on_its_own_row_and_the_scatter_spreads_its_points(self) -> None:
+        # The owner, of the setups' tracks: "how would I know what marks are what when the triangle has it's own min and
+        # max?", "better upper/lower bounds and spacing between the marks (but not overdoing it)"; of the scatter, a hover
+        # that showed the chart's caption rather than the point's own numbers.
+        page = self.build("--collection", write_collection(self.dir, costs=True))
+        script = TB.CARD + """
+const box = e => e.getBoundingClientRect(), meets = (a, b) => a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+const plots = [...document.querySelectorAll(".av-block--shifts .av-cx-lanes")].map(plot => {
+  const rows = [...plot.querySelectorAll(".av-cx-row")];
+  const marks = rows.map(r => r.querySelector(".av-cx-pt")).filter(Boolean).map(box);
+  return { rows: rows.length, named: rows.filter(r => r.querySelector(".av-cx-who").textContent.trim()).length, valued: rows.filter(r => /\\d|—/.test(r.querySelector(".av-cx-val").textContent)).length,
+    overlaps: marks.filter((a, i) => marks.some((b, j) => j > i && meets(a, b))).length, ticks: [...plot.querySelectorAll(".av-cx-axis .av-tick")].map(t => t.textContent) };
+});
+const row = document.querySelector(".av-block--shifts .av-cx-row");
+point(row, "pointerover"); const card = tip(), who = row.querySelector(".av-cx-who").textContent.trim(), report = row.closest(".av-sh-row").querySelector(".av-sh-name a").textContent.trim();
+const dots = [...document.querySelectorAll(".av-cg-pt")];
+// The points are round: two overlap when their centres are nearer than a point is wide.
+const spots = dots.map(d => { const r = box(d.querySelector(".av-cg-dot")); return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width }; });
+const pt = dots[0]; if (pt) point(pt, "pointerover");
+return { plots, card, who, report, points: dots.length, links: dots.filter(d => /^#report\\//.test(d.getAttribute("href"))).length, pointOverlaps: spots.filter((a, i) => spots.some((b, j) => j > i && Math.hypot(a.x - b.x, a.y - b.y) < a.w - 0.5)).length,
+  x: [...document.querySelectorAll(".av-cg > .av-ticks .av-tick")].map(t => t.textContent), y: [...document.querySelectorAll(".av-cg-yticks span")].map(t => t.textContent), pointCard: pt ? tip() : null };
+"""
+        out = self.drive(page, width=1440, script=script)["result"]
+        self.assertTrue(out["plots"], "no setup plot drawn")
+        for plot in out["plots"]:
+            self.assertGreater(plot["rows"], 1)
+            self.assertEqual(plot["named"], plot["rows"], "a setup's row does not name it")
+            self.assertEqual(plot["valued"], plot["rows"], "a setup's row does not say its value")
+            self.assertEqual(plot["overlaps"], 0, "two setups' marks are drawn over each other")
+            self.assertEqual(plot["ticks"], ["0%", "25%", "50%", "75%", "100%"], "a pass rate is not read against a labelled 0–100% axis")
+        self.assertTrue(out["card"]["shown"])
+        self.assertEqual(out["card"]["title"], out["who"], "a setup's card does not name the setup")
+        self.assertTrue(out["card"]["over"].startswith(out["report"]), "a setup's card does not name the report it was tested in")
+        self.assertIn("Pass rate", out["card"]["rows"])
+        self.assertGreater(out["points"], 1, "the scatter draws no changes to spread")
+        self.assertEqual(out["links"], out["points"], "a change on the scatter does not open its report")
+        self.assertEqual(out["pointOverlaps"], 0, "two changes are drawn over each other")
+        self.assertGreaterEqual(int(out["x"][-1].strip("+%")), 2000, f"the cost axis stops short of a +2000% change: {out['x']}")
+        for axis in ("x", "y"):
+            labels = out[axis]
+            self.assertEqual(labels[0].lstrip("−"), labels[-1].lstrip("+"), f"the {axis} axis is not symmetric about zero: {labels}")
+            self.assertTrue(all(t.strip("+−%") in ("±0", "0") or int(t.strip("+−%")) % 5 == 0 for t in labels), f"the {axis} axis has bounds that are not round: {labels}")
+        self.assertTrue(out["pointCard"]["shown"] and out["pointCard"]["rows"], "a change's card is empty")
+        self.assertNotIn("Cost against gain", out["pointCard"]["title"], "a change shows the chart's caption, not its own numbers")
+
+    def test_scatter_points_on_one_spot_stay_apart_inside_the_plot_and_their_cards_follow_them(self) -> None:
+        # Ten reports of the same trial put ten changes on each of three spots, on a phone and a wide screen; and twelve
+        # changes a few pixels apart along one line, the case a sideways push alone leaves overlapped.
+        path = write_collection(self.dir, costs=True)
+        collection = json.loads(path.read_text(encoding="utf-8"))
+        base = collection["members"][0]
+        collection["members"] += [{**base, "id": f"copy-{i}"} for i in range(9)]
+        path.write_text(json.dumps(collection), encoding="utf-8")
+        page = self.build("--collection", path)
+        script = TB.CARD + """
+const plot = document.querySelector(".av-cg-plot"), box = plot.getBoundingClientRect();
+const dots = [...plot.querySelectorAll(".av-cg-dot")].map(d => { const r = d.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, d }; });
+const overlaps = dots.filter((a, i) => dots.some((b, j) => j > i && Math.hypot(a.x - b.x, a.y - b.y) < a.w - 0.5)).length;
+const outside = dots.filter(a => a.x - a.w / 2 < box.left - 0.5 || a.x + a.w / 2 > box.right + 0.5 || a.y - a.w / 2 < box.top - 0.5 || a.y + a.w / 2 > box.bottom + 0.5).length;
+// The card of the point moved farthest centres on that point, not on the spot its values put it.
+const far = dots.reduce((m, a) => Math.hypot(parseFloat(a.d.parentElement.style.getPropertyValue("--dx")) || 0, parseFloat(a.d.parentElement.style.getPropertyValue("--dy")) || 0) > Math.hypot(parseFloat(m.d.parentElement.style.getPropertyValue("--dx")) || 0, parseFloat(m.d.parentElement.style.getPropertyValue("--dy")) || 0) ? a : m);
+far.d.scrollIntoView({ block: "center", behavior: "instant" });
+await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 100)))); // the scroll settles, as it does before a reader points
+const r = far.d.getBoundingClientRect(); far.d.parentElement.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }));
+await new Promise(done => setTimeout(done, 300)); // the card's opening movement settles
+// Centred over the point, or as near as the window's 8px margins allow.
+const card = tip(), t = document.querySelector(".av-tip").getBoundingClientRect(), vw = document.documentElement.clientWidth;
+const expected = Math.max(8, Math.min(vw - t.width - 8, (r.left + r.right) / 2 - t.width / 2));
+return { n: dots.length, overlaps, outside, card: card.shown && card.title === JSON.parse(far.d.parentElement.getAttribute("data-av-tip")).title, cardOff: Math.abs(t.left - expected) };
+"""
+        cases = [("same spots", page, 30)]
+        # Twelve reports whose one change each lands a little further right on one line: the same gain, cost changes
+        # 0.35 points apart.
+        row = write_collection(self.dir, costs=True)
+        collection = json.loads(row.read_text(encoding="utf-8"))
+        trial = json.loads((self.dir / "fictional-trial.json").read_text(encoding="utf-8"))
+        for i in range(12):
+            t = {**trial, "pct_vs_baseline": {a: {"cost_usd": {"median": -0.0333 + 0.0035 * i}} for a in trial["pct_vs_baseline"]}}
+            (self.dir / f"row-{i}.json").write_text(json.dumps(t), encoding="utf-8")
+        collection["members"] = [{**collection["members"][0], "id": f"row-{i}", "trial": f"row-{i}.json"} for i in range(12)]
+        row.write_text(json.dumps(collection), encoding="utf-8")
+        built = TB.run_python(TB.REPORT, "--collection", row, "--output", self.dir / "row.html", "--replace")
+        self.assertEqual(built.returncode, 0, built.stderr)
+        cases.append(("one line", self.dir / "row.html", 12))
+        for (name, html, least), width in ((c, w) for c in cases for w in (390, 1440)):
+            with self.subTest(case=name, width=width):
+                out = self.drive(html, width=width, script=script)["result"]
+                self.assertGreaterEqual(out["n"], least, "the fixture draws fewer changes than it should")
+                self.assertEqual(out["overlaps"], 0, "changes on one spot are drawn over each other")
+                self.assertEqual(out["outside"], 0, "a change is pushed out of the plot")
+                self.assertTrue(out["card"], "the moved change's own card does not open")
+                self.assertLessEqual(out["cardOff"], 3, "a moved change's card points at where it was, not where it is")
+
+    def test_a_scroll_to_a_section_clears_whichever_top_bar_shows_after_opening_and_closing_a_report(self) -> None:
+        # The collection has a one-word name; the report opened in it has a name that runs to three lines at 320 px and gains
+        # a back link. A scroll to a section clears the report's taller bar while it is open, and the collection's again once
+        # it closes.
+        narrative = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
+        narrative["kicker"] = " ".join(["A report with a long name"] * 6)
+        page = self.build("--collection", write_collection(self.dir, kicker="Short"))
+        (self.dir / "narratives/fictional-narrative.json").write_text(json.dumps(narrative), encoding="utf-8")
+        page = self.build("--collection", self.dir / "collection.json")
+        script = """
+const frames = () => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+const settle = () => new Promise(done => setTimeout(done, 600));
+const shown = sel => [...document.querySelectorAll(sel)].find(e => e.getClientRects().length);
+const clears = async () => { const bar = shown(".av-topbar"), section = [...document.querySelectorAll(".av-section[id]")].filter(s => s.getClientRects().length)[2];
+  section.scrollIntoView({ block: "start", behavior: "instant" }); await frames(); return { bar: bar.getBoundingClientRect().bottom, start: section.getBoundingClientRect().top }; };
+const out = { home: await clears() };
+location.hash = "#report/fictional"; await settle(); out.member = await clears();
+location.hash = "#reports"; await settle(); out.back = await clears();
+// From the open report straight to a collection section: where the reader's own scroll puts it, with no scroll of ours.
+// The collection's own section near its top (so the page can scroll it under the bar), other than the return address.
+const target = [...document.querySelectorAll(".av-section[id]")].filter(x => x.getClientRects().length && "#" + x.id !== location.hash)[1];
+location.hash = "#report/fictional"; await settle();
+location.hash = "#" + target.id; await new Promise(done => setTimeout(done, 1200));
+out.direct = { bar: shown(".av-topbar").getBoundingClientRect().bottom, start: target.getBoundingClientRect().top };
+return out;
+"""
+        out = self.drive(page, width=320, script=script)["result"]
+        for where in ("home", "member", "back", "direct"):
+            with self.subTest(where=where):
+                self.assertGreaterEqual(out[where]["start"], out[where]["bar"] - 1, "a scroll to a section leaves its start under the top bar")
+                self.assertLessEqual(out[where]["start"], out[where]["bar"] + 20, "a scroll to a section stops well below the bar, as for another bar's height")
+        self.assertGreater(out["member"]["bar"], out["home"]["bar"] + 12, "the report's bar is not the taller one: this checks nothing")
+
     def test_the_reader_opens_compares_and_returns(self) -> None:
         page = self.build("--collection", write_collection(self.dir))
         out = self.drive(page, width=1280, script=READER)["result"]
@@ -450,6 +588,31 @@ return out;
                 with self.subTest(view=hash, width=width):
                     out = self.drive(page, width=width, script=script % (json.dumps(hash), "() => {" + TB.CRAMPED + "}"))
                     self.assertEqual(out["result"], [], "text crushed into a column under 200 px")
+
+    def test_report_cards_fill_their_rows_on_a_wide_screen(self) -> None:
+        # A group with one report showed it as a lone 38rem card beside an empty row while other groups filled theirs.
+        # Cards now share each row evenly, a lone card filling its row, and their text keeps a readable cap.
+        source = write_collection(self.dir)
+        page = self.dir / "collection.html"
+        built = run_python(REPORT, "--collection", source, "--output", page)
+        self.assertEqual(built.returncode, 0, built.stderr)
+        script = """
+const chOf = el => { const p = document.createElement("span"); p.textContent = "0000000000"; p.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap"; el.appendChild(p); const w = p.getBoundingClientRect().width / 10; p.remove(); return w; };
+return [...document.querySelectorAll(".av-rx-list")].filter(l => l.getBoundingClientRect().width).map(list => ({
+  list: Math.round(list.getBoundingClientRect().width),
+  cards: [...list.children].map(c => { const r = c.getBoundingClientRect(); return [Math.round(r.top), Math.round(r.width)]; }),
+  headlineCaps: [...list.querySelectorAll(".av-rx-headline")].map(h => { const m = parseFloat(getComputedStyle(h).maxWidth); return Number.isFinite(m) ? Math.round(m / chOf(h) * 10) / 10 : 9999; }),
+}));
+"""
+        groups = self.drive(page, width=1920, script=script)["result"]
+        lone = [g for g in groups if len(g["cards"]) == 1]
+        pair = [g for g in groups if len(g["cards"]) == 2]
+        self.assertTrue(lone and pair, groups)
+        self.assertGreaterEqual(lone[0]["cards"][0][1], lone[0]["list"] * 0.95, "a lone report card leaves its row empty")
+        (top_a, width_a), (top_b, width_b) = pair[0]["cards"]
+        self.assertEqual(top_a, top_b, "two report cards do not share a row on a wide screen")
+        self.assertLessEqual(abs(width_a - width_b), 2, "two report cards in a row get different widths")
+        self.assertLessEqual(max(cap for g in groups for cap in g["headlineCaps"]), 92.6, "a card's headline has no readable cap")
 
     def test_phone_width_never_scrolls_the_collection_sideways(self) -> None:
         page = self.build("--collection", write_collection(self.dir))

@@ -557,9 +557,10 @@ test("durations of a minute or more read as minutes and seconds, on an axis of w
   const cost = render({ type: "cost" }, data);
   H.includes(cost, '<span class="av-strong">1 min 26 s</span>', "a median as minutes and seconds");
   H.excludes(cost, "1.43 min", "a decimal minute");
-  const ticks = [...H.element(cost, 'class="av-strip-ticks"').matchAll(/>([^<]+)<\/span>/g)].map(m => m[1]);
+  const ticks = [...H.element(cost, 'class="av-ticks"').matchAll(/>([^<]+)<\/span>/g)].map(m => m[1]);
   H.equal(ticks, ["0 min", "1 min", "2 min", "3 min", "4 min", "5 min"], "ticks round in the unit shown, the last at or past the slowest run");
-  H.includes(cost, 'class="av-tick--end" style="--x:100.000%">5 min', "only the edge label is pulled inside its tick");
+  H.includes(cost, 'data-end="end" style="--x:100.000%">5 min', "the edge label is pulled inside its tick");
+  H.equal(H.count(H.element(cost, 'class="av-ticks"'), "data-end="), 2, "only the two edge labels are");
   H.excludes(cost, "av-mark--pass", "the green pass mark in a key for arm-colored dots");
   H.includes(cost, "color: the run's arm", "the key says color is the arm");
 });

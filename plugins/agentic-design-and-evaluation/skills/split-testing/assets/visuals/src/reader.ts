@@ -11,6 +11,14 @@ import type { Collection, MemberSummary } from "./collection";
 import type { ReportSpec } from "./model";
 import { composed } from "./validate";
 
+/** The page's scroll reserve under its top bar (html scroll-padding-top reads --av-bar-h): the height of whichever
+ * report's top bar is showing. Taken whenever a bar changes size, appears or is hidden, and by the reader just before it
+ * scrolls, since it can scroll in the same moment it shows the collection again. */
+export function fitScrollReserve(doc: Document): void {
+  const bar = Array.from(doc.querySelectorAll<HTMLElement>(".av-topbar")).find(b => b.getClientRects().length);
+  if (bar) doc.documentElement.style.setProperty("--av-bar-h", `${Math.ceil(bar.getBoundingClientRect().height)}px`);
+}
+
 type MountInner = (host: HTMLElement, spec: ReportSpec, hashBase: string) => { cleanup(): void };
 type Route = { kind: "report"; id: string; base: string } | { kind: "compare"; a: string; b: string; base: string };
 const FIELDS = "input, select, textarea, [contenteditable=''], [contenteditable='true']";
@@ -238,7 +246,7 @@ export function attachReader(target: HTMLElement, data: Collection, mountInner: 
         };
         restore();
         if (typeof win.setTimeout === "function") restoreLater = win.setTimeout(() => { restoreLater = null; if (!view) restore(); }, 0);
-      } else if (el) el.scrollIntoView?.({ block: "start" });
+      } else if (el) { fitScrollReserve(doc); el.scrollIntoView?.({ block: "start", behavior: "instant" as ScrollBehavior }); }
     }
     currentHomeHash = raw;
   };

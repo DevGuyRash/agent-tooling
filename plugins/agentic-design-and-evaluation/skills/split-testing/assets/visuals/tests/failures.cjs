@@ -197,8 +197,11 @@ test("each case row quotes a representative reason, attributed, and folds the re
 });
 
 test("marks name the run and its cause, and open the drawer by run index", () => {
-  H.includes(html, 'data-run="0" title="fix · old · repeat 1: Failed. Required check builds was false (problems: compile error in main.rs)."', "the first failed run's mark");
-  H.includes(html, 'data-run="6" title="reply · old · repeat 2: Failed. The judge said fail: Promises a date."', "a judged failure's mark");
+  H.includes(html, 'data-run="0" aria-label="fix · old · repeat 1: Failed. Required check builds was false (problems: compile error in main.rs)."', "the first failed run's mark");
+  H.includes(html, 'data-run="6" aria-label="reply · old · repeat 2: Failed. The judge said fail: Promises a date."', "a judged failure's mark");
+  // Its card names the case it ran and its repeat, then the arm, its outcome and why it failed.
+  const card = H.cards(html).find(c => c.over === "fix · repeat 1" && c.rows.Why);
+  H.equal(card && [card.title, card.rows.Outcome, card.rows.Why], ["old", "Failed", "Required check builds was false (problems: compile error in main.rs)."], "the first failed run's card");
 });
 
 test("with one arm in scope the per-arm counts are left out and invalid runs of that arm still counted", () => {

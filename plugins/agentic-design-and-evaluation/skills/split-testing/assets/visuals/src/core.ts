@@ -240,6 +240,33 @@ export function logTicks(lo: number, hi: number, max = 5): number[] {
   return out.filter((_, i) => i % step === 0);
 }
 
+/** A share of a track as a CSS length, clamped to the track. */
+export function pos(x: number): string {
+  return `${(Math.max(0, Math.min(1, x)) * 100).toFixed(3)}%`;
+}
+
+// ------------------------------------------------------------- axes and hover cards
+
+/** One tick on a track: where it sits (a share of the track) and what it reads. */
+export interface Tick { x: number; label: string }
+
+/** An axis along a track: a tick mark and label at each tick, a label at either edge turned inward so none leaves the track,
+ * and on a narrow track every other label left out (styles: .av-ticks). The view places it beside its axis title. */
+export function ticksHtml(ticks: Tick[], o: { top?: boolean } = {}): string {
+  const thin = ticks.length >= 5;
+  return `<div class="av-ticks${o.top ? " av-ticks--top" : ""}" aria-hidden="true">${ticks.map((t, i) => { const end = t.x <= .03 ? "start" : t.x >= .97 ? "end" : undefined; return `<span class="av-tick"${attrs({ "data-end": end, "data-minor": thin && !end && i % 2 === 1 })} style="--x:${pos(t.x)}">${esc(t.label)}</span>`; }).join("")}</div>`;
+}
+
+/** A faint vertical line across a track at each tick, so a mark reads against the axis. */
+export const gridlines = (ticks: Tick[]): string => ticks.map(t => `<span class="av-gridline" style="--x:${pos(t.x)}" aria-hidden="true"></span>`).join("");
+
+/** A hover card (enhance.ts draws it): what was tested above, the setup or item it describes beside its mark, then its
+ * values as label and value rows, and a closing note. */
+export interface Tip { over?: string; title: string; mark?: { shape: string; color: string }; rows?: Array<[string, string]>; note?: string }
+
+/** The attribute that gives a mark its hover card; a row with no value is left out. */
+export const tipAttr = (t: Tip): string => ` data-av-tip="${esc(JSON.stringify({ ...t, rows: t.rows?.filter(r => typeof r[1] === "string" && r[1] !== "") }))}"`;
+
 // ------------------------------------------------------------- outcomes
 
 /** The three states a run can end in. Invalid is never a failure. */
@@ -262,11 +289,17 @@ export function outcomeBadge(outcome: Outcome, label?: string): string {
 
 /** Inline-limited text: paragraphs from blank lines, `code`, and **strong**. All
  * other characters are escaped, so supplied text can never become markup. */
+// Running text this long flows into columns where its container is wide (styles: .av-flow): short text stays one line of
+// thought, and text too long to fit one screen even in columns stays one column, so no one reads down and back up again.
+const FLOW_MIN = 320, FLOW_MAX = 2400;
+
 export function prose(text: string | string[] | null | undefined, className = "av-prose"): string {
   if (text === null || text === undefined) return "";
   const parts = (Array.isArray(text) ? text : String(text).split(PARAGRAPH_BREAK)).map(s => stripText(String(s))).filter(Boolean);
   if (!parts.length) return "";
-  return `<div class="${className}">${parts.map(p => `<p>${inline(p)}</p>`).join("")}</div>`;
+  const length = parts.reduce((n, p) => n + p.length, 0);
+  const flow = length >= FLOW_MIN && length <= FLOW_MAX ? " av-flow" : "";
+  return `<div class="${className}${flow}">${parts.map(p => `<p>${inline(p)}</p>`).join("")}</div>`;
 }
 
 export function inline(text: string): string {
