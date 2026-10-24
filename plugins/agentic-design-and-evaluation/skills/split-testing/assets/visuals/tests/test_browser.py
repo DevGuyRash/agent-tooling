@@ -456,8 +456,14 @@ const reason = [...document.querySelectorAll(".av-ledger .av-why > span[data-av-
 point(reason, "pointerdown", "touch");
 const r = document.querySelector(".av-tip").getBoundingClientRect();
 out.long = { shown: tip().shown, top: r.top, bottom: r.bottom, height: innerHeight };
-reason.closest(".av-scroll-x").dispatchEvent(new Event("scroll"));
-out.afterInnerScroll = tip().shown;
+// Scrolling moves the card with its mark, and once the mark has left the window the card goes with it.
+const frames = () => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+const before = [reason.getBoundingClientRect().top, document.querySelector(".av-tip").getBoundingClientRect().top];
+window.scrollBy({ top: 40, behavior: "instant" }); await frames();
+const after = [reason.getBoundingClientRect().top, document.querySelector(".av-tip").getBoundingClientRect().top];
+out.follows = { shown: tip().shown, mark: after[0] - before[0], card: after[1] - before[1] };
+window.scrollBy({ top: -innerHeight * 3, behavior: "instant" }); await frames();
+out.afterScrollAway = tip().shown;
 // Any card, whatever it holds, fits the window: one with a value far longer than a screen.
 const big = document.createElement("span"); big.textContent = "x"; big.setAttribute("data-av-tip", JSON.stringify({ title: "A long value", rows: [["Value", "word ".repeat(2000)]], note: "note ".repeat(2000) }));
 document.querySelector(".av-block").appendChild(big); point(big, "pointerover");
@@ -480,7 +486,9 @@ return out;
         self.assertTrue(out["long"]["shown"])
         self.assertGreaterEqual(out["long"]["top"], 0, "a long card starts above the screen")
         self.assertLessEqual(out["long"]["bottom"], out["long"]["height"], "a long card runs off the bottom of the screen")
-        self.assertFalse(out["afterInnerScroll"], "scrolling the list under a touch card leaves it stranded")
+        self.assertTrue(out["follows"]["shown"], "a small scroll puts the card away")
+        self.assertLessEqual(abs(out["follows"]["card"] - out["follows"]["mark"]), 2, f"the card is stranded when its mark moves: {out['follows']}")
+        self.assertFalse(out["afterScrollAway"], "the card stays after its mark has left the window")
         self.assertGreaterEqual(out["huge"]["top"], 0, "a card longer than the window starts above it")
         self.assertLessEqual(out["huge"]["bottom"], out["huge"]["height"], "a card longer than the window runs off its bottom")
 
@@ -515,10 +523,13 @@ const value = x => a[0] + (x - at(a)) / (at(b) - at(a)) * (b[0] - a[0]);
 const out = [];
 for (const dot of grid.querySelectorAll(".av-cmp-track .av-cmp-dot")) {
   dot.scrollIntoView({ block: "center", behavior: "instant" });
-  const r = dot.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-  const target = hit.closest("[data-av-tip]"); target.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }));
-  const card = tip(), said = parseFloat(document.querySelector(".av-tip-rows dd")?.textContent || "");
-  out.push({ title: card.title, said, drawn: Math.round(value(r.left + r.width / 2) * 100) / 100, span: b[0] - a[0] });
+  // As the audit points: at its middle, or just beside it within the hover area it is given.
+  const r = dot.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  const found = [[0, 0], [-4, 0], [4, 0], [0, -4], [0, 4]].map(([x, y]) => document.elementFromPoint(cx + x, cy + y)?.closest("[data-av-tip]")).find(f => f && f.matches(".av-cmp-dot"));
+  if (!found) { out.push({ title: "", said: NaN, drawn: NaN, span: 1 }); continue; }
+  found.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }));
+  const card = tip(), said = parseFloat(document.querySelector(".av-tip-rows dd")?.textContent || ""), fr = found.getBoundingClientRect();
+  out.push({ title: card.title, said, drawn: Math.round(value(fr.left + fr.width / 2) * 100) / 100, span: b[0] - a[0] });
 }
 return out;
 """

@@ -340,7 +340,7 @@ const outside = dots.filter(a => a.x - a.w / 2 < box.left - 0.5 || a.x + a.w / 2
 // The card of the point moved farthest centres on that point, not on the spot its values put it.
 const far = dots.reduce((m, a) => Math.hypot(parseFloat(a.d.parentElement.style.getPropertyValue("--dx")) || 0, parseFloat(a.d.parentElement.style.getPropertyValue("--dy")) || 0) > Math.hypot(parseFloat(m.d.parentElement.style.getPropertyValue("--dx")) || 0, parseFloat(m.d.parentElement.style.getPropertyValue("--dy")) || 0) ? a : m);
 far.d.scrollIntoView({ block: "center", behavior: "instant" });
-await new Promise(done => setTimeout(done, 150)); // the scroll settles, as it does before a reader points
+await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 100)))); // the scroll settles, as it does before a reader points
 const r = far.d.getBoundingClientRect(); far.d.parentElement.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }));
 await new Promise(done => setTimeout(done, 300)); // the card's opening movement settles
 // Centred over the point, or as near as the window's 8px margins allow.

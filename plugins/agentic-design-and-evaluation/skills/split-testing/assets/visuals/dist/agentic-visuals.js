@@ -12556,7 +12556,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         }
         // Hover cards: a mark shows its card at once, in the report's own style: a card written for it (data-av-tip, see
         // tipAttr in core.ts) or else its accessible name. The native title would repeat it late, so it moves to aria-label.
-        // A touch shows the card of the mark touched; a touch elsewhere, Escape or scrolling puts it away.
+        // A touch shows the card of the mark touched; a touch elsewhere, Escape, or scrolling its mark out of the window puts it away.
         const tip = make("div", { class: "av-tip", "aria-hidden": "true" });
         if (tip)
             report.appendChild(tip);
@@ -12614,6 +12614,21 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 tip.append(part("p", "av-tip-note", card.note));
             return true;
         };
+        /** Set the card beside its mark: above it where there is room under the top bar, else below, within the window. */
+        const place = (el) => {
+            if (!tip)
+                return;
+            const top = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
+            const vw = doc.documentElement.clientWidth || win.innerWidth, vh = doc.documentElement.clientHeight || win.innerHeight;
+            // A row's card points at the row's own mark (data-av-tip-at), not at the middle of the row. The card's own size is
+            // read, not its box mid-animation (it opens from slightly smaller), so it lands exactly where placed.
+            const r = (el.querySelector("[data-av-tip-at]") || el).getBoundingClientRect(), t = { width: tip.offsetWidth, height: tip.offsetHeight };
+            const left = Math.max(8, Math.min(vw - t.width - 8, r.left + r.width / 2 - t.width / 2));
+            const above = r.top - t.height - 12 >= top + 4;
+            tip.style.left = `${Math.round(left)}px`;
+            tip.style.top = `${Math.round(Math.max(top + 4, Math.min(vh - t.height - 8, above ? r.top - t.height - 12 : r.bottom + 12)))}px`;
+            tip.setAttribute("data-side", above ? "top" : "bottom");
+        };
         const showTip = (el) => {
             if (!tip || dialog?.open)
                 return;
@@ -12626,16 +12641,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             const top = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
             tip.style.maxHeight = `${Math.max(120, (doc.documentElement.clientHeight || win.innerHeight) - top - 12)}px`;
             tip.setAttribute("data-show", "");
-            // A row's card points at the row's own mark (data-av-tip-at), not at the middle of the row.
-            // The card's own size, not its box mid-animation (it opens from slightly smaller), so it lands exactly where placed.
-            const r = (el.querySelector("[data-av-tip-at]") || el).getBoundingClientRect(), t = { width: tip.offsetWidth, height: tip.offsetHeight }, vw = doc.documentElement.clientWidth || win.innerWidth;
-            const cx = r.left + r.width / 2;
-            const left = Math.max(8, Math.min(vw - t.width - 8, cx - t.width / 2));
-            const above = r.top - t.height - 12 >= top + 4;
-            tip.style.left = `${Math.round(left)}px`;
-            const vh = doc.documentElement.clientHeight || win.innerHeight;
-            tip.style.top = `${Math.round(Math.max(top + 4, Math.min(vh - t.height - 8, above ? r.top - t.height - 12 : r.bottom + 12)))}px`;
-            tip.setAttribute("data-side", above ? "top" : "bottom");
+            place(el);
         };
         on(report, "pointerover", (e) => { if (e.pointerType === "touch")
             return; const el = e.target.closest?.(TIPPED); if (el && el !== tipFor)
@@ -12656,7 +12662,24 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             hideTip(); });
         on(doc, "keydown", (e) => { if (e.key === "Escape")
             hideTip(); });
-        on(doc, "scroll", hideTip, { passive: true, capture: true });
+        // When the page, or a box the mark is in, scrolls, the card follows its mark, and goes once the mark has left the window;
+        // other boxes scrolling (the top bar's section index following the page) leave it be.
+        let follow = 0;
+        on(doc, "scroll", (e) => {
+            const t = e.target, el = tipFor;
+            if (!el || follow || !(t === doc || t === doc.documentElement || (t instanceof Node && t.contains(el))))
+                return;
+            follow = win.requestAnimationFrame(() => {
+                follow = 0;
+                if (tipFor !== el)
+                    return;
+                const mark = el.querySelector("[data-av-tip-at]") || el, r = mark.getBoundingClientRect(), vh = doc.documentElement.clientHeight || win.innerHeight;
+                if (!mark.getClientRects().length || r.bottom < 0 || r.top > vh)
+                    hideTip();
+                else
+                    place(el);
+            });
+        }, { passive: true, capture: true });
         const R0 = 11, GAP = 24; // a point is 22px wide
         const layout = (start, W, H, seat) => {
             const at = start.map(p => ({ ...p, dx: 0, dy: 0 }));
