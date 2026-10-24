@@ -25,7 +25,7 @@ import threading
 import time
 import unittest
 
-from visual_harness import EXAMPLES, NODE, REPORT, TESTS, Scratch, fetcher_leftovers, no_fetcher_leftovers, remove_singleton, run_python, write_hostile_fixtures
+from visual_harness import EXAMPLES, NODE, REPORT, TESTS, Scratch, fetcher_leftovers, no_fetcher_leftovers, remove_singleton, run_python, singleton_folder, sweep_fetcher_leftovers, write_hostile_fixtures
 
 # The first Chromium-family browser on PATH; these tests need its headless
 # --dump-dom and DevTools protocol.
@@ -232,14 +232,21 @@ class BrowserRenderTest(unittest.TestCase):
                    f"--user-data-dir={profile}", f"--window-size={width},900", f"--virtual-time-budget={budget}", "--dump-dom", page.as_uri() + fragment]
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             command.insert(1, "--no-sandbox")  # Chrome refuses to run its sandbox as root, as in some CI containers
-        with no_fetcher_leftovers(), subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
+        before = singleton_folder(profile)
+        with no_fetcher_leftovers(), subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True) as process:
             try:
                 stdout, stderr = process.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                process.kill()  # a --dump-dom browser cannot be asked to close itself
-                process.communicate()
-                remove_singleton(profile)
-                self.fail(f"the browser did not finish within {timeout} seconds")
+            except BaseException as error:  # a timeout or Ctrl-C; a --dump-dom browser cannot be asked to close itself
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)  # its own process group: a wrapper's descendants too
+                except (AttributeError, OSError):
+                    process.kill()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    process.communicate(timeout=10)
+                remove_singleton(profile, before)
+                if isinstance(error, subprocess.TimeoutExpired):
+                    self.fail(f"the browser did not finish within {timeout} seconds")
+                raise
         self.assertEqual(process.returncode, 0, stderr[-2000:])
         self.assertIn("</html>", stdout, "the browser printed no document")
         return stdout
@@ -448,6 +455,7 @@ class BrowserRenderTest(unittest.TestCase):
     def test_a_dumped_page_leaves_nothing_behind(self) -> None:
         before = fetcher_leftovers()
         self.dump("--trial", EXAMPLES / "fictional-trial.json", "--narrative", EXAMPLES / "fictional-narrative.json")
+        sweep_fetcher_leftovers()
         self.assertEqual(sorted(map(str, fetcher_leftovers() - before)), [], "the browser left empty fetcher folders in the temp directory")
         self.assertEqual(self.browser_processes(self.dir / "profile"), [], "a browser process outlived the dump")
 
@@ -456,6 +464,7 @@ class BrowserRenderTest(unittest.TestCase):
         out = self.drive(self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", EXAMPLES / "fictional-narrative.json"), width=390)
         if sys.platform.startswith("linux"):  # where the profile is known to keep a SingletonSocket link
             self.assertIsNotNone(out["singleton"], "the driver could not find the browser's singleton folder to check")
+        sweep_fetcher_leftovers()
         self.assertEqual(sorted(map(str, fetcher_leftovers() - before)), [], "the drive left empty fetcher folders in the temp directory")
         self.assertEqual(self.browser_processes(self.dir / "drive-profile"), [], "a browser process outlived the drive")
 
@@ -484,16 +493,25 @@ class BrowserRenderTest(unittest.TestCase):
                 except OSError:
                     time.sleep(0.1)
             time.sleep(1)  # the page is loading and the browser is busy
-            if freeze_browser:
-                rows = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "args="], capture_output=True, text=True).stdout.splitlines()
-                for pid in [int(row.split(None, 1)[0]) for row in rows if str(profile) in row]:
-                    if pid != process.pid:
+            try:
+                if freeze_browser:
+                    for pid in self.browser_pids(profile, but=process.pid):
                         with contextlib.suppress(OSError):
                             os.kill(pid, signal.SIGSTOP)
-            process.send_signal(signal.SIGTERM)
-            process.communicate(timeout=60)
+                    states = subprocess.run(["ps", "-o", "stat=", "-p", ",".join(map(str, self.browser_pids(profile, but=process.pid)))], capture_output=True, text=True).stdout.split()
+                    self.assertTrue(states and all(state.startswith("T") for state in states), f"the browser was not frozen: {states}")
+                process.send_signal(signal.SIGTERM)
+                process.communicate(timeout=60)
+            finally:
+                for pid in self.browser_pids(profile, but=process.pid):  # none, unless the driver failed to stop them
+                    with contextlib.suppress(OSError):
+                        os.kill(pid, signal.SIGKILL)
         self.assertNotEqual(process.returncode, 0)
         return singleton, profile
+
+    def browser_pids(self, profile: Path, *, but: int) -> list[int]:
+        rows = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "args="], capture_output=True, text=True).stdout.splitlines()
+        return [pid for pid in (int(row.split(None, 1)[0]) for row in rows if str(profile) in row) if pid not in (but, os.getpid())]
 
     @unittest.skipUnless(hasattr(signal, "SIGTERM") and os.name == "posix", "needs POSIX signals")
     def test_a_driver_that_is_stopped_midway_closes_its_browser_first(self) -> None:
@@ -501,6 +519,7 @@ class BrowserRenderTest(unittest.TestCase):
         singleton, profile = self.stop_drive_midway()
         self.assertIsNotNone(singleton, "the browser never started")
         self.assertFalse(singleton.exists(), "the stopped driver's browser left its singleton folder behind")
+        sweep_fetcher_leftovers()
         self.assertEqual(sorted(map(str, fetcher_leftovers() - before)), [], "the stopped driver left empty fetcher folders")
         self.assertEqual(self.browser_processes(profile), [], "a browser process outlived the stopped driver")
 
@@ -510,6 +529,7 @@ class BrowserRenderTest(unittest.TestCase):
         singleton, profile = self.stop_drive_midway(freeze_browser=True)
         self.assertIsNotNone(singleton, "the browser never started")
         self.assertFalse(singleton.exists(), "the killed browser left its singleton folder behind")
+        sweep_fetcher_leftovers()
         self.assertEqual(sorted(map(str, fetcher_leftovers() - before)), [], "the killed browser left empty fetcher folders")
         self.assertEqual(self.browser_processes(profile), [], "a browser process outlived the kill")
 
@@ -525,6 +545,7 @@ class BrowserRenderTest(unittest.TestCase):
             self.assertTrue(link.is_symlink(), "the killed browser left no singleton link to check")
         if link.is_symlink():
             self.assertFalse(Path(os.readlink(link)).parent.exists(), "the killed browser left its singleton folder behind")
+        sweep_fetcher_leftovers()
         self.assertEqual(sorted(map(str, fetcher_leftovers() - before)), [], "the killed browser left empty fetcher folders")
         self.assertEqual(self.browser_processes(self.dir / "profile"), [], "a browser process outlived the kill")
 
@@ -1043,7 +1064,8 @@ class DriverStopTest(unittest.TestCase):
         self.assertEqual(running, [], "a process the launcher started outlived the driver")
 
 
-class FetcherCleanupTest(unittest.TestCase):
+@unittest.skipUnless(hasattr(os, "getuid") and hasattr(os, "symlink"), "the cleanup recognises folders by owner and links, which needs POSIX")
+class CleanupTest(unittest.TestCase):
     def test_a_fetcher_folder_outlives_the_span_a_running_browser_keeps_it(self) -> None:
         """A running Chrome removed its own fetcher folder 3.1 seconds after
         making it (measured), so the cleanup must not take one sooner, and must
@@ -1059,10 +1081,38 @@ class FetcherCleanupTest(unittest.TestCase):
             made = folder.stat().st_mtime
             watcher = threading.Thread(target=watch, args=(folder,), daemon=True)
             watcher.start()
-        watcher.join(10)
+        sweep_fetcher_leftovers()
+        watcher.join(5)
         self.assertTrue(gone, "the left-over fetcher folder was not removed")
         self.assertGreaterEqual(gone[0] - made, 3.1, "the folder was removed while a running browser could still remove it itself")
 
+    def test_only_a_killed_browsers_own_singleton_folder_is_removed(self) -> None:
+        """A killed browser's singleton folder holds SingletonSocket and
+        SingletonCookie and is named by its profile's SingletonSocket link."""
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            def setup(name: str, *, extra: bool = False, relative: bool = False) -> tuple[Path, Path]:
+                folder, profile = root / f"com.example.Test.{name}", root / f"profile-{name}"
+                folder.mkdir(); profile.mkdir()
+                (folder / "SingletonSocket").touch(); (folder / "SingletonCookie").touch()
+                if extra:
+                    (folder / "notes.txt").touch()
+                os.symlink(os.path.relpath(folder / "SingletonSocket", profile) if relative else folder / "SingletonSocket", profile / "SingletonSocket")
+                return folder, profile
+            folder, profile = setup("own")
+            remove_singleton(profile, None)
+            self.assertFalse(folder.exists(), "the killed browser's own singleton folder was kept")
+            folder, profile = setup("busy", extra=True)
+            remove_singleton(profile, None)
+            self.assertTrue(folder.exists(), "a singleton folder that holds more than the browser's entries was removed")
+            folder, profile = setup("relative", relative=True)
+            self.addCleanup(os.chdir, os.getcwd())
+            os.chdir(profile)  # where the relative link would resolve to the folder
+            remove_singleton(profile, None)
+            self.assertTrue(folder.exists(), "a singleton folder named by a relative link was removed")
+            folder, profile = setup("earlier")
+            remove_singleton(profile, folder)
+            self.assertTrue(folder.exists(), "a singleton folder the link named before the browser started was removed")
 
 if __name__ == "__main__":
     unittest.main()

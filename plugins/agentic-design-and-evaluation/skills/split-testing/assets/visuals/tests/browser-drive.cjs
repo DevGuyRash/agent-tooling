@@ -13,7 +13,8 @@
 // good. The drive waits for the browser's whole process group to end, signals
 // it only when it has not, and always finishes with a kill of whatever the
 // launcher left in that group; a browser that did not close itself has the
-// singleton folder its profile's SingletonSocket link names removed. The JSON
+// singleton folder its profile's SingletonSocket link names removed, unless
+// the link named it before this launch. The JSON
 // line says how the browser stopped ("stopped": "closed", "terminated" or
 // "killed") and names its singleton folder ("singleton", null when the browser
 // keeps no link to one) for the caller to check. SIGTERM, SIGINT or SIGHUP to
@@ -49,7 +50,7 @@ function processes() {
     });
   } catch { /* no /proc */ }
   try {
-    return execFileSync("ps", ["-A", "-o", "pgid=", "-o", "stat="], { encoding: "utf8", timeout: 5000 }).trim().split("\n")
+    return execFileSync("ps", ["-A", "-o", "pgid=", "-o", "stat="], { encoding: "utf8", timeout: 5000, killSignal: "SIGKILL" }).trim().split("\n")
       .map(row => { const [pgid, stat] = row.trim().split(/\s+/); return [Number(pgid), stat || ""]; });
   } catch { return null; }
 }
@@ -101,14 +102,15 @@ async function main() {
   const flags = ["--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", "--disable-extensions",
     "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"];
   if (typeof process.getuid === "function" && process.getuid() === 0) flags.unshift("--no-sandbox"); // Chromium refuses its sandbox as root
+  const singletonFolder = () => { try { return path.dirname(fs.readlinkSync(path.join(profile, "SingletonSocket"))); } catch { return null; } };
+  const before = singletonFolder(); // another browser's, or a stale one: never this launch's to remove
   const browser = spawn(browserPath, flags, { stdio: "ignore", detached: process.platform !== "win32" });
   let ws, out, port = "", singleton = null, stopping = null;
-  const singletonFolder = () => { try { return path.dirname(fs.readlinkSync(path.join(profile, "SingletonSocket"))); } catch { return null; } };
   // Stop the browser once, and remove the singleton folder of one that did not
   // close itself, keeping a folder that holds more than its Singleton* entries.
   const finish = () => (stopping ??= stop(browser, port).then(outcome => {
     const folder = outcome === "closed" ? null : singleton ?? singletonFolder();
-    try { if (folder && fs.readdirSync(folder).every(name => name.startsWith("Singleton"))) fs.rmSync(folder, { recursive: true, force: true }); } catch { /* already gone */ }
+    try { if (folder && folder !== before && path.isAbsolute(folder) && fs.readdirSync(folder).every(name => name.startsWith("Singleton"))) fs.rmSync(folder, { recursive: true, force: true }); } catch { /* already gone */ }
     return outcome;
   }));
   for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.once(signal, () => finish().finally(() => process.exit(1)));
