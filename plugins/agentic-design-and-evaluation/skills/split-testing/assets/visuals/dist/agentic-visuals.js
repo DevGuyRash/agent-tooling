@@ -11772,8 +11772,17 @@ define("model", ["require", "exports", "core"], function (require, exports, core
 define("reader", ["require", "exports", "core", "collection", "validate"], function (require, exports, core_26, collection_2, validate_5) {
     "use strict";
     Object.defineProperty(exports, "__esModule", { value: true });
+    exports.fitScrollReserve = fitScrollReserve;
     exports.readerRoute = readerRoute;
     exports.attachReader = attachReader;
+    /** The page's scroll reserve under its top bar (html scroll-padding-top reads --av-bar-h): the height of whichever
+     * report's top bar is showing. Taken whenever a bar changes size, appears or is hidden, and by the reader just before it
+     * scrolls, since it can scroll in the same moment it shows the collection again. */
+    function fitScrollReserve(doc) {
+        const bar = Array.from(doc.querySelectorAll(".av-topbar")).find(b => b.getClientRects().length);
+        if (bar)
+            doc.documentElement.style.setProperty("--av-bar-h", `${Math.ceil(bar.getBoundingClientRect().height)}px`);
+    }
     const FIELDS = "input, select, textarea, [contenteditable=''], [contenteditable='true']";
     /** The element with an id inside one report: a member and the collection both have ids such as av-top. */
     function byId(root, id) {
@@ -12089,8 +12098,10 @@ define("reader", ["require", "exports", "core", "collection", "validate"], funct
                         restoreLater = win.setTimeout(() => { restoreLater = null; if (!view)
                             restore(); }, 0);
                 }
-                else if (el)
-                    el.scrollIntoView?.({ block: "start" });
+                else if (el) {
+                    fitScrollReserve(doc);
+                    el.scrollIntoView?.({ block: "start", behavior: "instant" });
+                }
             }
             currentHomeHash = raw;
         };
@@ -12414,12 +12425,23 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         const sectionOf = new Map(links.map(a => [a, byIdIn(linkedId(a))]));
         const sections = [...sectionOf.values()].filter((s) => !!s);
         const bar = report.querySelector(".av-topbar");
+        // The section index keeps its current entry in view by scrolling sideways within itself only: scrolling the entry into
+        // view would also move the page, since the bar it sits in lies inside the page's scroll reserve.
+        const showLink = (a) => {
+            const strip = a.closest(".av-toc");
+            if (!strip)
+                return;
+            const r = a.getBoundingClientRect(), t = strip.getBoundingClientRect();
+            if (r.left < t.left)
+                strip.scrollLeft -= t.left - r.left + 12;
+            else if (r.right > t.right)
+                strip.scrollLeft += r.right - t.right + 12;
+        };
         // A scroll to a section stops just under the top bar, however tall the bar has grown (a long name wraps in it). The page
         // keeps one reserve, so it is taken from whichever report's bar is showing, and taken again whenever a bar changes
         // size, appears or is hidden (a collection hides its own bar while a report opened in it shows, and adds a back link).
         if (bar) {
-            const reserve = () => { if (bar.getClientRects().length)
-                doc.documentElement.style.setProperty("--av-bar-h", `${Math.ceil(bar.getBoundingClientRect().height)}px`); };
+            const reserve = () => (0, reader_1.fitScrollReserve)(doc);
             reserve();
             if (typeof win.ResizeObserver === "function") {
                 const watch = new win.ResizeObserver(reserve);
@@ -12442,7 +12464,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 if (active !== a.hasAttribute("aria-current")) {
                     a.toggleAttribute("aria-current", active);
                     if (active)
-                        a.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+                        showLink(a);
                 }
             }
             bar?.toggleAttribute("data-scrolled", win.scrollY > 8);

@@ -389,10 +389,16 @@ const clears = async () => { const bar = shown(".av-topbar"), section = [...docu
 const out = { home: await clears() };
 location.hash = "#report/fictional"; await settle(); out.member = await clears();
 location.hash = "#reports"; await settle(); out.back = await clears();
+// From the open report straight to a collection section: where the reader's own scroll puts it, with no scroll of ours.
+// The collection's own section near its top (so the page can scroll it under the bar), other than the return address.
+const target = [...document.querySelectorAll(".av-section[id]")].filter(x => x.getClientRects().length && "#" + x.id !== location.hash)[1];
+location.hash = "#report/fictional"; await settle();
+location.hash = "#" + target.id; await new Promise(done => setTimeout(done, 1200));
+out.direct = { bar: shown(".av-topbar").getBoundingClientRect().bottom, start: target.getBoundingClientRect().top };
 return out;
 """
         out = self.drive(page, width=320, script=script)["result"]
-        for where in ("home", "member", "back"):
+        for where in ("home", "member", "back", "direct"):
             with self.subTest(where=where):
                 self.assertGreaterEqual(out[where]["start"], out[where]["bar"] - 1, "a scroll to a section leaves its start under the top bar")
                 self.assertLessEqual(out[where]["start"], out[where]["bar"] + 20, "a scroll to a section stops well below the bar, as for another bar's height")

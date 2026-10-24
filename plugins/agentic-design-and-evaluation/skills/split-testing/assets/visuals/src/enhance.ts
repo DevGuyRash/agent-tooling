@@ -10,7 +10,7 @@ import { failureCause, invalidReason } from "./failure";
 import { attachMermaid, DiagramController } from "./mermaid";
 import { createContext, RenderContext, ReportSpec } from "./model";
 import { renderReport } from "./report";
-import { attachReader } from "./reader";
+import { attachReader, fitScrollReserve } from "./reader";
 import { costUsd, displayPath, judgeQuestion, outcomeOf, recordPath, TrialReport, TrialRun, TrialScenario } from "./trial-model";
 
 const THEME_KEY = "av-theme";
@@ -224,11 +224,20 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
   const sectionOf = new Map(links.map(a => [a, byIdIn(linkedId(a))] as const));
   const sections = [...sectionOf.values()].filter((s): s is HTMLElement => !!s);
   const bar = report.querySelector<HTMLElement>(".av-topbar");
+  // The section index keeps its current entry in view by scrolling sideways within itself only: scrolling the entry into
+  // view would also move the page, since the bar it sits in lies inside the page's scroll reserve.
+  const showLink = (a: HTMLElement) => {
+    const strip = a.closest<HTMLElement>(".av-toc");
+    if (!strip) return;
+    const r = a.getBoundingClientRect(), t = strip.getBoundingClientRect();
+    if (r.left < t.left) strip.scrollLeft -= t.left - r.left + 12;
+    else if (r.right > t.right) strip.scrollLeft += r.right - t.right + 12;
+  };
   // A scroll to a section stops just under the top bar, however tall the bar has grown (a long name wraps in it). The page
   // keeps one reserve, so it is taken from whichever report's bar is showing, and taken again whenever a bar changes
   // size, appears or is hidden (a collection hides its own bar while a report opened in it shows, and adds a back link).
   if (bar) {
-    const reserve = () => { if (bar.getClientRects().length) doc.documentElement.style.setProperty("--av-bar-h", `${Math.ceil(bar.getBoundingClientRect().height)}px`); };
+    const reserve = () => fitScrollReserve(doc);
     reserve();
     if (typeof win.ResizeObserver === "function") { const watch = new win.ResizeObserver(reserve); watch.observe(bar); offs.push(() => watch.disconnect()); }
     else on(win, "resize", reserve);
@@ -241,7 +250,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     for (const s of sections) if (s.getBoundingClientRect().top <= line) current = s;
     for (const a of links) {
       const active = !!current && sectionOf.get(a) === current;
-      if (active !== a.hasAttribute("aria-current")) { a.toggleAttribute("aria-current", active); if (active) a.scrollIntoView?.({ block: "nearest", inline: "nearest" }); }
+      if (active !== a.hasAttribute("aria-current")) { a.toggleAttribute("aria-current", active); if (active) showLink(a); }
     }
     bar?.toggleAttribute("data-scrolled", win.scrollY > 8);
   };
