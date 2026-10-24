@@ -553,23 +553,34 @@ return out;
         path = self.dir / "long-kicker.json"
         path.write_text(json.dumps(narrative), encoding="utf-8")
         page = self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", path)
+        # Measured at 1440 px, then again after the window narrows to 320 px in the same load, so a reserve kept from the
+        # first width would show.
         script = """
+const frames = () => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
 const name = document.querySelector(".av-brand-text"), bar = document.querySelector(".av-topbar");
-const lines = Math.round(name.getBoundingClientRect().height / parseFloat(getComputedStyle(name).lineHeight));
-const section = document.querySelector(".av-section[id]:nth-of-type(3)");
-// The browser's own scroll to an element, as for an anchor the report does not handle, focus or find in page.
-section.scrollIntoView({ block: "start", behavior: "instant" });
-await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
-// The section itself, not only its heading, starts below the bar.
-return { lines, cut: name.scrollWidth > name.clientWidth + 1, bar: bar.getBoundingClientRect().bottom, head: section.getBoundingClientRect().top };
+const look = async () => {
+  const lines = Math.round(name.getBoundingClientRect().height / parseFloat(getComputedStyle(name).lineHeight));
+  const section = document.querySelector(".av-section[id]:nth-of-type(3)");
+  // The browser's own scroll to an element, as for an anchor the report does not handle, focus or find in page.
+  section.scrollIntoView({ block: "start", behavior: "instant" }); await frames();
+  // The section itself, not only its heading, starts below the bar.
+  return { lines, cut: name.scrollWidth > name.clientWidth + 1, bar: bar.getBoundingClientRect().bottom, head: section.getBoundingClientRect().top };
+};
+const wide = await look();
+const resized = new Promise(done => addEventListener("resize", done, { once: true }));
+avDriveResize("320x900"); await resized; await frames();
+return { wide, narrow: await look() };
 """
-        for width in (320, 1440):
+        out = self.drive(page, width=1440, script=script)["result"]
+        for width in ("wide", "narrow"):
             with self.subTest(width=width):
-                out = self.drive(page, width=width, script=script)["result"]
-                self.assertFalse(out["cut"], "the name is cut off across its width")
-                self.assertGreaterEqual(out["lines"], 1)
-                self.assertLessEqual(out["lines"], 3, "an outsized name takes more than three lines of the bar")
-                self.assertGreaterEqual(out["head"], out["bar"] - 1, "a section link leaves the start of its section under the top bar")
+                look = out[width]
+                self.assertFalse(look["cut"], "the name is cut off across its width")
+                self.assertGreaterEqual(look["lines"], 1)
+                self.assertLessEqual(look["lines"], 3, "an outsized name takes more than three lines of the bar")
+                self.assertGreaterEqual(look["head"], look["bar"] - 1, "a scroll to a section leaves its start under the top bar")
+                self.assertLessEqual(look["head"], look["bar"] + 20, "a scroll to a section stops well below the bar, as for another bar's height")
+        self.assertGreater(out["narrow"]["bar"], out["wide"]["bar"] + 12, "the bar did not grow when the window narrowed: this checks nothing")
 
     def test_a_per_case_panel_reads_against_an_axis_that_spans_its_tracks(self) -> None:
         comparisons = EXAMPLES / "comparisons"

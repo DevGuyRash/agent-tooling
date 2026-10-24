@@ -224,9 +224,15 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
   const sectionOf = new Map(links.map(a => [a, byIdIn(linkedId(a))] as const));
   const sections = [...sectionOf.values()].filter((s): s is HTMLElement => !!s);
   const bar = report.querySelector<HTMLElement>(".av-topbar");
-  // A link to a section scrolls it to just under the top bar, however tall the bar has grown (a long name wraps in it).
-  const barHeight = () => { if (bar) doc.documentElement.style.setProperty("--av-bar-h", `${Math.ceil(bar.getBoundingClientRect().height)}px`); };
-  barHeight(); on(win, "resize", barHeight);
+  // A scroll to a section stops just under the top bar, however tall the bar has grown (a long name wraps in it). The page
+  // keeps one reserve, so it is taken from whichever report's bar is showing, and taken again whenever a bar changes
+  // size, appears or is hidden (a collection hides its own bar while a report opened in it shows, and adds a back link).
+  if (bar) {
+    const reserve = () => { if (bar.getClientRects().length) doc.documentElement.style.setProperty("--av-bar-h", `${Math.ceil(bar.getBoundingClientRect().height)}px`); };
+    reserve();
+    if (typeof win.ResizeObserver === "function") { const watch = new win.ResizeObserver(reserve); watch.observe(bar); offs.push(() => watch.disconnect()); }
+    else on(win, "resize", reserve);
+  }
   let spyQueued = false;
   const spy = () => {
     spyQueued = false;

@@ -371,6 +371,33 @@ return { n: dots.length, overlaps, outside, card: card.shown && card.title === J
                 self.assertTrue(out["card"], "the moved change's own card does not open")
                 self.assertLessEqual(out["cardOff"], 3, "a moved change's card points at where it was, not where it is")
 
+    def test_a_scroll_to_a_section_clears_whichever_top_bar_shows_after_opening_and_closing_a_report(self) -> None:
+        # The collection has a one-word name; the report opened in it has a name that runs to three lines at 320 px and gains
+        # a back link. A scroll to a section clears the report's taller bar while it is open, and the collection's again once
+        # it closes.
+        narrative = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
+        narrative["kicker"] = " ".join(["A report with a long name"] * 6)
+        page = self.build("--collection", write_collection(self.dir, kicker="Short"))
+        (self.dir / "narratives/fictional-narrative.json").write_text(json.dumps(narrative), encoding="utf-8")
+        page = self.build("--collection", self.dir / "collection.json")
+        script = """
+const frames = () => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+const settle = () => new Promise(done => setTimeout(done, 600));
+const shown = sel => [...document.querySelectorAll(sel)].find(e => e.getClientRects().length);
+const clears = async () => { const bar = shown(".av-topbar"), section = [...document.querySelectorAll(".av-section[id]")].filter(s => s.getClientRects().length)[2];
+  section.scrollIntoView({ block: "start", behavior: "instant" }); await frames(); return { bar: bar.getBoundingClientRect().bottom, start: section.getBoundingClientRect().top }; };
+const out = { home: await clears() };
+location.hash = "#report/fictional"; await settle(); out.member = await clears();
+location.hash = "#reports"; await settle(); out.back = await clears();
+return out;
+"""
+        out = self.drive(page, width=320, script=script)["result"]
+        for where in ("home", "member", "back"):
+            with self.subTest(where=where):
+                self.assertGreaterEqual(out[where]["start"], out[where]["bar"] - 1, "a scroll to a section leaves its start under the top bar")
+                self.assertLessEqual(out[where]["start"], out[where]["bar"] + 20, "a scroll to a section stops well below the bar, as for another bar's height")
+        self.assertGreater(out["member"]["bar"], out["home"]["bar"] + 12, "the report's bar is not the taller one: this checks nothing")
+
     def test_the_reader_opens_compares_and_returns(self) -> None:
         page = self.build("--collection", write_collection(self.dir))
         out = self.drive(page, width=1280, script=READER)["result"]
