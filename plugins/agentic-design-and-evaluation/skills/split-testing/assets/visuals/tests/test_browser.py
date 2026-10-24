@@ -547,6 +547,30 @@ return out;
         self.assertTrue(out["tinyMarkSeen"], "the mark left the tiny window, so this checks nothing")
         self.assertFalse(out["tiny"]["shown"], "a card is shown in a window with no room for it")
 
+    def test_a_long_name_in_the_top_bar_wraps_and_a_scroll_to_a_section_still_lands_below_the_bar(self) -> None:
+        narrative = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
+        narrative["kicker"] = "Split test · " + " ".join(["fictional-reply-guidance"] * 10)
+        path = self.dir / "long-kicker.json"
+        path.write_text(json.dumps(narrative), encoding="utf-8")
+        page = self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", path)
+        script = """
+const name = document.querySelector(".av-brand-text"), bar = document.querySelector(".av-topbar");
+const lines = Math.round(name.getBoundingClientRect().height / parseFloat(getComputedStyle(name).lineHeight));
+const section = document.querySelector(".av-section[id]:nth-of-type(3)");
+// The browser's own scroll to an element, as for an anchor the report does not handle, focus or find in page.
+section.scrollIntoView({ block: "start", behavior: "instant" });
+await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+// The section itself, not only its heading, starts below the bar.
+return { lines, cut: name.scrollWidth > name.clientWidth + 1, bar: bar.getBoundingClientRect().bottom, head: section.getBoundingClientRect().top };
+"""
+        for width in (320, 1440):
+            with self.subTest(width=width):
+                out = self.drive(page, width=width, script=script)["result"]
+                self.assertFalse(out["cut"], "the name is cut off across its width")
+                self.assertGreaterEqual(out["lines"], 1)
+                self.assertLessEqual(out["lines"], 3, "an outsized name takes more than three lines of the bar")
+                self.assertGreaterEqual(out["head"], out["bar"] - 1, "a section link leaves the start of its section under the top bar")
+
     def test_a_per_case_panel_reads_against_an_axis_that_spans_its_tracks(self) -> None:
         comparisons = EXAMPLES / "comparisons"
         page = self.build("--data", comparisons / "research-directions.json", "--narrative", comparisons / "research-directions-narrative.json")

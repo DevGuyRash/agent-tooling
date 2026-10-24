@@ -12414,6 +12414,11 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         const sectionOf = new Map(links.map(a => [a, byIdIn(linkedId(a))]));
         const sections = [...sectionOf.values()].filter((s) => !!s);
         const bar = report.querySelector(".av-topbar");
+        // A link to a section scrolls it to just under the top bar, however tall the bar has grown (a long name wraps in it).
+        const barHeight = () => { if (bar)
+            doc.documentElement.style.setProperty("--av-bar-h", `${Math.ceil(bar.getBoundingClientRect().height)}px`); };
+        barHeight();
+        on(win, "resize", barHeight);
         let spyQueued = false;
         const spy = () => {
             spyQueued = false;

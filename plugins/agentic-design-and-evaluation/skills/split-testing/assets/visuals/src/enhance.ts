@@ -224,6 +224,9 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
   const sectionOf = new Map(links.map(a => [a, byIdIn(linkedId(a))] as const));
   const sections = [...sectionOf.values()].filter((s): s is HTMLElement => !!s);
   const bar = report.querySelector<HTMLElement>(".av-topbar");
+  // A link to a section scrolls it to just under the top bar, however tall the bar has grown (a long name wraps in it).
+  const barHeight = () => { if (bar) doc.documentElement.style.setProperty("--av-bar-h", `${Math.ceil(bar.getBoundingClientRect().height)}px`); };
+  barHeight(); on(win, "resize", barHeight);
   let spyQueued = false;
   const spy = () => {
     spyQueued = false;
