@@ -1,7 +1,7 @@
 """A real browser mounts report.py output and exercises its behavior: deep
 links, the run drawer, the ledger's filters, export and keyboard path,
-printing and phone width. Skipped when neither google-chrome-stable nor
-chromium is on PATH.
+printing and phone width. Skipped when no Chromium-family browser (Chrome,
+Chromium, Edge or Brave) is on PATH.
 
 Interaction scenarios live in enhance-browser.js; each runs inside the page
 as a data: script (the only kind the report's CSP allows) and writes JSON
@@ -16,11 +16,11 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import tempfile
 import unittest
 
-from visual_harness import EXAMPLES, NODE, REPORT, TESTS, Scratch, run_python, write_hostile_fixtures
+from visual_harness import BROWSER, EXAMPLES, NO_BROWSER, NODE, REPORT, TESTS, Scratch, run_browser, run_python, write_hostile_fixtures
 
-BROWSER = next((path for path in map(shutil.which, ("google-chrome-stable", "chromium", "chromium-browser")) if path), None)
 SCENARIOS = TESTS / "enhance-browser.js"
 DRIVER = TESTS / "browser-drive.cjs"
 # Elements wider than the window that no scrolling ancestor contains: what
@@ -198,7 +198,7 @@ def kinds_trial(*, invalid: bool, hostile: bool = False) -> dict:
     }
 
 
-@unittest.skipUnless(BROWSER, "google-chrome-stable or chromium is not on PATH")
+@unittest.skipUnless(BROWSER, NO_BROWSER)
 class BrowserRenderTest(unittest.TestCase):
     """Headless rendering of an assembled report, read back with --dump-dom."""
 
@@ -221,7 +221,7 @@ class BrowserRenderTest(unittest.TestCase):
         if hasattr(os, "geteuid") and os.geteuid() == 0:
             command.insert(1, "--no-sandbox")  # Chrome refuses to run its sandbox as root, as in some CI containers
         try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+            result = run_browser(command, timeout=60, scratch=self.dir)
         except subprocess.TimeoutExpired:
             self.fail("the browser did not finish within 60 seconds")
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
@@ -396,10 +396,10 @@ class BrowserRenderTest(unittest.TestCase):
             self.skipTest("node is not on PATH")
         script_file = self.dir / "drive-script.js"
         script_file.write_text(script, encoding="utf-8")
-        command = [NODE, DRIVER, "--chrome", BROWSER, "--profile", self.dir / "drive-profile", "--url", page.as_uri(), "--width", str(width), "--height", str(height), "--script", script_file]
+        command = [NODE, DRIVER, "--browser", BROWSER, "--profile", self.dir / "drive-profile", "--url", page.as_uri(), "--width", str(width), "--height", str(height), "--script", script_file]
         if tab_to:
             command += ["--tab-to", tab_to]
-        result = subprocess.run(list(map(str, command)), capture_output=True, text=True, timeout=180)
+        result = run_browser(command, timeout=180, scratch=self.dir)
         self.assertEqual(result.returncode, 0, result.stderr[-2000:])
         lines = result.stdout.strip().splitlines()
         self.assertTrue(lines, f"the driver printed nothing: {result.stderr[-2000:]}")
@@ -407,8 +407,40 @@ class BrowserRenderTest(unittest.TestCase):
         if "skip" in out:
             self.skipTest(out["skip"])
         self.assertNotIn("error", out, out.get("error"))
+        self.assertEqual(out["stopped"], "closed", "the browser did not close itself when asked")
         self.assertEqual(out["width"], width, "the viewport was not emulated")
         return out
+
+    def test_a_driven_browser_closes_itself_and_leaves_nothing_behind(self) -> None:
+        # A Chromium-family browser names what it puts in the system temp
+        # directory after its application ID (com.google.Chrome.*,
+        # org.chromium.Chromium.*, com.microsoft.Edge.*): a singleton folder while
+        # it runs, which a killed browser or a killed wrapper (firejail, flatpak,
+        # snap) leaves behind, and an empty folder for every navigation after its
+        # start page, which it never removes.
+        temp = Path(tempfile.gettempdir())
+        browser_folder = re.compile(r"^(?:com|org)\.[\w-]+\.[\w-]+\.")
+
+        def browser_folders() -> set[str]:
+            found = set()
+            for entry in temp.iterdir():
+                try:
+                    if browser_folder.match(entry.name) and entry.is_dir():
+                        found.add(entry.name)
+                except OSError:
+                    continue
+            return found
+
+        before = browser_folders()
+        self.drive(self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", EXAMPLES / "fictional-narrative.json"), width=390)
+        sockets = Path("/proc/net/unix").read_text() if Path("/proc/net/unix").exists() else ""
+        # A folder whose socket is still listening belongs to another browser that is running.
+        left = sorted(name for name in browser_folders() - before if str(temp / name) not in sockets)
+        self.assertEqual(left, [], "the browser left folders in the system temp directory")
+        if shutil.which("ps"):
+            profile = str(self.dir / "drive-profile")
+            running = [line for line in subprocess.run(["ps", "-A", "-o", "args="], capture_output=True, text=True).stdout.splitlines() if profile in line]
+            self.assertEqual(running, [], "a browser process outlived the drive")
 
     def test_every_chart_has_an_axis_every_mark_a_card_and_no_text_is_cut_off(self) -> None:
         comparisons = EXAMPLES / "comparisons"
@@ -899,6 +931,22 @@ return { page: Math.round(document.querySelector(".av-sections").getBoundingClie
         whys = [s["why"] for s in result["seen"] if s["why"]]
         self.assertEqual(len(whys), 3, "a failed or invalid run has no cause line")
         self.assertTrue(any(HOSTILE in why for why in whys), "the hostile check name is not visible as text")
+
+
+
+@unittest.skipUnless(hasattr(os, "killpg") and shutil.which("sh") and shutil.which("ps"), "needs POSIX process groups, sh and ps")
+class BrowserStopTest(unittest.TestCase):
+    """run_browser stops everything it started, even when the launch times out."""
+
+    def test_a_launch_that_times_out_takes_its_whole_process_group_down(self) -> None:
+        marker = f"av-stop-test-{os.getpid()}"
+        # A stand-in for a wrapper such as firejail or a launcher script: the
+        # outer shell starts a child that would outlive it if only it were killed.
+        launch = ["sh", "-c", f"sh -c 'sleep 300; :' {marker} & wait"]
+        with Scratch() as scratch, self.assertRaises(subprocess.TimeoutExpired):
+            run_browser(launch, timeout=1, scratch=scratch)
+        running = [line for line in subprocess.run(["ps", "-A", "-o", "args="], capture_output=True, text=True).stdout.splitlines() if marker in line]
+        self.assertEqual(running, [], "a process the launch started outlived it")
 
 
 if __name__ == "__main__":

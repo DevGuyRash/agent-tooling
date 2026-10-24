@@ -272,7 +272,7 @@ return out;
 """
 
 
-@unittest.skipUnless(TB.BROWSER, "google-chrome-stable or chromium is not on PATH")
+@unittest.skipUnless(TB.BROWSER, TB.NO_BROWSER)
 class CollectionBrowserTest(unittest.TestCase):
     """The collection in a real browser, driven as test_browser.py drives a report."""
 

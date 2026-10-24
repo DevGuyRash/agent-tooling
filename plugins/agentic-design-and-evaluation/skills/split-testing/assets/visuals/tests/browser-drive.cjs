@@ -1,10 +1,22 @@
-// Drive a headless Chrome over the DevTools protocol with Node's built-in
-// WebSocket and fetch (nothing to install), for what --dump-dom cannot do: an
-// exact viewport (headless windows are never narrower than 500 px) and real Tab
-// presses. test_browser.py runs it; it prints one JSON line.
+// Drive a headless Chromium-family browser (Chrome, Chromium, Edge, Brave) over
+// the DevTools protocol with Node's built-in WebSocket and fetch (nothing to
+// install), for what --dump-dom cannot do: an exact viewport (headless windows
+// are never narrower than 500 px) and real Tab presses. test_browser.py runs it;
+// it prints one JSON line.
 //
-//   node browser-drive.cjs --chrome PATH --profile DIR --url URL
+//   node browser-drive.cjs --browser PATH --profile DIR --url URL
 //        [--width 390] [--height 900] [--script FILE] [--tab-to SELECTOR]
+//
+// When the drive ends the browser is asked to close itself (Browser.close), so
+// it removes its singleton folder in the system temp directory; a killed
+// browser, or a killed wrapper such as firejail, flatpak or snap, leaves that
+// behind. Only a browser that does not exit is signalled, as a whole process
+// group. Its temp directory points into the profile, so a browser that honours
+// TMPDIR leaves nothing outside it; for one whose wrapper strips TMPDIR
+// (firejail), visual_harness.run_browser removes what it left. "stopped" in the
+// JSON line says how it ended: "closed", "terminated", "killed", or "exited"
+// when it had already gone. SIGTERM, SIGINT or SIGHUP to this driver stops the
+// browser the same way before it exits.
 //
 // --script FILE holds the body of an async function evaluated in the page once
 // the report is ready; its return value is reported as "result". The script may
@@ -22,10 +34,29 @@ const option = (name, fallback) => { const i = args.indexOf(name); return i >= 0
 const print = value => process.stdout.write(JSON.stringify(value) + "\n");
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
+async function stop(browser, exited, port) {
+  if (browser.exitCode !== null || browser.signalCode !== null) return "exited";
+  const gone = ms => Promise.race([exited.then(() => true), sleep(ms).then(() => false)]);
+  if (port) {
+    try {
+      const version = await (await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(3000) })).json();
+      const socket = new WebSocket(version.webSocketDebuggerUrl);
+      await new Promise((resolve, reject) => { socket.onopen = resolve; socket.onerror = () => reject(new Error("the browser socket did not open")); });
+      socket.send(JSON.stringify({ id: 1, method: "Browser.close" }));
+      if (await gone(10000)) return "closed";
+    } catch { /* no DevTools endpoint left to ask */ }
+  }
+  for (const [signal, outcome] of [["SIGTERM", "terminated"], ["SIGKILL", "killed"]]) {
+    try { process.kill(-browser.pid, signal); } catch { browser.kill(signal); }
+    if (await gone(5000)) return outcome;
+  }
+  return "still running";
+}
+
 async function main() {
   if (typeof WebSocket === "undefined" || typeof fetch === "undefined") { print({ skip: "this Node has no built-in WebSocket and fetch" }); return; }
-  const chromePath = option("--chrome"), profile = option("--profile"), url = option("--url");
-  if (!chromePath || !profile || !url) { print({ error: "--chrome, --profile and --url are required" }); return; }
+  const browserPath = option("--browser"), profile = option("--profile"), url = option("--url");
+  if (!browserPath || !profile || !url) { print({ error: "--browser, --profile and --url are required" }); return; }
   const width = Number(option("--width", "390")), height = Number(option("--height", "900"));
   const script = option("--script") ? fs.readFileSync(option("--script"), "utf8") : "return null;";
   const tabTo = option("--tab-to");
@@ -34,17 +65,19 @@ async function main() {
   fs.rmSync(portFile, { force: true });
   const flags = ["--headless=new", "--disable-gpu", "--hide-scrollbars", "--no-first-run", "--no-default-browser-check", "--disable-extensions",
     "--remote-debugging-port=0", `--user-data-dir=${profile}`, "about:blank"];
-  if (typeof process.getuid === "function" && process.getuid() === 0) flags.unshift("--no-sandbox"); // Chrome refuses its sandbox as root
-  const chrome = spawn(chromePath, flags, { stdio: "ignore" });
-  const exited = new Promise(resolve => chrome.once("exit", resolve));
-  let ws;
+  if (typeof process.getuid === "function" && process.getuid() === 0) flags.unshift("--no-sandbox"); // Chromium refuses its sandbox as root
+  const tmp = path.join(profile, "tmp");
+  fs.mkdirSync(tmp, { recursive: true });
+  const browser = spawn(browserPath, flags, { stdio: "ignore", detached: process.platform !== "win32", env: { ...process.env, TMPDIR: tmp, TMP: tmp, TEMP: tmp } });
+  const exited = new Promise(resolve => browser.once("exit", resolve));
+  let ws, out, port = "", stopping = null;
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"]) process.once(signal, () => (stopping ??= stop(browser, exited, port)).finally(() => process.exit(1)));
   try {
-    let port = "";
     for (let i = 0; i < 150 && !port; i++) { await sleep(100); try { port = fs.readFileSync(portFile, "utf8").split("\n")[0].trim(); } catch { /* not yet written */ } }
-    if (!port) throw new Error("Chrome did not open a DevTools port within 15 seconds");
+    if (!port) throw new Error("the browser did not open a DevTools port within 15 seconds");
     const targets = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
     const page = targets.find(t => t.type === "page");
-    if (!page) throw new Error("Chrome has no page target");
+    if (!page) throw new Error("the browser has no page target");
     ws = new WebSocket(page.webSocketDebuggerUrl);
     await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error("the DevTools socket did not open")); });
     let next = 0;
@@ -74,7 +107,7 @@ async function main() {
     for (let i = 0; i < 200 && !ready; i++) { await sleep(50); try { ready = await evaluate("!!document.querySelector('[data-av-ready]')"); } catch { /* navigating */ } }
     if (!ready) throw new Error("the report never became ready");
     await sleep(300);
-    const out = { width: await evaluate("innerWidth"), result: await evaluate(`(async () => { ${script} })()`) };
+    out = { width: await evaluate("innerWidth"), result: await evaluate(`(async () => { ${script} })()`) };
     if (tabTo) {
       await evaluate("document.activeElement && document.activeElement.blur(); window.scrollTo(0, 0); true");
       const key = type => send("Input.dispatchKeyEvent", { type, key: "Tab", code: "Tab", windowsVirtualKeyCode: 9, nativeVirtualKeyCode: 9 });
@@ -84,13 +117,12 @@ async function main() {
         if (await evaluate(`!!document.activeElement && document.activeElement.matches(${JSON.stringify(tabTo)})`)) { out.tabs = presses; break; }
       }
     }
-    print(out);
   } catch (error) {
-    print({ error: error instanceof Error ? error.message : String(error) });
+    out = { error: error instanceof Error ? error.message : String(error) };
   } finally {
     try { ws?.close(); } catch { /* already closed */ }
-    chrome.kill();
-    await Promise.race([exited, sleep(5000)]);
+    out.stopped = await (stopping ??= stop(browser, exited, port));
+    print(out);
   }
 }
 
