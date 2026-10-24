@@ -49,8 +49,9 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 .97r
 .av-topbar { position: sticky; top: 0; z-index: 20; padding-top: env(safe-area-inset-top, 0px); background: color-mix(in srgb, var(--av-bg) 84%, transparent); -webkit-backdrop-filter: saturate(1.4) blur(14px); backdrop-filter: saturate(1.4) blur(14px); border-bottom: 1px solid transparent; transition: border-color .2s, box-shadow .2s; }
 .av-topbar[data-scrolled] { border-bottom-color: var(--av-line); box-shadow: 0 6px 20px -16px rgba(0,0,0,.4); }
 .av-topbar-inner { max-width: var(--av-page); margin: 0 auto; padding: 10px var(--av-gutter); display: flex; align-items: center; gap: 18px; min-height: 52px; }
-.av-brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; color: var(--av-ink) !important; font: 600 .82rem/1 var(--av-font-text); white-space: nowrap; max-width: min(32%, 24rem); overflow: hidden; }
-.av-brand-text { overflow: hidden; text-overflow: ellipsis; }
+.av-brand { display: inline-flex; align-items: center; gap: 10px; text-decoration: none; color: var(--av-ink) !important; font: 600 .82rem/1.2 var(--av-font-text); white-space: normal; max-width: min(32%, 24rem); overflow: hidden; }
+/* The report's name wraps onto a second line rather than be cut off. */
+.av-brand-text { min-width: 0; overflow-wrap: break-word; }
 .av-brand-mark { flex: none; width: 16px; height: 16px; border-radius: 4px; background: linear-gradient(135deg, var(--av-accent) 0 49%, var(--av-ink) 51% 100%); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--av-ink) 20%, transparent); }
 .av-toc { flex: 1; min-width: 0; overflow-x: auto; scrollbar-width: none; mask-image: linear-gradient(90deg, transparent, #000 12px, #000 calc(100% - 24px), transparent); }
 .av-toc::-webkit-scrollbar { display: none; }

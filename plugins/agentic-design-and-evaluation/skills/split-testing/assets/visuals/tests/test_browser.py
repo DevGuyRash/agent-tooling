@@ -505,8 +505,8 @@ return out;
 
     def test_a_card_longer_than_a_short_window_still_fits_it_whole(self) -> None:
         # In a window 420 px high, under the top bar: a run's very long reason, and a card whose value and note each run far
-        # past a screen, whether opened by a touch or the pointer; and again when the window shrinks to 160 px with a card
-        # open, leaving less than 120 px under the top bar.
+        # past a screen, whether opened by a touch or the pointer; and again when the window shrinks with a card open to leave
+        # 90 px under the top bar (less than an older 120 px floor), then 30 px (too little for any card).
         trial = json.loads((EXAMPLES / "fictional-trial.json").read_text(encoding="utf-8"))
         long_run = next(r for r in trial["runs"] if r.get("passed") is True and isinstance(r.get("judge"), dict))
         long_run["judge"]["reason"] = " ".join(["The reply names the harbour, the light and the mood, and invents nothing the photograph does not show."] * 60)
@@ -522,14 +522,16 @@ const big = document.createElement("span"); big.textContent = "x"; big.setAttrib
 document.querySelector(".av-block").appendChild(big); point(big, "pointerover"); out.huge = box();
 // The window shrinks with the card open, and nothing else happens: the card is fitted again to the room left.
 const resized = new Promise(done => addEventListener("resize", done, { once: true }));
-avDriveResize("1440x160"); await resized;
+// To a window leaving 90 px under the top bar: less than the 120 px an older floor allowed, room enough for a card.
+const bar = () => document.querySelector(".av-topbar").getBoundingClientRect().bottom;
+avDriveResize("1440x" + Math.round(bar() + 12 + 90)); await resized;
 await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))); out.shrunk = box();
 // With too little room for even a card's frame and a line, it closes; with room again, pointing at the mark reopens it.
 const frames = () => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
 const resize = size => { const r = new Promise(done => addEventListener("resize", done, { once: true })); avDriveResize(size); return r; };
 // The mark is kept in view just under the top bar, so only the lack of room can close its card.
 big.style.cssText = "position:fixed;top:" + (document.querySelector(".av-topbar").getBoundingClientRect().bottom + 2) + "px;left:120px;width:10px;height:6px;font-size:0;overflow:hidden;z-index:50";
-await resize("1440x75"); await frames(); out.tiny = box(); out.tinyMarkSeen = big.getBoundingClientRect().bottom <= innerHeight;
+await resize("1440x" + Math.round(bar() + 12 + 30)); await frames(); out.tiny = box(); out.tinyMarkSeen = big.getBoundingClientRect().bottom <= innerHeight;
 await resize("1440x420"); await frames();
 big.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })); out.again = box();
 return out;
