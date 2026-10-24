@@ -26,7 +26,7 @@
 // presses Tab from the top of the page until SELECTOR has focus and reports
 // how many presses that took as "tabs" (null when it was never reached).
 "use strict";
-const { spawn } = require("node:child_process");
+const { execFileSync, spawn } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 
@@ -37,11 +37,17 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 const within = (ms, promise) => Promise.race([promise, sleep(ms).then(() => { throw new Error("timed out"); })]);
 
 async function stop(browser, port) {
-  // The browser has ended when nothing is left in its process group (where
-  // groups exist), not merely when its launcher, which may be a wrapper, exits.
+  // The browser has ended when nothing that can still run is left in its
+  // process group (where groups exist), not merely when its launcher, which may
+  // be a wrapper, exits. An exited member nobody has reaped yet (a zombie, as
+  // under a container init that does not reap) does not count.
   const running = () => {
     if (process.platform === "win32") return browser.exitCode === null && browser.signalCode === null;
-    try { process.kill(-browser.pid, 0); return true; } catch { return false; }
+    try { process.kill(-browser.pid, 0); } catch { return false; }
+    try {
+      return execFileSync("ps", ["-A", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" }).split("\n")
+        .some(row => { const [pgid, stat] = row.trim().split(/\s+/); return Number(pgid) === browser.pid && !!stat && !stat.startsWith("Z"); });
+    } catch { return true; } // no ps: the group still exists
   };
   const ended = async ms => { for (const end = Date.now() + ms; Date.now() < end; await sleep(100)) if (!running()) return true; return !running(); };
   const group = signal => { try { process.kill(-browser.pid, signal); } catch { try { browser.kill(signal); } catch { /* already gone */ } } };

@@ -17,6 +17,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -446,7 +447,7 @@ class BrowserRenderTest(unittest.TestCase):
     def test_a_driven_browser_closes_itself_and_leaves_nothing_behind(self) -> None:
         before = fetcher_leftovers()
         out = self.drive(self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", EXAMPLES / "fictional-narrative.json"), width=390)
-        if os.name == "posix":
+        if sys.platform.startswith("linux"):  # where the profile is known to keep a SingletonSocket link
             self.assertIsNotNone(out["singleton"], "the driver could not find the browser's singleton folder to check")
         self.assertEqual(sorted(map(str, fetcher_leftovers() - before)), [], "the drive left empty fetcher folders in the temp directory")
         self.assertEqual(self.browser_processes(self.dir / "drive-profile"), [], "a browser process outlived the drive")
