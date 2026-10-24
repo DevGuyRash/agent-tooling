@@ -7,7 +7,8 @@
  * report; every value is the member's own headline value on its measure (a
  * pass rate, or a comparison's primary metric of any kind), and a change is
  * colored good or bad only by that measure's direction. */
-import { attrs, esc, fmtInt, fmtNum, fmtPct, fmtUsd, inline, isNum, prose, svg } from "../core";
+import { attrs, axisTicks, esc, fmtInt, fmtNum, fmtPct, fmtUsd, gridlines, inline, isNum, niceTicks, prose, ticksHtml, tipAttr } from "../core";
+import type { Tick } from "../core";
 import { createContext } from "../model";
 import type { RenderContext, ReportSpec } from "../model";
 import { renderBlock } from "../report";
@@ -53,20 +54,22 @@ function spanText(m: MemberMeasure | null, iv: [number, number] | null): string 
 }
 /** Where a value sits on a member's measure, as a share of its track. */
 const at = (m: MemberMeasure, v: number) => (v - m.domain[0]) / (m.domain[1] - m.domain[0] || 1);
-const ends = (m: MemberMeasure): [string, string] => m.percent ? ["0%", "100%"] : m.kind === "rank" ? [`rank ${fmtNum(m.domain[0])}`, `rank ${fmtNum(m.domain[1])}`] : m.kind === "ordinal" ? (m.levels && m.levels.length > 1 ? [`“${m.levels[0]}”`, `“${m.levels[m.levels.length - 1]}”`] : ["lowest level", "highest level"]) : [fmtNum(m.domain[0]), `${fmtNum(m.domain[1])}${m.unit ? ` ${m.unit}` : ""}`];
 const intervalText = (m: MemberMeasure | null, iv: [number, number] | null) => !iv || !m ? "—" : m.percent ? `${fmtPct(iv[0])}–${fmtPct(iv[1])}` : `${fmtNum(iv[0])}–${fmtNum(iv[1])}${m.unit ? ` ${m.unit}` : ""}`;
 // The same, escaped for HTML: a measure's unit is supplied text.
 const change = (m: MemberMeasure | null, d: number | null) => esc(changeText(m, d));
 const span = (m: MemberMeasure | null, iv: [number, number] | null) => esc(spanText(m, iv));
 const interval = (m: MemberMeasure | null, iv: [number, number] | null) => esc(intervalText(m, iv));
 /** A value's interval, or, when it pools several cases, that it has none: runs on one case repeat that case rather than sample new ones. */
-const rowInterval = (m: MemberMeasure | null, r: MemberRow) => r.cases > 1 ? `<span class="av-muted">none: pooled over ${esc(r.over)}</span>` : interval(m, r.interval);
-const gainInterval = (m: MemberMeasure | null, g: MemberGain) => m?.kind === "ordinal" ? (g.cases > 1 ? `median levels balanced over the ${esc(g.over)}` : "median levels") : g.cases > 1 ? `averaged over the ${esc(g.over)}, no interval` : g.delta === null ? "—" : span(m, g.interval);
+const rowIntervalText = (m: MemberMeasure | null, r: MemberRow) => r.cases > 1 ? `none: pooled over ${r.over}` : intervalText(m, r.interval);
+const rowInterval = (m: MemberMeasure | null, r: MemberRow) => r.cases > 1 ? `<span class="av-muted">${esc(rowIntervalText(m, r))}</span>` : interval(m, r.interval);
+const gainIntervalText = (m: MemberMeasure | null, g: MemberGain) => m?.kind === "ordinal" ? (g.cases > 1 ? `median levels balanced over the ${g.over}` : "median levels") : g.cases > 1 ? `averaged over the ${g.over}, no interval` : g.delta === null ? "—" : spanText(m, g.interval);
+const gainInterval = (m: MemberMeasure | null, g: MemberGain) => esc(gainIntervalText(m, g));
 /** Whether a row's value weighs evidence naming no case as a group of its own. */
 const weighsNoCase = (r: MemberRow) => !!r.perCase?.some(c => c.id === NO_CASE && c.n > 0);
 /** A change in words: its size in the measure's units, or for an ordinal measure the median level it moves from and to
  * (no difference is computed for levels). */
-const gainWords = (m: MemberMeasure | null, g: MemberGain) => isNum(g.delta) ? change(m, g.delta) : m?.kind === "ordinal" && isNum(g.from) && isNum(g.to) ? esc(`“${m.levels?.[g.from] ?? g.from}” → “${m.levels?.[g.to] ?? g.to}”`) : "—";
+const gainWordsText = (m: MemberMeasure | null, g: MemberGain) => isNum(g.delta) ? changeText(m, g.delta) : m?.kind === "ordinal" && isNum(g.from) && isNum(g.to) ? `“${m.levels?.[g.from] ?? g.from}” → “${m.levels?.[g.to] ?? g.to}”` : "—";
+const gainWords = (m: MemberMeasure | null, g: MemberGain) => esc(gainWordsText(m, g));
 /** Whether a change was taken: a size, or for an ordinal measure the two levels its line runs between. */
 const taken = (m: MemberMeasure | null, g: MemberGain) => isNum(g.delta) || (m?.kind === "ordinal" && isNum(g.from) && isNum(g.to));
 
@@ -101,40 +104,79 @@ function lanesOf(s: MemberSummary): Array<[string, MemberRow[]]> {
   return out;
 }
 
+/** Where a setup's value pools several cases, the case-balanced value every view plots, in words; otherwise null. */
+function balancedSaid(s: MemberSummary, r: MemberRow): string | null {
+  const m = s.measure;
+  if (!m || r.cases <= 1 || r.balanced === null || relativeMeasure(m)) return null;
+  const v = r.balanced, words = m.percent ? fmtPct(v) : m.kind === "ordinal" ? `median level “${m.levels?.[Math.round(v)] ?? fmtNum(v)}”` : `${fmtNum(v)}${m.unit ? ` ${m.unit}` : ""}`;
+  return `${words} with ${eachWeighted(weighsNoCase(r))}`;
+}
 /** A setup's value in words: the report's own, and where it pools several cases the case-balanced value every view plots. */
 function valueSaid(s: MemberSummary, r: MemberRow): string {
-  const m = s.measure;
-  if (!m || r.cases <= 1 || r.balanced === null || relativeMeasure(m)) return r.text;
-  const v = r.balanced, words = m.percent ? fmtPct(v) : m.kind === "ordinal" ? `median level “${m.levels?.[Math.round(v)] ?? fmtNum(v)}”` : `${fmtNum(v)}${m.unit ? ` ${m.unit}` : ""}`;
-  return `${r.text}; ${words} with ${eachWeighted(weighsNoCase(r))}`;
+  const balanced = balancedSaid(s, r);
+  return balanced ? `${r.text}; ${balanced}` : r.text;
 }
 
-/** Every setup on one track per model (or group), at its case-balanced value: the reference as a ring, each change as a line from it, toned by the measure's direction. */
+/** A value in its measure's own terms, briefly: a share, a level's name, a rank, or a number with its unit. */
+function valueShort(m: MemberMeasure, v: number): string {
+  if (m.percent) return fmtPct(v);
+  if (m.kind === "ordinal") return m.levels?.[Math.round(v)] ?? fmtNum(v);
+  if (m.kind === "rank") return `rank ${fmtNum(v)}`;
+  return `${fmtNum(v)}${m.unit ? ` ${m.unit}` : ""}`;
+}
+/** What a member's values are read against: quarters of 0–100% for a rate, each level (the ends and middle of a long
+ * scale named), each rank, or round numbers across the measure's range. */
+function measureTicks(m: MemberMeasure): Tick[] {
+  const [lo, hi] = m.domain, inside = (v: number) => v >= lo - 1e-9 && v <= hi + 1e-9;
+  if (m.percent) return [0, .25, .5, .75, 1].map(v => ({ x: at(m, v), label: fmtPct(v) }));
+  if (m.kind === "ordinal") {
+    const levels = m.levels && m.levels.length > 1 ? m.levels : null, last = levels ? levels.length - 1 : hi;
+    return Array.from({ length: last + 1 }, (_, i) => ({ x: at(m, i), label: !levels ? (i === 0 ? "lowest level" : i === last ? "highest level" : "") : levels.length <= 5 || i === 0 || i === last || i === Math.round(last / 2) ? levels[i] : "" }));
+  }
+  const values = m.kind === "rank" && hi - lo <= 6 ? Array.from({ length: Math.round(hi - lo) + 1 }, (_, i) => lo + i) : niceTicks(lo, hi, 4).filter(inside);
+  return values.map(v => ({ x: at(m, v), label: fmtNum(v) }));
+}
+const axisTitle = (m: MemberMeasure) => `${m.label}${m.unit && !m.percent ? `, ${m.unit}` : ""}`;
+const cap = (t: string) => t.charAt(0).toUpperCase() + t.slice(1);
+
+/** A setup's hover card: the report and model it ran in, then its value, what was observed, its interval, cost and change. */
+function rowTip(s: MemberSummary, r: MemberRow, lane: string): string {
+  const m = s.measure!, g = s.gains.find(x => x.arm === r.id);
+  return tipAttr({
+    over: [s.short, lane].filter(Boolean).join(" · "), title: r.label, mark: s.arms.mark(r.id),
+    rows: [
+      [cap(m.label), r.balanced === null ? `no valid ${s.noun}` : balancedSaid(s, r) ?? valueShort(m, r.balanced)],
+      ["Observed", r.text],
+      ["95% interval", rowIntervalText(m, r)],
+      ["Invalid", r.invalid ? fmtInt(r.invalid) : ""],
+      ["Median cost per run", isNum(r.cost) ? fmtUsd(r.cost) : ""],
+      ...(g ? [["Change from reference", gainWordsText(m, g)], ["Change interval", gainIntervalText(m, g)]] as Array<[string, string]> : []),
+    ],
+    note: r.baseline ? "The reference: each change in its lane is measured from it." : undefined,
+  });
+}
+
+/** Each setup on a row of its own, grouped by model (or group), on its measure's axis: its value as its mark (the
+ * reference as a ring), a value from one case with its 95% interval as a capped whisker, each change as a line from the
+ * reference's value toned by the measure's direction, and the value written at the row's end. A row shows its card on
+ * hover, so no setup has to be looked up by its color. */
 function lanes(s: MemberSummary, names: boolean): string {
   const m = s.measure;
   if (!m || !s.rows.length) return `<p class="av-cx-norate">${s.kind === "spec" ? "A report of its own blocks: open it to read its evidence" : "No headline value recorded"}.</p>`;
   const groups = lanesOf(s), multi = groups.length > 1;
   const said = groups.map(([lane, rows]) => `${lane ? `${lane}: ` : ""}${rows.map(r => `${r.label} ${valueSaid(s, r)}${r.baseline ? ", the reference" : ""}`).join("; ")}`).join(". ");
-  const body = groups.map(([lane, rows]) => {
-    // Each change's line runs between the values it is taken over (the cases both ran), as its stated change is; with no
+  const ticks = measureTicks(m), grid = gridlines(ticks);
+  const body = groups.map(([lane, rows]) => `<div class="av-cx-lane">${multi || names ? `<p class="av-cx-lane-name">${esc(lane || "setups")}</p>` : ""}${rows.map(r => {
+    // A change's line runs between the values it is taken over (the cases both ran), as its stated change is; with no
     // case in common there is no change, and no line.
-    const shifts = s.gains.filter(g => rows.some(r => r.id === g.arm) && isNum(g.from) && isNum(g.to)).map(g => {
-      const a = at(m, Math.min(g.from!, g.to!)), b = at(m, Math.max(g.from!, g.to!));
-      return `<span class="av-cx-shift av-cx-shift--${tone(m, g.to! - g.from!)}" style="--a:${pos(a)};--b:${pos(b)}"></span>`;
-    }).join("");
-    const cis = rows.filter(r => r.interval).map(r => `<span class="av-cx-ci" style="--a:${pos(at(m, r.interval![0]))};--b:${pos(at(m, r.interval![1]))};--c:${s.arms.color(r.id)}"></span>`).join("");
-    const placed: number[] = [];
-    const lift = new Map<MemberRow, number>();
-    for (const r of [...rows].filter(x => x.balanced !== null).sort((x, y) => Number(y.baseline) - Number(x.baseline))) {
-      const x = at(m, r.balanced!), k = placed.filter(v => Math.abs(v - x) < 0.035).length;
-      placed.push(x); lift.set(r, k ? (k % 2 ? -1 : 1) * Math.ceil(k / 2) * 8 : 0);
-    }
-    const high = Math.max(0, ...[...lift.values()].map(Math.abs));
-    const dots = rows.filter(r => r.balanced !== null).map(r => `<span class="av-cx-pt${r.baseline ? " av-cx-pt--base" : ""}" style="--x:${pos(at(m, r.balanced!))};--dy:${lift.get(r) || 0}px" data-av-tip="${esc(`${r.label}: ${valueSaid(s, r)}${r.baseline ? " · the reference" : ""}`)}">${s.arms.glyph(r.id)}</span>`).join("");
-    const none = rows.every(r => r.balanced === null) ? `<span class="av-cx-none">no valid ${s.noun}</span>` : "";
-    return `<div class="av-cx-lane">${multi || names ? `<span class="av-cx-lane-name">${esc(lane || "setups")}</span>` : ""}<div class="av-cx-track"${high ? ` style="height:${22 + 2 * high}px"` : ""}>${shifts}${cis}${dots}${none}</div>${m.percent ? "" : `<span class="av-cx-ends" aria-hidden="true"><span>${esc(ends(m)[0])}</span><span>${esc(ends(m)[1])}</span></span>`}</div>`;
-  }).join("");
-  return `<div class="av-cx-lanes" role="img" aria-label="${esc(`${m.label} by setup${m.better === "none" ? "" : `, ${m.better} is better`}. ${said}.`)}">${body}</div>`;
+    const g = s.gains.find(x => x.arm === r.id && isNum(x.from) && isNum(x.to));
+    const shift = g ? `<span class="av-cx-shift av-cx-shift--${tone(m, g.to! - g.from!)}" style="--a:${pos(at(m, Math.min(g.from!, g.to!)))};--b:${pos(at(m, Math.max(g.from!, g.to!)))}"></span><span class="av-cx-from" style="--x:${pos(at(m, g.from!))}"></span>` : "";
+    const ci = r.interval ? `<span class="av-whisker" style="--a:${pos(at(m, r.interval[0]))};--b:${pos(at(m, r.interval[1]))}"></span>` : "";
+    const mark = r.balanced !== null ? `<span class="av-cx-pt${r.baseline ? " av-cx-pt--base" : ""}" style="--x:${pos(at(m, r.balanced))}" data-av-tip-at>${s.arms.glyph(r.id)}</span>` : `<span class="av-cx-none">no valid ${s.noun}</span>`;
+    return `<div class="av-cx-row" style="--c:${s.arms.color(r.id)}"${rowTip(s, r, lane)}><span class="av-cx-who">${s.arms.glyph(r.id)}<span>${esc(r.label)}</span></span><div class="av-cx-track">${grid}${shift}${ci}${mark}</div><span class="av-cx-val">${r.balanced === null ? "—" : esc(valueShort(m, r.balanced))}</span></div>`;
+  }).join("")}</div>`).join("");
+  const axis = `<div class="av-cx-axis" aria-hidden="true"><span class="av-axis-title">${esc(axisTitle(m))}</span>${ticksHtml(ticks)}<span></span></div>`;
+  return `<div class="av-cx-lanes" role="img" aria-label="${esc(`${m.label} by setup${m.better === "none" ? "" : `, ${m.better} is better`}. ${said}.`)}">${body}${axis}</div>`;
 }
 
 /** The exact values behind a member's tracks. */
@@ -269,14 +311,13 @@ export function shifts(input: Subset, ctx: RenderContext): string {
   };
   const rows = themes.map(t => `<div class="av-sh-theme"><h3 class="av-sh-theme-title">${esc(t.label)}</h3>${t.members.map(s =>
     `<div class="av-sh-row"><div class="av-sh-name">${stampHtml(s, "av-cx-stamp--icon")}<a href="${open(s.id)}">${esc(s.short)}</a><span class="av-sh-sum">${s.measure!.percent ? "" : `${esc(s.metric)}: `}${line(s)}</span></div><div class="av-sh-plot">${lanes(s, true)}</div></div>`).join("")}</div>`).join("");
-  const scale = `<div class="av-sh-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(x => `<span style="--x:${pos(x)}">${x * 100}%</span>`).join("")}</div></div>`;
-  const key = `<ul class="av-sh-key" aria-label="How to read this chart"><li><span class="av-cx-key-ring" aria-hidden="true"></span>the reference setup</li><li><span class="av-cx-key-dot" aria-hidden="true"></span>a setup tried (its color and shape as in its report)</li><li><span class="av-cx-key-up" aria-hidden="true"></span>a change for the better</li><li><span class="av-cx-key-down" aria-hidden="true"></span>a change for the worse</li><li><span class="av-cx-key-neutral" aria-hidden="true"></span>a change on a measure with no better direction</li><li><span class="av-cx-key-ci" aria-hidden="true"></span>95% interval: where the true value likely lies (drawn only for a value from one case)</li></ul><p class="av-muted av-sh-read">Rates share the 0–100% scale above; a measure that is not a rate shows its own range under its track.</p>`;
+  const key = `<ul class="av-sh-key" aria-label="How to read this chart"><li><span class="av-cx-key-ring" aria-hidden="true"></span>the reference setup</li><li><span class="av-cx-key-dot" aria-hidden="true"></span>a setup tried (its color and shape as in its report)</li><li><span class="av-cx-key-up" aria-hidden="true"></span>a change from the reference for the better</li><li><span class="av-cx-key-down" aria-hidden="true"></span>for the worse</li><li><span class="av-cx-key-neutral" aria-hidden="true"></span>on a measure with no better direction</li><li><span class="av-cx-key-ci" aria-hidden="true"></span>95% interval: where the true value likely lies (a value from one case has one)</li></ul><p class="av-muted av-sh-read">Each report is drawn on its own measure's axis. Hover or touch a setup for its numbers.</p>`;
   const table = themes.flatMap(t => t.members).flatMap(s => s.rows.map(r => {
     const g = s.gains.find(x => x.arm === r.id);
     return `<tr><th scope="row"><a href="${open(s.id)}">${esc(s.short)}</a></th><td>${esc(s.metric)}</td><td>${esc(r.lane || "—")}</td><td>${s.arms.tag(r.id, { id: false })}${r.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</td><td>${esc(valueSaid(s, r))}</td><td class="av-num">${rowInterval(s.measure, r)}</td><td class="av-num"${attrs({ title: g?.method })}>${g ? gainWords(s.measure, g) : "—"}</td><td class="av-num">${g ? gainInterval(s.measure, g) : "—"}</td></tr>`;
   })).join("");
   const exact = `<details class="av-cx-exact"><summary>Every value and change, exactly</summary><div class="av-scroll-x"><table class="av-table av-table--compact"><thead><tr><th scope="col">Report</th><th scope="col">Measure</th><th scope="col">Model or group</th><th scope="col">Setup</th><th scope="col">Value</th><th scope="col">95% interval</th><th scope="col">Change from reference</th><th scope="col">95% interval of the change</th></tr></thead><tbody>${table}</tbody></table></div><p class="av-muted">Rates count valid observations only. A change is the setup minus its reference in the same lane: for trials with a 95% Newcombe interval, for comparisons by the comparison's own method for its metric (hover a change to read it); an interval that spans zero means the change could be chance. A value or change pooled over several cases has no interval, since runs on one case repeat that case rather than sample new ones; its report gives each case's own interval.</p></details>`;
-  return frame("shifts", input, `<div class="av-sh">${key}${scale}${rows}</div>${exact}`);
+  return frame("shifts", input, `<div class="av-sh">${key}${rows}</div>${exact}`);
 }
 
 // ------------------------------------------------------------------ cost against gain
@@ -287,26 +328,39 @@ export function costGain(input: Subset, ctx: RenderContext): string {
   const points = ms.flatMap(s => s.gains.filter(g => isNum(g.delta) && isNum(g.costChange)).map(g => ({ s, g })));
   const left = ms.filter(s => s.rows.length > 1 && !s.gains.some(g => isNum(g.delta) && isNum(g.costChange)));
   if (!points.length) return frame("cost-gain", input, empty("No change records both a pass-rate difference and a cost difference against its reference."));
-  const W = 760, H = 440, L = 64, R = 24, T = 28, B = 56;
-  const mx = Math.max(.25, ...points.map(p => Math.abs(p.g.costChange!))) * 1.12;
-  const my = Math.min(1, Math.max(.2, ...points.flatMap(p => [Math.abs(p.g.delta!), ...(p.g.interval ? p.g.interval.map(Math.abs) : [])])) * 1.08);
-  const x = (v: number) => L + ((v + mx) / (2 * mx)) * (W - L - R), y = (v: number) => T + ((my - v) / (2 * my)) * (H - T - B);
+  // Both axes run symmetric about zero to the round tick past the largest value (and its interval), so no change sits
+  // past a labelled bound and either side of zero reads at the same scale.
+  const half = (largest: number, cap: number) => { const t = axisTicks(0, Math.min(cap, largest * 1.04), 2); return [...t.slice(1).reverse().map(v => -v), ...t]; };
+  const xs = half(Math.max(.1, ...points.map(p => Math.abs(p.g.costChange!))), 10);
+  const ys = half(Math.max(.1, ...points.flatMap(p => [Math.abs(p.g.delta!), ...(p.g.interval ? p.g.interval.map(Math.abs) : [])])), 1);
+  const mx = xs[xs.length - 1], my = ys[ys.length - 1];
+  const x = (v: number) => (Math.max(-mx, Math.min(mx, v)) + mx) / (2 * mx), y = (v: number) => (my - Math.max(-my, Math.min(my, v))) / (2 * my);
   const tick = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(Math.round(v * 100))}%`;
   const pts = (v: number) => { const p = Math.round(v * 100); return signed(p, `${Math.abs(p)}`); };
-  const xt = [-mx, -mx / 2, 0, mx / 2, mx].map(v => `<line class="av-cg-grid" x1="${x(v)}" x2="${x(v)}" y1="${T}" y2="${H - B}"/><text class="av-cg-tick" x="${x(v)}" y="${H - B + 18}" text-anchor="middle">${tick(v)}</text>`).join("");
-  const yt = [-my, -my / 2, 0, my / 2, my].map(v => `<line class="av-cg-grid" x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}"/><text class="av-cg-tick" x="${L - 8}" y="${y(v) + 4}" text-anchor="end">${pts(v)}</text>`).join("");
-  const quads = [["More passed, cost less", L + 8, T + 16, "start"], ["More passed, cost more", W - R - 8, T + 16, "end"], ["Fewer passed, cost less", L + 8, H - B - 10, "start"], ["Fewer passed, cost more", W - R - 8, H - B - 10, "end"]]
-    .map(([t, qx, qy, a]) => `<text class="av-cg-quad" x="${qx}" y="${qy}" text-anchor="${a}">${t}</text>`).join("");
+  // Changes that land on (nearly) the same spot fan out side by side, so each keeps a mark to hover and a number to read.
+  const spots = points.map(p => ({ x: x(p.g.costChange!), y: y(p.g.delta!), dx: 0 }));
+  const done = new Set<number>();
+  spots.forEach((a, i) => {
+    if (done.has(i)) return;
+    const near = spots.map((_, j) => j).filter(j => !done.has(j) && Math.abs(spots[j].x - a.x) < .03 && Math.abs(spots[j].y - a.y) < .045);
+    // Side by side about the cluster's middle, in the order they sit, 24px apart (a mark is 22px wide).
+    const mid = near.reduce((t, j) => t + spots[j].x, 0) / near.length;
+    near.sort((j, k) => spots[j].x - spots[k].x).forEach((j, k) => { done.add(j); spots[j].x = near.length > 1 ? mid : spots[j].x; spots[j].dx = (k - (near.length - 1) / 2) * 24; });
+  });
   const marks = points.map((p, i) => {
-    const cx = x(p.g.costChange!), cy = y(p.g.delta!);
-    const ci = p.g.interval ? `<line class="av-cg-ci" x1="${cx}" x2="${cx}" y1="${y(Math.min(my, p.g.interval[1]))}" y2="${y(Math.max(-my, p.g.interval[0]))}"/>` : "";
-    return `<g class="av-cg-pt" style="--v:${p.s.arms.color(p.g.arm)}">${ci}<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="10"/><text x="${cx.toFixed(1)}" y="${(cy + 4).toFixed(1)}" text-anchor="middle">${i + 1}</text></g>`;
+    const { x: px, y: py, dx } = spots[i], m = p.s.measure;
+    const ci = p.g.interval ? `<span class="av-whisker av-whisker--v av-cg-ci" style="--x:${pos(px)};--dx:${dx}px;--a:${pos(y(p.g.interval[1]))};--b:${pos(y(p.g.interval[0]))};--v:${p.s.arms.color(p.g.arm)}"></span>` : "";
+    const card = tipAttr({ over: `${p.s.short}${p.g.lane ? ` · ${p.g.lane}` : ""}`, title: p.s.arms.label(p.g.arm), mark: p.s.arms.mark(p.g.arm), rows: [["Against", p.s.arms.label(p.g.base)], ["Pass rate change", changeText(m, p.g.delta)], ["Its 95% interval", gainIntervalText(m, p.g)], ["Cost per run change", tick(p.g.costChange!)], ["Report's decision", p.s.stamp]], note: "Open the report to read it in full." });
+    return `${ci}<a class="av-cg-pt" href="${open(p.s.id)}" style="--x:${pos(px)};--y:${pos(py)};--dx:${dx}px;--v:${p.s.arms.color(p.g.arm)}"${card}><span class="av-cg-dot">${i + 1}</span><span class="av-sr"> ${esc(p.s.arms.label(p.g.arm))} in ${esc(p.s.short)}</span></a>`;
   }).join("");
-  const plot = svg(`Cost against gain: ${plural(points.length, "change")} against their references`, H,
-    `${quads}${xt}${yt}<line class="av-cg-zero" x1="${x(0)}" x2="${x(0)}" y1="${T}" y2="${H - B}"/><line class="av-cg-zero" x1="${L}" x2="${W - R}" y1="${y(0)}" y2="${y(0)}"/><text class="av-cg-axis" x="${(L + W - R) / 2}" y="${H - 12}" text-anchor="middle">Cost per run against the reference (median over cases) →</text><text class="av-cg-axis" transform="translate(16 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle">Pass rate against the reference →</text>${marks}`, W);
+  const quads = [["More passed, cost less", "tl"], ["More passed, cost more", "tr"], ["Fewer passed, cost less", "bl"], ["Fewer passed, cost more", "br"]].map(([t, c]) => `<span class="av-cg-quad av-cg-quad--${c}" aria-hidden="true">${t}</span>`).join("");
+  const grid = xs.map(v => `<span class="av-cg-vline${v === 0 ? " av-cg-zero" : ""}" style="--x:${pos(x(v))}"></span>`).join("") + ys.map(v => `<span class="av-cg-hline${v === 0 ? " av-cg-zero" : ""}" style="--y:${pos(y(v))}"></span>`).join("");
+  const yTicks = `<div class="av-cg-yticks" aria-hidden="true">${ys.map(v => `<span style="--y:${pos(y(v))}">${pts(v)}</span>`).join("")}</div>`;
+  const xTicks = ticksHtml(xs.map(v => ({ x: x(v), label: tick(v) })));
+  const plot = `<figure class="av-cg" aria-label="${esc(`Cost against gain: ${plural(points.length, "change")} against their references`)}"><figcaption class="av-axis-title av-cg-ytitle">Pass rate against the reference, points</figcaption>${yTicks}<div class="av-cg-plot">${quads}${grid}${marks}</div><span></span>${xTicks}<span></span><p class="av-axis-title av-cg-xtitle">Cost per run against the reference, median over cases</p></figure>`;
   const key = `<ol class="av-cg-key">${points.map((p, i) => `<li style="--v:${p.s.arms.color(p.g.arm)}"><span class="av-cg-n" aria-hidden="true">${i + 1}</span><span class="av-cg-text">${p.s.arms.tag(p.g.arm, { id: false })} <span class="av-muted">against ${esc(p.s.arms.label(p.g.base))}${p.g.lane ? ` on ${esc(p.g.lane)}` : ""} in</span> <a href="${open(p.s.id)}">${esc(p.s.short)}</a></span><span class="av-cg-vals"><b>${change(p.s.measure, p.g.delta)}</b> <span class="av-muted">(${span(p.s.measure, p.g.interval)})</span> · cost <b>${tick(p.g.costChange!)}</b> · <span class="av-muted">report:</span> ${stampHtml(p.s, "av-cx-stamp--icon")}</span></li>`).join("")}</ol>`;
   const note = left.length ? `<p class="av-muted">Not drawn, for want of a reference on the same model or a recorded cost: ${left.map(s => `<a href="${open(s.id)}">${esc(s.short)}</a>`).join(", ")}.</p>` : "";
-  return frame("cost-gain", input, `${plot}<p class="av-muted av-cg-read">Vertical whiskers are 95% intervals of the pass-rate change; one that crosses the middle line could be chance. Cost changes are each trial's median over its cases of the per-case difference in cost per run.</p>${key}${note}`);
+  return frame("cost-gain", input, `<p class="av-cg-legend"><span><span class="av-cg-key-dot" aria-hidden="true">1</span>a change, numbered as in the list below (hover or touch it for its numbers; select it to open its report)</span><span><span class="av-cg-key-ci" aria-hidden="true"></span>95% interval of its pass-rate change: one that crosses zero could be chance</span></p>${plot}<p class="av-muted av-cg-read">Cost changes are each trial's median over its cases of the per-case difference in cost per run.</p>${key}${note}`);
 }
 
 // ------------------------------------------------------------------ timeline
@@ -347,11 +401,13 @@ export function matchups(input: Subset & { pairs?: Array<{ a: string; b: string;
   const pairs = (Array.isArray(input.pairs) ? input.pairs.map(p => ({ ...p, source: "pair" as const })) : model.pairs)
     .filter(p => p && model.byId.has(p.a) && model.byId.has(p.b) && p.a !== p.b && (chosen.has(p.a) || chosen.has(p.b)));
   if (!pairs.length) return frame("matchups", input, empty("No pair to show."));
-  const side = (s: MemberSummary, letter: string) => `<div class="av-mu-side"><span class="av-rc-letter" aria-hidden="true">${letter}</span>${stampHtml(s)}<a class="av-mu-title" href="${open(s.id)}">${esc(s.short)}</a>${s.measure ? lanes(s, false) : ""}</div>`;
+  // Each side has the card's full width for its setups, A above B, so every setup reads as a labelled row; on a card wide
+  // enough for two such columns they sit side by side (styles: .av-mu-pair).
+  const side = (s: MemberSummary, letter: string) => `<section class="av-mu-side" aria-label="${letter}: ${esc(s.short)}"><header class="av-mu-head"><span class="av-rc-letter" aria-hidden="true">${letter}</span><a class="av-mu-title" href="${open(s.id)}">${esc(s.short)}</a></header>${stampHtml(s)}${s.measure ? lanes(s, false) : ""}</section>`;
   return frame("matchups", input, `<ul class="av-mu">${pairs.map(p => {
     const a = model.byId.get(p.a)!, b = model.byId.get(p.b)!;
     const kind = p.title || (p.source === "follows" ? "A follow-up and the report it followed" : "Read together");
-    return `<li class="av-mu-card"><p class="av-mu-kind">${esc(kind)}</p><div class="av-mu-sides">${side(a, "A")}<span class="av-mu-arrow" aria-hidden="true">${p.source === "follows" ? "→" : "vs"}</span>${side(b, "B")}</div><p class="av-mu-diff">${differs(a, b)}</p>${p.note ? `<p class="av-muted">${inline(p.note)}</p>` : ""}<a class="av-btn" href="${pairHref(a.id, b.id)}">Compare side by side<span aria-hidden="true"> →</span></a></li>`;
+    return `<li class="av-mu-card"><p class="av-mu-kind">${esc(kind)}</p><div class="av-mu-pair">${side(a, "A")}<p class="av-mu-link"><span>${p.source === "follows" ? "followed by" : "against"}</span></p>${side(b, "B")}</div><p class="av-mu-diff">${differs(a, b)}</p>${p.note ? `<p class="av-muted">${inline(p.note)}</p>` : ""}<a class="av-btn" href="${pairHref(a.id, b.id)}">Compare side by side<span aria-hidden="true"> →</span></a></li>`;
   }).join("")}</ul>`);
 }
 
@@ -417,8 +473,9 @@ export function reportCompare(input: { a: string; b: string; title?: string; des
     const shared: MemberMeasure = { ...m, domain: measureDomain(m, plotted) };
     // A value in the measure's own words: a rate, a number with its unit, or a level.
     const valueWords = (v: number) => shared.percent ? fmtPct(v) : m.kind === "ordinal" ? `“${m.levels?.[Math.round(v)] ?? fmtNum(v)}”` : `${fmtNum(v)}${m.unit ? ` ${m.unit}` : ""}`;
-    // A mark's tip gives the value it is drawn at, and what that value is, beside the report's own words.
-    const marker = (r: MemberRow, v: number, letter: string, near: boolean, over: string | null) => `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${pos(at(shared, v))};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px" data-av-tip="${esc(`${letter} · ${r.label}: ${valueWords(v)}${over ? ` (${over})` : ""}; the report: ${r.text}`)}">${letter}</span>`;
+    // A mark's card gives the value it is drawn at, and what that value is, beside the report's own words.
+    const ticks = measureTicks(shared);
+    const marker = (r: MemberRow, v: number, letter: string, near: boolean, over: string | null) => `<span class="av-rc-mark av-rc-mark--${letter.toLowerCase()}" style="--x:${pos(at(shared, v))};--dy:${near ? (letter === "A" ? -7 : 7) : 0}px"${tipAttr({ over: `${letter} · ${(letter === "A" ? A : B).short}`, title: r.label, rows: [[cap(m.label), `${valueWords(v)}${over ? ` (${over})` : ""}`], ["The report says", r.text]] })}>${letter}</span>`;
     const slope = compared.map(({ x, cmp }) => {
       const name = x.a && x.b ? (x.a.label === x.b.label ? esc(x.a.label) : `${esc(x.a.label)} <span class="av-muted">↔</span> ${esc(x.b.label)}`) : esc((x.a || x.b)!.label);
       // The change is taken over the cases both reports ran, each weighted equally, so neither report's mix of cases moves it.
@@ -432,14 +489,13 @@ export function reportCompare(input: { a: string; b: string; title?: string; des
       // What the line covers, beneath the track and the numbers, where it has the row's width.
       const covers = d?.label || d?.coverage ? `<p class="av-rc-over">${d.label ? `${esc(d.label.charAt(0).toUpperCase() + d.label.slice(1))}: A ${esc(valueWords(d.a))}, B ${esc(valueWords(d.b))}.` : ""}${d.coverage ? ` ${esc(d.coverage.charAt(0).toUpperCase() + d.coverage.slice(1))}.` : ""}</p>` : "";
       const said = `${(x.a || x.b)!.label}: ${x.a ? `A ${x.a.text}` : "not in A"}; ${x.b ? `B ${x.b.text}` : "not in B"}${d?.label ? `; ${d.label}: A ${valueWords(d.a)}, B ${valueWords(d.b)}` : ""}${d && d.estimate !== null ? `; B minus A ${changeText(m, d.estimate)}, ${d.interval ? `95% interval ${spanText(m, d.interval)}` : d.why || "no interval"}` : ""}${d?.coverage ? `; ${d.coverage}` : ""}`;
-      const track = x.a && x.b ? (d ? `<div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}"${attrs({ title: d.method })}>${line}${marker(x.a, d.a, "A", near, d.label)}${marker(x.b, d.b, "B", near, d.label)}</div>` : `<p class="av-rc-apart">${esc(apartWhy || "")}.</p>`)
-        : `<div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}">${(x.a || x.b)!.balanced !== null ? marker((x.a || x.b)!, (x.a || x.b)!.balanced!, x.a ? "A" : "B", false, (x.a || x.b)!.cases > 1 ? "each case weighted equally" : null) : ""}</div>`;
+      const track = x.a && x.b ? (d ? `<div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}"${attrs({ title: d.method })}>${gridlines(ticks)}${line}${marker(x.a, d.a, "A", near, d.label)}${marker(x.b, d.b, "B", near, d.label)}</div>` : `<p class="av-rc-apart">${esc(apartWhy || "")}.</p>`)
+        : `<div class="av-cx-track av-rc-track" role="img" aria-label="${esc(said)}">${gridlines(ticks)}${(x.a || x.b)!.balanced !== null ? marker((x.a || x.b)!, (x.a || x.b)!.balanced!, x.a ? "A" : "B", false, (x.a || x.b)!.cases > 1 ? "each case weighted equally" : null) : ""}</div>`;
       return `<div class="av-rc-row"><div class="av-rc-name">${name}${x.how && x.how !== "same label" ? ` <span class="av-chip">${esc(x.how)}</span>` : ""}${(x.a || x.b)!.baseline ? ' <span class="av-chip av-chip--base">reference</span>' : ""}</div>${track}<div class="av-rc-nums">${nums}</div>${covers}</div>`;
     }).join("");
-    const [lo, hi] = ends(shared);
-    const scale = shared.percent ? `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div>${[0, .25, .5, .75, 1].map(v => `<span style="--x:${pos(v)}">${v * 100}%</span>`).join("")}</div><span></span></div>` : `<div class="av-sh-scale av-rc-scale" aria-hidden="true"><span></span><div><span style="--x:0%">${esc(lo)}</span><span style="--x:100%">${esc(hi)}</span></div><span></span></div>`;
+    const scale = `<div class="av-rc-scale" aria-hidden="true"><span class="av-axis-title">${esc(axisTitle(m))}</span>${ticksHtml(ticks, { top: true })}<span></span></div>`;
     const direction = m.better === "none" ? "the line between them is the change, in grey because this measure names no better direction" : `the line between them is the change, green where B is better and red where it is worse (${m.better} is better)`;
-    setups = `<h4 class="av-rc-sub">Setup by setup</h4><p class="av-muted">Each setup's ${esc(m.label)} in A and in B on one scale; ${direction}. Setups are matched by label, then id, then id apart from an ending each side shares, then reference with reference.</p><div class="av-rc-slope">${scale}${slope}</div>`;
+    setups = `<h4 class="av-rc-sub">Setup by setup</h4><p class="av-muted">Each setup's ${esc(m.label)} in A and in B on one scale; ${direction}. Setups are matched by label, then id, then id apart from an ending each side shares, then reference with reference.</p><div class="av-rc-slope">${scale}${slope}${scale.replace("av-ticks av-ticks--top", "av-ticks")}</div>`;
   } else if (A.measure || B.measure) {
     // Each report's values in its own words beside its own track.
     const apart = (s: MemberSummary, letter: string) => `<div><p class="av-rc-top"><span class="av-rc-letter" aria-hidden="true">${letter}</span><span>${esc(s.metric || "no headline value")}</span></p>${s.measure ? lanes(s, true) : ""}${s.rows.length ? `<ul class="av-rc-values">${s.rows.map(r => `<li>${esc(r.label)}: ${esc(r.text)}</li>`).join("")}</ul>` : ""}</div>`;

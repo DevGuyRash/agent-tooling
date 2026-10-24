@@ -96,6 +96,47 @@ for (const table of [...document.querySelectorAll(".av-heatmap")].filter(t => t.
 return { cells, scrolled: Math.round(scrolled), hidden: [...new Set(out)].slice(0, 8) };
 """
 
+# What the owner asked of every chart, everywhere: "why do none of the X-Axis have any markings anywhere?" (an axis with
+# ticks and labels on every track chart), "Why doesn't hovering over these things reveal any info" (a card on every
+# mark), "also found text going out of bounds" (no text cut off, run past its view or the page, or broken inside a word
+# of a name), on every device. Each list names what breaks the rule.
+AUDIT = """
+const out = { sideways: 0, cut: [], broken: [], noAxis: [], noCard: [] };
+const shown = e => { const r = e.getBoundingClientRect(); if (!r.width || !r.height) return false; for (let x = e; x; x = x.parentElement) { const cs = getComputedStyle(x); if (cs.display === "none" || cs.visibility === "hidden") return false; if (x !== e && x.tagName === "DETAILS" && !x.open && ![...x.children].some(c => c.tagName === "SUMMARY" && c.contains(e))) return false; } return true; };
+const name = e => String(e.className.baseVal ?? e.className).split(" ")[0] + ' "' + (e.textContent || "").trim().slice(0, 40) + '"';
+const ownText = e => [...e.childNodes].some(n => n.nodeType === 3 && n.textContent.trim());
+out.sideways = Math.max(0, document.documentElement.scrollWidth - innerWidth);
+for (const e of document.querySelectorAll(".av-report *")) {
+  if (!ownText(e) || e.closest(".av-sr, .av-tip, [class$='-sr'], [class*='-sr ']") || e.getBoundingClientRect().width <= 1) continue;
+  const cs = getComputedStyle(e);
+  if (!(cs.overflowX === "hidden" || cs.overflowX === "clip" || cs.textOverflow === "ellipsis") || e.scrollWidth <= e.clientWidth + 1 || !shown(e)) continue;
+  const box = e.getBoundingClientRect(), r = document.createRange(); r.selectNodeContents(e);
+  if ([...r.getClientRects()].some(q => q.width > 0 && q.right > box.right + 1)) out.cut.push(name(e));
+}
+for (const b of document.querySelectorAll(".av-block")) {
+  const edge = b.getBoundingClientRect().right;
+  for (const e of b.querySelectorAll("span, p, a, b, strong, code, dd, dt, li, h3, h4")) {
+    if (!ownText(e) || e.closest(".av-scroll-x, .av-plot-scroll, .av-tip, [hidden]")) continue;
+    if (e.getBoundingClientRect().right > edge + 2 && shown(e)) out.cut.push("past its view: " + name(e));
+  }
+}
+for (const e of document.querySelectorAll(".av-arm-label, .av-contrast-side-label, .av-cx-who > span, .av-dec-name, .av-dec-word, .av-cx-stamp-word, .av-mu-title, .av-cmp-mini-name, .av-tick, .av-axis-title, .av-ladder-case, .av-duel-label, .av-bar-label")) {
+  const t = e.firstChild; if (!t || t.nodeType !== 3 || !shown(e)) continue;
+  for (const m of t.textContent.matchAll(/[A-Za-z][A-Za-z'’]{3,}/g)) { const r = document.createRange(); r.setStart(t, m.index); r.setEnd(t, m.index + m[0].length); if (new Set([...r.getClientRects()].filter(q => q.width > 0).map(q => Math.round(q.top))).size > 1) { out.broken.push(name(e) + " at " + m[0]); break; } }
+}
+for (const sel of [".av-cx-lanes", ".av-contrast-grid", ".av-ladder-grid", ".av-cs-ix", ".av-cs-arms", ".av-strip-panel", ".av-duel", ".av-bars", ".av-cmp-grid", ".av-cmp-dgrid", ".av-rc-slope", ".av-cg", ".av-jv-track-wrap"])
+  for (const c of document.querySelectorAll(sel)) if (shown(c) && c.querySelectorAll(".av-ticks .av-tick").length < 2 && !c.querySelector(".av-cg-yticks span")) out.noAxis.push(sel);
+for (const m of document.querySelectorAll(".av-pt, .av-cx-pt, .av-dot, .av-run, .av-cg-dot, .av-duel-seg, .av-bar-seg, .av-cmp-lk-seg, .av-svg-hit, .av-cs-dot, .av-cmp-bub, .av-rc-mark, .av-share, .av-contrast-pt"))
+  if (shown(m) && !m.closest("[data-av-tip]")) out.noCard.push(String(m.className).split(" ")[0] + " in " + String(m.parentElement.className).split(" ")[0]);
+for (const k of ["cut", "broken", "noAxis", "noCard"]) out[k] = [...new Set(out[k])].slice(0, 8);
+return out;
+"""
+# A mark's card: shown or not, and what it says.
+CARD = """
+const tip = () => { const t = document.querySelector(".av-tip"); return { shown: t.hasAttribute("data-show"), over: t.querySelector(".av-tip-over")?.textContent || "", title: t.querySelector(".av-tip-title")?.textContent || "", rows: [...t.querySelectorAll(".av-tip-rows dt")].map(d => d.textContent), mark: !!t.querySelector(".av-tip-head .av-glyph") }; };
+const point = (el, type, pointerType = "mouse") => { el.scrollIntoView({ block: "center", behavior: "instant" }); el.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType })); };
+"""
+
 def kinds_trial(*, invalid: bool, hostile: bool = False) -> dict:
     """Two arms, two cases, three repeats: a required check that fails with a
     recorded detail, a judge failure, passes and (optionally) one timeout."""
@@ -306,7 +347,11 @@ class BrowserRenderTest(unittest.TestCase):
         self.assertEqual(result["markStops"], 1, "a case dossier's runs are not a single tab stop")
         self.assertEqual(result["titles"], 0, "run marks keep a native title beside the styled tooltip")
         self.assertTrue(result["tip"]["shown"])
-        self.assertEqual(result["tip"]["text"], result["tip"]["label"], "the tooltip and the accessible name differ")
+        # Focus shows the run's card: its case and repeat, its arm and its outcome, each also in its accessible name.
+        tip = result["tip"]
+        case, repeat = tip["over"].rsplit(" · ", 1)
+        for part in (case, tip["title"], repeat, tip["outcome"]):
+            self.assertIn(part, tip["label"], f"the card and the accessible name disagree: {tip}")
         self.assertTrue(result["rightMoved"])
         self.assertTrue(result["stopFollows"], "the tab stop did not follow the focused mark")
         self.assertTrue(result["downRow"], "the down arrow did not reach the next row")
@@ -347,6 +392,75 @@ class BrowserRenderTest(unittest.TestCase):
         self.assertNotIn("error", out, out.get("error"))
         self.assertEqual(out["width"], width, "the viewport was not emulated")
         return out
+
+    def test_every_chart_has_an_axis_every_mark_a_card_and_no_text_is_cut_off(self) -> None:
+        comparisons = EXAMPLES / "comparisons"
+        pages = {
+            "trial": ("--trial", EXAMPLES / "fictional-trial.json", "--narrative", EXAMPLES / "fictional-narrative.json"),
+            "general": ("--spec", EXAMPLES / "showcase-spec.json"),
+            **{name: ("--data", comparisons / f"{name}.json", "--narrative", comparisons / f"{name}-narrative.json") for name in ("sandwich", "research-directions", "ad-campaign", "game-design")},
+            "commute": ("--csv", comparisons / "commute.csv", "--narrative", comparisons / "commute-narrative.json"),
+        }
+        for kind, args in pages.items():
+            page = self.build(*args)
+            for width in (390, 1024, 1920):
+                with self.subTest(page=kind, width=width):
+                    found = self.drive(page, width=width, script=AUDIT)["result"]
+                    self.assertEqual(found["sideways"], 0, "the page scrolls sideways")
+                    self.assertEqual(found["cut"], [], "text is cut off or runs past its view")
+                    self.assertEqual(found["broken"], [], "a name is broken inside a word")
+                    self.assertEqual(found["noAxis"], [], "a chart has no axis with ticks")
+                    self.assertEqual(found["noCard"], [], "a mark shows nothing on hover")
+
+    def test_a_mark_shows_what_was_tested_and_its_numbers_on_hover_and_on_touch(self) -> None:
+        # The owner: hovering should "include the title of whatever was tested ... and then rich data in a poppout".
+        narrative = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
+        page = self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", EXAMPLES / "fictional-narrative.json")
+        script = CARD + """
+const out = {};
+const diff = document.querySelector(".av-contrast-row--case .av-contrast-track[data-av-tip]");
+point(diff, "pointerover"); out.difference = tip();
+point(diff, "pointerout"); out.afterOut = tip().shown;
+const run = document.querySelector(".av-block--cases button[data-run]");
+point(run, "pointerover"); out.run = tip();
+const rate = document.querySelector(".av-ladder-track[data-av-tip]");
+point(document.body, "pointerout");
+point(rate, "pointerdown", "touch"); out.touch = tip();
+point(document.body, "pointerdown", "touch"); out.touchAway = tip().shown;
+point(rate, "pointerdown", "touch"); document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); out.escape = tip().shown;
+return out;
+"""
+        out = self.drive(page, width=1440, script=script)["result"]
+        cases = narrative.get("cases", {})
+        self.assertTrue(out["difference"]["shown"], "hovering a difference shows no card")
+        self.assertIn(out["difference"]["over"], cases.values(), "a difference's card does not name the case it was tested on")
+        self.assertIn(" minus ", out["difference"]["title"])
+        self.assertTrue({"Difference", "95% interval"} <= set(out["difference"]["rows"]), out["difference"])
+        self.assertFalse(out["afterOut"], "the card stays after the pointer leaves")
+        self.assertTrue(out["run"]["shown"] and out["run"]["mark"], "a run's card is missing or has no mark")
+        self.assertTrue(any(out["run"]["over"].startswith(c) for c in cases.values()), f"a run's card does not name its case: {out['run']}")
+        self.assertIn("Outcome", out["run"]["rows"])
+        self.assertTrue(out["touch"]["shown"] and out["touch"]["rows"], "a touch shows no card")
+        self.assertFalse(out["touchAway"], "a touch elsewhere leaves the card up")
+        self.assertFalse(out["escape"], "Escape leaves the card up")
+
+    def test_a_difference_of_shares_is_drawn_within_a_hundred_points(self) -> None:
+        page = self.build("--data", EXAMPLES / "comparisons/sandwich.json", "--narrative", EXAMPLES / "comparisons/sandwich-narrative.json")
+        script = 'return [...document.querySelectorAll(".av-cmp-dpanel")].map(p => [...p.querySelectorAll(".av-cmp-daxis .av-tick")].map(t => t.textContent.trim()));'
+        axes = self.drive(page, width=1440, script=script)["result"]
+        share = next(a for a in axes if any("+" in t for t in a))
+        values = [float(t.replace("−", "-").replace("+", "").replace("pts", "").strip()) for t in share if t]
+        self.assertEqual(max(values), 100, f"a difference of shares, which cannot pass 100 points, is drawn on {share}")
+        self.assertEqual(min(values), -100)
+
+    def test_type_grows_on_large_screens_and_keeps_the_readers_size_on_small_ones(self) -> None:
+        page = self.build("--trial", EXAMPLES / "fictional-trial.json")
+        size = {w: self.drive(page, width=w, script="return parseFloat(getComputedStyle(document.documentElement).fontSize);")["result"] for w in (390, 1440, 1920, 2560)}
+        self.assertEqual(size[390], 16, "a phone does not keep the reader's own size")
+        self.assertEqual(size[1440], 16)
+        self.assertLess(size[1440], size[1920], "type does not grow past 1440 px")
+        self.assertLess(size[1920], size[2560])
+        self.assertLessEqual(size[2560], 18.01, "type grows past two steps")
 
     def test_no_text_is_crushed_into_a_narrow_column(self) -> None:
         narrative = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
@@ -415,13 +529,17 @@ const reads = [...document.querySelectorAll(".av-read-shows, .av-read-how .av-re
 const story = document.querySelector(".av-story > .av-story-part:first-child .av-story-prose");
 const summary = document.querySelector(".av-summary");
 const scope = [...document.querySelectorAll(".av-story-scope > .av-story-part")].map(p => { const r = p.getBoundingClientRect(); return [Math.round(r.top), Math.round(r.width)]; });
-// A block set in columns: how many there are and how wide each is, in its own characters.
-const flow = el => { const cs = getComputedStyle(el), w = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight); const gap = parseFloat(cs.columnGap) || 0;
-  const n = cs.columnWidth === "auto" ? 1 : Math.max(1, Math.floor((w + gap) / (parseFloat(cs.columnWidth) + gap))); return { n, column: Math.round((w - (n - 1) * gap) / n / chOf(el) * 10) / 10, share: Math.round(el.getBoundingClientRect().width / el.parentElement.getBoundingClientRect().width * 100) / 100 }; };
+// A block's text as it is drawn: its columns (the separate horizontal spans its text covers, since no text crosses a
+// column gap), the widest column in its own characters, and the share of its row the text spans. Measured from the
+// drawn text itself, whatever the styles say.
+const flow = el => { const r = document.createRange(); r.selectNodeContents(el); const spans = [...r.getClientRects()].filter(q => q.width > 0).map(q => [q.left, q.right]).sort((a, b) => a[0] - b[0]);
+  const cols = []; for (const [a, b] of spans) { const last = cols[cols.length - 1]; if (last && a <= last[1] + 1) last[1] = Math.max(last[1], b); else cols.push([a, b]); }
+  const ch = chOf(el);
+  return { n: cols.length, column: Math.round(Math.max(...cols.map(c => c[1] - c[0])) / ch * 10) / 10, share: Math.round((cols[cols.length - 1][1] - cols[0][0]) / el.parentElement.getBoundingClientRect().width * 100) / 100 }; };
 const reading = document.querySelector("#setup .av-section-reading");
 // A block set in columns is readable when each column is; any other block, when its cap and drawn width are.
 const flows = el => getComputedStyle(el).columnWidth !== "auto";
-return { page: Math.round(document.querySelector(".av-sections").getBoundingClientRect().width), story: cap(story), storyShown: shown(story), storyFlow: flow(story), summary: cap(summary), scope,
+return { page: Math.round(document.querySelector(".av-sections").getBoundingClientRect().width), story: cap(story), storyShown: shown(story), storyFlow: flow(story), summary: cap(summary), summaryFlow: flow(summary), scope,
   readCaps: reads.map(el => flows(el) ? flow(el).column : cap(el)), readShown: reads.map(el => flows(el) ? flow(el).column : shown(el)), readingFlow: reading && flow(reading) };
 """
         ordinary = self.drive(page, width=1024, script=script)["result"]
@@ -454,6 +572,17 @@ return { page: Math.round(document.querySelector(".av-sections").getBoundingClie
                 (top_a, width_a), (top_b, width_b) = result["scope"]
                 self.assertLessEqual(abs(top_a - top_b), 2, "the scope box stacks its two texts instead of setting them side by side")
                 self.assertLessEqual(abs(width_a - width_b), max(width_a, width_b) * 0.05, "the scope box's two texts get different widths")
+        # Between ordinary and wide screens, where two readable columns do not yet fit, long text keeps a readable line
+        # rather than losing its cap and running the row's whole width in one column.
+        # A summary long enough to flow (over 320 characters), as a real report's often is, is held to the same.
+        narrative["summary"] = " ".join(["Four setups were compared on four everyday writing tasks, each repeated six times, and a judge read every reply."] * 5)
+        path.write_text(json.dumps(narrative), encoding="utf-8")
+        long_summary = self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", path)
+        for width in (1200, 1300, 1420, 1500):
+            between = self.drive(long_summary, width=width, script=script)["result"]
+            for name in ("storyFlow", "readingFlow", "summaryFlow"):
+                with self.subTest(width=width, block=name):
+                    self.assertLessEqual(between[name]["column"], 95, "a line runs past a readable length where columns do not fit")
 
     def test_phone_width_keeps_row_heads_in_their_cells_and_every_value_readable(self) -> None:
         # A check required in only some cases carries a chip such as "in 10 of 20 cases" in its pooled row head. At 320 px

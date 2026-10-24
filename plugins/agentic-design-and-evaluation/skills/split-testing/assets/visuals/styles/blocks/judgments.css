@@ -108,6 +108,8 @@
 .av-jv-self { text-align: center !important; color: var(--av-ink-3); background: repeating-linear-gradient(135deg, var(--av-sunken) 0 4px, transparent 4px 9px); }
 .av-jv-rate { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
 .av-jv-track-wrap { flex: 0 1 11rem; min-width: 7rem; }
+.av-jv-track-wrap .av-ticks { margin-top: 2px; height: 1.2rem; border-top: 0; }
+.av-jv-track-wrap .av-tick { font-size: .6rem; padding-top: 5px; }
 .av-jv-track { position: relative; display: block; height: 18px; border-radius: 4px; background: linear-gradient(90deg, transparent calc(50% - .5px), var(--av-line-strong) calc(50% - .5px) calc(50% + .5px), transparent calc(50% + .5px)), var(--av-sunken); }
 .av-jv-frac { display: block; font: 500 .68rem var(--av-font-mono); color: var(--av-ink-3); }
 .av-jv-rowname { display: block; font-weight: 600; white-space: normal; overflow-wrap: anywhere; }

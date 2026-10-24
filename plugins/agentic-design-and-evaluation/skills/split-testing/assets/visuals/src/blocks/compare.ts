@@ -4,7 +4,7 @@
  * differences between groups (hierarchy). Each reads ctx.comparison unless the
  * block carries its own `data`. Every statistic comes from comparison-stats;
  * these views only draw what it returns, so nothing here invents a score. */
-import { attrs, axisTicks, count, esc, fmtInt, fmtNum, inline, isNum, niceTicks, num, outcomeMark } from "../core";
+import { attrs, axisTicks, count, esc, fmtInt, fmtNum, inline, isNum, niceTicks, num, outcomeMark, gridlines, ticksHtml, tipAttr } from "../core";
 import type { RenderContext } from "../model";
 import type { Alternative, Comparison, ComparisonFilter, Metric, MetricDifference, MetricKind, MetricSummary } from "../comparison-model";
 import { caseKey, difference as differenceOf, evidenceAs, groupComparison, groupPath, NO_CASE, NO_CASE_WORDS, pooledWords, summarize, summarizeGroups } from "../comparison-stats";
@@ -334,10 +334,9 @@ function scaleFor(m: Metric, values: number[], places: number): Scale | null {
 function axis(sc: Scale | null, m: Metric, caption: string, cls = "av-cmp-axis"): string {
   const better = directed(m);
   const hint = better ? `<span class="av-cmp-better">${better} is better</span>` : "";
-  const ticks = m.kind === "ordinal"
-    ? `<span style="--x:0%">← lower levels</span><span style="--x:50%">|</span><span style="--x:100%">higher levels →</span>`
-    : sc ? sc.ticks.map(t => `<span style="--x:${sc.at(t)}">${esc(sc.label(t))}</span>`).join("") : "";
-  return `<div class="${cls}" role="row" aria-hidden="true"><span class="av-cmp-axis-cap">${esc(caption)}</span><div class="av-cmp-ticks">${ticks}</div><span class="av-cmp-axis-end">${hint}</span></div>`;
+  const ticks = m.kind === "ordinal" ? ticksHtml([{ x: 0, label: "← lower levels" }, { x: .5, label: "" }, { x: 1, label: "higher levels →" }], { top: true })
+    : sc ? ticksHtml(sc.ticks.map(t => ({ x: (t - sc.min) / (sc.max - sc.min || 1), label: sc.label(t) })), { top: true }) : "";
+  return `<div class="${cls}" role="row" aria-hidden="true"><span class="av-cmp-axis-cap">${esc(caption)}</span>${ticks}<span class="av-cmp-axis-end">${hint}</span></div>`;
 }
 
 interface Ref { value: number; kind: "rule" | "base" | "parent" | "even" }
@@ -369,10 +368,16 @@ function trackAria(m: Metric, who: string, h: Head, center: Center = "mean"): st
   return `${who}: ${headCaption(m, center)} ${h.text}${h.ciText ? `, 95% interval ${h.ciText}` : ""}${h.detail ? `, ${h.detail}` : ""}${h.invalid ? `, ${h.invalid} invalid` : ""}`;
 }
 
-interface TrackOpts { color: string; refs: Ref[]; aria: string; mini?: boolean; dots?: boolean; places?: number; center?: Center }
+interface TrackOpts { color: string; refs: Ref[]; aria: string; mini?: boolean; dots?: boolean; places?: number; center?: Center; who?: string; over?: string; mark?: { shape: string; color: string } }
+
+/** A track's card: the metric (what was measured) above, the alternative beside its mark, then its value and interval. */
+function trackCard(m: Metric, h: Head, o: TrackOpts): string {
+  if (!o.who) return "";
+  return tipAttr({ over: o.over || metricName(m), title: o.who, mark: o.mark, rows: [[headCaption(m, o.center || "mean").replace(/^./, c => c.toUpperCase()), h.ok ? h.text : h.n ? "no value" : "no valid observations"], ["95% interval", h.ciText || (h.ok ? "none" : "")], ["Detail", h.detail], ["Invalid", h.invalid ? fmtInt(h.invalid) : ""]] });
+}
 
 function track(m: Metric, s: MetricSummary | undefined, h: Head, sc: Scale | null, o: TrackOpts): string {
-  if (m.kind === "ordinal") return likert(m, s, o.aria, !!o.mini);
+  if (m.kind === "ordinal") return likert(m, s, o.aria, !!o.mini, o.who);
   const cls = `av-cmp-track${o.mini ? " av-cmp-track--mini" : ""}`;
   if (!sc || !h.ok) return `<div class="${cls} av-cmp-track--empty" role="img" aria-label="${esc(o.aria)}"><span class="av-cmp-none">${h.n || h.invalid ? (o.mini ? "invalid" : "no valid value") : (o.mini ? "none" : "no observations")}</span></div>`;
   const style = `--c:${o.color};--p:${sc.at(h.v!)};${h.ci ? `--lo:${sc.at(h.ci[0])};--hi:${sc.at(h.ci[1])};` : ""}`;
@@ -386,15 +391,15 @@ function track(m: Metric, s: MetricSummary | undefined, h: Head, sc: Scale | nul
   }
   if (m.kind === "rank" && s && o.places) {
     const c = rankCounts(s, o.places), total = c.reduce((a, b) => a + b, 0);
-    if (total) marks += c.map((k, i) => k ? `<span class="av-cmp-bub" style="--x:${sc.at(i + 1)};--s:${(k / total).toFixed(3)}" title="${esc(`${ordinalWord(i + 1)} in ${k} of ${total}`)}"></span>` : "").join("");
+    if (total) marks += c.map((k, i) => k ? `<span class="av-cmp-bub" style="--x:${sc.at(i + 1)};--s:${(k / total).toFixed(3)}"${tipAttr({ over: o.who ? `${o.who} · ${metricName(m)}` : metricName(m), title: `Placed ${ordinalWord(i + 1)}`, mark: o.mark, rows: [["Rankings", `${k} of ${total}`], ["Share", fmtShare(k / total)]] })}></span>` : "").join("");
   }
-  return `<div class="${cls}" role="img" aria-label="${esc(o.aria)}" style="${style}">${refLines(o.refs, sc)}${marks}${h.ci ? '<span class="av-ci"></span>' : ""}<span class="av-pt"></span></div>`;
+  return `<div class="${cls}" role="img" aria-label="${esc(o.aria)}" style="${style}"${trackCard(m, h, o)}>${gridlines(sc.ticks.map(t => ({ x: (t - sc.min) / (sc.max - sc.min || 1), label: "" })))}${refLines(o.refs, sc)}${marks}${h.ci ? '<span class="av-ci"></span>' : ""}<span class="av-pt" data-av-tip-at></span></div>`;
 }
 
 /** Ordinal levels as one diverging bar: lower levels left of the centre line,
  * higher levels right, an odd middle level split across it. Tones carry a
  * direction only when the metric has one. */
-function likert(m: Metric, s: MetricSummary | undefined, aria: string, mini: boolean): string {
+function likert(m: Metric, s: MetricSummary | undefined, aria: string, mini: boolean, who?: string): string {
   const c = countsOf(m, s), levels = levelsOf(m, s), total = c.reduce((a, b) => a + b, 0);
   const cls = `av-cmp-lk${mini ? " av-cmp-lk--mini" : ""}`;
   if (!total) return `<div class="${cls} av-cmp-track--empty" role="img" aria-label="${esc(aria)}"><span class="av-cmp-none">no observations</span></div>`;
@@ -405,7 +410,7 @@ function likert(m: Metric, s: MetricSummary | undefined, aria: string, mini: boo
   const segs = c.map((k, i) => {
     const share = k / total, d = L > 1 ? Math.abs(i - mid) / mid : 0;
     const tone = i === mid ? "var(--av-line-strong)" : `color-mix(in srgb, ${i < mid ? lowTone : highTone} ${Math.round(28 + 62 * d)}%, var(--av-surface))`;
-    return share > 0 ? `<span class="av-cmp-lk-seg${d > 0.6 ? " av-cmp-lk-seg--deep" : ""}" style="--w:${pos(share / 2)};--lc:${tone}" title="${esc(`${levels[i]}: ${k} (${fmtShare(share)})`)}">${!mini && share >= 0.16 ? fmtInt(k) : ""}</span>` : "";
+    return share > 0 ? `<span class="av-cmp-lk-seg${d > 0.6 ? " av-cmp-lk-seg--deep" : ""}" style="--w:${pos(share / 2)};--lc:${tone}"${tipAttr({ over: who ? `${who} · ${metricName(m)}` : metricName(m), title: levels[i], rows: [["Observations", `${fmtInt(k)} of ${fmtInt(total)}`], ["Share", fmtShare(share)]] })}>${!mini && share >= 0.16 ? fmtInt(k) : ""}</span>` : "";
   }).join("");
   const label = `${aria}. ${levels.map((l, i) => `${l} ${c[i]}`).join(", ")}`;
   return `<div class="${cls}" role="img" aria-label="${esc(label)}"><span class="av-cmp-lk-mid"></span><span class="av-cmp-lk-bar"><span class="av-cmp-lk-gap" style="--w:${pos(0.5 - left / 2)}"></span>${segs}</span></div>`;
@@ -563,7 +568,7 @@ export function metric(input: MetricInput, ctx: RenderContext): string {
   const rows = order.map(id => {
     const s = sums.get(id), h = heads.get(id)!, who = ctx.arms.label(id), isBase = id === src.baseline, note = ctx.arms.note(id);
     const label = `${ctx.arms.tag(id)}${note ? `<span class="av-cmp-note">${esc(note)}</span>` : ""}${isBase ? '<span class="av-chip av-chip--base">baseline</span>' : ""}`;
-    return row(label, track(m, s, h, sc, { color: ctx.arms.color(id), refs, aria: trackAria(m, who, h, center), places, center }), numbers(h, s, toneChip(toneAgainst(src, m, id))), { "data-arm": id }, isBase ? " av-cmp-row--base" : "");
+    return row(label, track(m, s, h, sc, { color: ctx.arms.color(id), refs, aria: trackAria(m, who, h, center), places, center, who, mark: ctx.arms.mark(id) }), numbers(h, s, toneChip(toneAgainst(src, m, id))), { "data-arm": id }, isBase ? " av-cmp-row--base" : "");
   }).join("");
 
   const multiples = panels.length ? `<div class="av-cmp-multiples-head"><span class="av-eyebrow">By case</span><span>${esc(`${metricName(m)} in each case, on the same scale`)}</span></div><div class="av-cmp-multiples" role="list">${panels.map(p => {
@@ -571,7 +576,7 @@ export function metric(input: MetricInput, ctx: RenderContext): string {
     const path = groupPath(c?.group), name = caseName(src.data, ctx, p.c);
     const lines = order.map(id => {
       const h = p.hs.get(id)!, s = p.ss.get(id), who = ctx.arms.label(id);
-      return `<div class="av-cmp-mini" data-arm="${esc(id)}">${ctx.arms.glyph(id)}<span class="av-cmp-mini-name" title="${esc(who)}">${esc(who)}</span>${track(m, s, h, sc, { color: ctx.arms.color(id), refs: refs.filter(r => r.kind !== "base"), aria: `${name}, ${trackAria(m, who, h, center)}`, mini: true, places, center, dots: false })}<span class="av-cmp-mini-v${h.ok ? "" : " av-cmp-v--none"}">${esc(h.text)}${h.invalid ? `<span class="av-cmp-mini-inv" title="${esc(`${h.invalid} invalid, left out`)}">${outcomeMark("invalid")}</span>` : ""}</span></div>`;
+      return `<div class="av-cmp-mini" data-arm="${esc(id)}">${ctx.arms.glyph(id)}<span class="av-cmp-mini-name" title="${esc(who)}">${esc(who)}</span>${track(m, s, h, sc, { color: ctx.arms.color(id), refs: refs.filter(r => r.kind !== "base"), aria: `${name}, ${trackAria(m, who, h, center)}`, mini: true, places, center, dots: false, who, over: `${name} · ${metricName(m)}`, mark: ctx.arms.mark(id) })}<span class="av-cmp-mini-v${h.ok ? "" : " av-cmp-v--none"}">${esc(h.text)}${h.invalid ? `<span class="av-cmp-mini-inv" title="${esc(`${h.invalid} invalid, left out`)}">${outcomeMark("invalid")}</span>` : ""}</span></div>`;
     }).join("");
     return `<figure class="av-cmp-panel" role="listitem"><figcaption>${path.length ? `<span class="av-cmp-panel-group">${esc(path.join(" › "))}</span>` : ""}<span class="av-cmp-panel-name">${esc(name)}</span></figcaption>${lines}</figure>`;
   }).join("")}</div>` : byCase ? empty("No observation names a case, so there is nothing to show by case.") : "";
@@ -672,7 +677,7 @@ export function scorecard(input: ScorecardInput, ctx: RenderContext): string {
     }).join("");
     table = `<thead><tr><td class="av-sc-corner"><span class="av-eyebrow">Alternative</span></td>${metrics.map(m => metricHead(m, "col")).join("")}</tr></thead><tbody>${body}</tbody>`;
   }
-  const legend = `<p class="av-legend av-cmp-legend"><span><span class="av-sc-key">75%</span>headline value</span><span><span class="av-sc-key av-sc-key--ci">60–85%</span>95% interval</span><span><span class="av-sc-key av-sc-key--n">n</span>observations behind it</span>${src.baseline ? '<span><span class="av-chip av-chip--base">baseline</span>what tints are read against</span>' : ""}${toned ? '<span><span class="av-sc-key av-sc-key--better">▲</span><span class="av-sc-key av-sc-key--worse">▼</span>better or worse than the baseline: the 95% interval for the difference excludes zero, on a metric with a direction</span>' : ""}<span><span class="av-missing">missing</span>no observations</span></p>`;
+  const legend = `<p class="av-legend av-cmp-legend"><span><span class="av-sc-key">75%</span>headline value</span><span><span class="av-sc-key av-sc-key--ci">60–85%</span>95% interval</span><span><span class="av-sc-key av-sc-key--n">n</span>observations behind it</span>${src.baseline ? '<span><span class="av-chip av-chip--base">baseline</span>what tints are read against</span>' : ""}${toned ? '<span><span class="av-sc-key av-sc-key--better">▲</span><span class="av-sc-key av-sc-key--worse">▼</span>better or worse than the baseline: the 95% interval for the difference excludes zero, on a metric with a direction</span>' : ""}${metrics.some(m => m.kind === "ordinal") ? '<span><span class="av-sc-key-lk" aria-hidden="true"></span>levels: each level\'s share of observations, lower levels left of the line, higher right (hover a part for its count)</span>' : ""}<span><span class="av-missing">missing</span>no observations</span></p>`;
   return frame("scorecard", input, `${problemList(src.problems)}${legend}${scopeLine(src, ctx)}${coverageLine(src, ctx, metrics)}<div class="av-scroll-x av-sc-wrap" tabindex="0" role="region" aria-label="${esc(input.title || "Scorecard")}"><table class="av-sc av-sc--${cols}">${table}</table></div>`, { "data-orient": cols });
 }
 
@@ -703,10 +708,10 @@ function phrase(m: Metric, up: boolean, center: Center): string {
   return `${up ? "a higher" : "a lower"} ${name}`;
 }
 
-function diffScale(values: number[]): { M: number; at(v: number): string; ticks: number[] } {
+function diffScale(values: number[], cap = Infinity): { M: number; at(v: number): string; ticks: number[] } {
   const extent = maxOf(values.map(Math.abs), 0);
-  const t = axisTicks(0, extent > 0 ? extent * 1.04 : 1, 2);
-  const M = t.length > 1 ? t[t.length - 1] : extent || 1;
+  const t = axisTicks(0, Math.min(cap, extent > 0 ? extent * 1.04 : 1), 2);
+  const M = Math.min(cap, t.length > 1 ? t[t.length - 1] : extent || 1);
   return { M, at: v => pos((v + M) / (2 * M)), ticks: [-M, -M / 2, 0, M / 2, M] };
 }
 
@@ -739,7 +744,7 @@ function differencePanel(src: Source, m: Metric, input: DifferenceInput, ctx: Re
   const thr = single ? thresholdOf(input.threshold ?? null, { ...m, threshold: undefined }) : null;
   const gaps = noise.map(r => r.est).filter(isNum).map(Math.abs);
   const band = gaps.length ? Math.max(...gaps) : null;
-  const sc = diffScale([...[...rows, ...noise].flatMap(r => [r.est, ...(r.ci || [])]), ...(thr ? [thr.value] : []), ...(band !== null ? [band] : [])].filter(isNum));
+  const sc = diffScale([...[...rows, ...noise].flatMap(r => [r.est, ...(r.ci || [])]), ...(thr ? [thr.value] : []), ...(band !== null ? [band] : [])].filter(isNum), SHARE.has(m.kind) ? 1 : m.kind === "ordinal" ? .5 : Infinity);
   const better = directed(m), name = metricName(m);
 
   const side = (id: string) => {
@@ -765,14 +770,15 @@ function differencePanel(src: Source, m: Metric, input: DifferenceInput, ctx: Re
     const place = r.ci ? placement(r.ci, 0) : null;
     const style = `--c:${r.noise ? "var(--av-warn)" : ctx.arms.color(r.a)};--z:${sc.at(0)};${r.est !== null ? `--p:${sc.at(r.est)};` : ""}${r.est !== null && r.ci ? `--lo:${sc.at(r.ci[0])};--hi:${sc.at(r.ci[1])};` : ""}${thr && !r.noise ? `--t:${sc.at(thr.value)};` : ""}${band !== null && !r.noise ? `--b0:${sc.at(-band)};--b1:${sc.at(band)};` : ""}`;
     const aria = `${ctx.arms.label(r.a)} minus ${ctx.arms.label(r.b)}: ${r.ci && r.est !== null ? `${fmtDiff(m, r.est)}, 95% interval ${fmtDiff(m, r.ci[0])} to ${fmtDiff(m, r.ci[1])}` : r.est !== null ? `${fmtDiff(m, r.est)}, no interval` : "no interval"}`;
-    const trackHtml = `<div class="av-cmp-dtrack${r.est !== null ? "" : " av-cmp-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}">${band !== null && !r.noise && r.ci ? '<span class="av-cmp-band"></span>' : ""}<span class="av-cmp-zero"></span>${thr && !r.noise ? '<span class="av-cmp-thr"></span>' : ""}${r.ci && r.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : r.est !== null ? '<span class="av-pt av-pt--pooled"></span>' : '<span class="av-cmp-none">no interval</span>'}</div>`;
+    const card = tipAttr({ over: r.noise ? "Chance alone: identical material" : `Difference in ${name}`, title: `${ctx.arms.label(r.a)} minus ${ctx.arms.label(r.b)}`, mark: r.noise ? undefined : ctx.arms.mark(r.a), rows: [["Difference", r.est !== null ? fmtDiff(m, r.est) : "none"], ["95% interval", r.ci && r.est !== null ? `${fmtDiff(m, r.ci[0], false)} to ${fmtDiff(m, r.ci[1], false)}` : "none"], [ctx.arms.label(r.a), head(m, sums.get(r.a), center).text], [ctx.arms.label(r.b), head(m, sums.get(r.b), center).text]] });
+    const trackHtml = `<div class="av-cmp-dtrack${r.est !== null ? "" : " av-cmp-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}"${card}>${gridlines(sc.ticks.map(t => ({ x: (t + sc.M) / (2 * sc.M), label: "" })))}${band !== null && !r.noise && r.ci ? '<span class="av-cmp-band"></span>' : ""}<span class="av-cmp-zero"></span>${thr && !r.noise ? '<span class="av-cmp-thr"></span>' : ""}${r.ci && r.est !== null ? '<span class="av-ci"></span><span class="av-pt" data-av-tip-at></span>' : r.est !== null ? '<span class="av-pt av-pt--pooled" data-av-tip-at></span>' : '<span class="av-cmp-none">no interval</span>'}</div>`;
     const nums = `<div class="av-cmp-num">${r.ci && r.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, r.est))}</span><span class="av-ci-text">${esc(`${fmtDiff(m, r.ci[0], false)} to ${fmtDiff(m, r.ci[1], false)}`)}</span>${place ? `<span class="av-cmp-place av-cmp-place--${place}">${place === "spans" ? "includes 0" : "excludes 0"}</span>` : ""}` : r.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, r.est))}</span><span class="av-ci-text" title="${esc(r.method)}">no interval</span>` : '<span class="av-cmp-v av-cmp-v--none">—</span>'}</div>`;
     return `<li class="av-cmp-drow${r.noise ? " av-cmp-drow--noise" : ""}"${attrs({ "data-place": place || undefined, "data-a": r.a, "data-b": r.b })}><div class="av-cmp-dlabel">${side(r.a)}<span class="av-cmp-minus" aria-hidden="true">minus</span>${side(r.b)}</div><div class="av-cmp-cell">${trackHtml}</div>${nums}<p class="av-cmp-reading">${reading(r)}</p></li>`;
   };
-  const ticks = sc.ticks.map(t => `<span style="--x:${sc.at(t)}">${esc(fmtDiff(m, t, false))}</span>`).join("");
+  const ticks = ticksHtml(sc.ticks.map(t => ({ x: (t + sc.M) / (2 * sc.M), label: fmtDiff(m, t, false) })), { top: true });
   const first = mode === "baseline" ? "the alternative" : "the first";
   const second = mode === "baseline" ? ctx.arms.label(src.baseline!) : "the second";
-  const axisHtml = `<div class="av-cmp-daxis" aria-hidden="true"><span class="av-cmp-axis-cap">${esc(diffCaption(m))}</span><div class="av-cmp-ticks">${ticks}</div><span></span></div><div class="av-cmp-ddir" aria-hidden="true"><span></span><div class="av-cmp-ddir-track"><span>← ${esc(second)} higher${better === "lower" ? " (better)" : ""}</span><span>${esc(first)} higher${better === "higher" ? " (better)" : ""} →</span></div><span></span></div>`;
+  const axisHtml = `<div class="av-cmp-daxis" aria-hidden="true"><span class="av-cmp-axis-cap">${esc(diffCaption(m))}</span>${ticks}<span></span></div><div class="av-cmp-ddir" aria-hidden="true"><span></span><div class="av-cmp-ddir-track"><span>← ${esc(second)} higher${better === "lower" ? " (better)" : ""}</span><span>${esc(first)} higher${better === "higher" ? " (better)" : ""} →</span></div><span></span></div>`;
   const methods = [...new Set([...rows, ...noise].map(r => r.method).filter(Boolean))];
   const legend = `<p class="av-legend av-cmp-legend"><span><span class="av-legend-pt"></span>${esc(center === "median" ? "difference in medians: first minus second" : "difference: first minus second")}</span><span><span class="av-legend-ci"></span>95% interval</span><span><span class="av-cmp-key-zero"></span>zero: no difference</span>${thr ? `<span><span class="av-cmp-key-ref av-cmp-key-ref--rule"></span>${esc(thr.label || `threshold ${fmtDiff(m, thr.value)}`)}</span>` : ""}${band !== null ? `<span><span class="av-legend-noise"></span>${esc(`gap between identical alternatives (${fmtDiff(m, band).replace(/^\+/, "")}), either way`)}</span>` : ""}</p>`;
   const main = rows.length ? `<ul class="av-cmp-dlist" aria-label="${esc(`Differences in ${name}`)}">${rows.map(rowHtml).join("")}</ul>` : "";
@@ -849,7 +855,7 @@ function groupedView(src: Source, m: Metric, ctx: RenderContext, o: { maxDepth: 
   };
   visit(tree);
   const allGaps = [...gapsOf.values()].flat();
-  const ds = diffScale(allGaps.flatMap(g => [g.est, ...(g.ci || [])]).filter(isNum));
+  const ds = diffScale(allGaps.flatMap(g => [g.est, ...(g.ci || [])]).filter(isNum), SHARE.has(m.kind) ? 1 : m.kind === "ordinal" ? .5 : Infinity);
 
   const values = [...heads.values(), ...[...pooled.values()].map(p => p.h)].flatMap(h => [h.v, ...(h.ci || [])]).filter(isNum);
   const extra = m.kind === "numeric" ? src.alts.flatMap(id => (sums.get(id)?.values || []).filter(isNum)) : [];
@@ -863,7 +869,8 @@ function groupedView(src: Source, m: Metric, ctx: RenderContext, o: { maxDepth: 
     const tone = place && place !== "spans" && better ? ((place === "above") === (better === "higher") ? "better" : "worse") : "";
     const style = `--c:var(--av-ink-2);--z:${ds.at(0)};${g.est !== null ? `--p:${ds.at(g.est)};` : ""}${g.ci && g.est !== null ? `--lo:${ds.at(g.ci[0])};--hi:${ds.at(g.ci[1])};` : ""}`;
     const aria = `${g.a} minus ${g.b}, ${metricName(m)}: ${g.ci && g.est !== null ? `${fmtDiff(m, g.est)}, 95% interval ${fmtDiff(m, g.ci[0])} to ${fmtDiff(m, g.ci[1])}` : `${g.est !== null ? `${fmtDiff(m, g.est)}, ` : ""}no interval${g.method ? ` (${g.method})` : ""}`}`;
-    const cell = `<div class="av-cmp-dtrack av-cmp-dtrack--mini${g.est !== null ? "" : " av-cmp-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}"><span class="av-cmp-zero"></span>${g.ci && g.est !== null ? '<span class="av-ci"></span><span class="av-pt"></span>' : g.est !== null ? '<span class="av-pt av-pt--pooled"></span>' : '<span class="av-cmp-none">no interval</span>'}<span class="av-cmp-dend av-cmp-dend--l">${esc(fmtDiff(m, -ds.M, false))}</span><span class="av-cmp-dend av-cmp-dend--r">${esc(fmtDiff(m, ds.M, false))}</span></div>`;
+    const card = tipAttr({ over: `Between ${scopeName} · ${metricName(m)}`, title: `${g.a} minus ${g.b}`, rows: [["Difference", g.est !== null ? fmtDiff(m, g.est) : "none"], ["95% interval", g.ci && g.est !== null ? `${fmtDiff(m, g.ci[0], false)} to ${fmtDiff(m, g.ci[1], false)}` : "none"]], note: g.method || undefined });
+    const cell = `<div class="av-cmp-dtrack av-cmp-dtrack--mini${g.est !== null ? "" : " av-cmp-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}"${card}><span class="av-cmp-zero"></span>${g.ci && g.est !== null ? '<span class="av-ci"></span><span class="av-pt" data-av-tip-at></span>' : g.est !== null ? '<span class="av-pt av-pt--pooled" data-av-tip-at></span>' : '<span class="av-cmp-none">no interval</span>'}<span class="av-cmp-dend av-cmp-dend--l">${esc(fmtDiff(m, -ds.M, false))}</span><span class="av-cmp-dend av-cmp-dend--r">${esc(fmtDiff(m, ds.M, false))}</span></div>`;
     const nums = `<div class="av-cmp-num" role="cell">${g.ci && g.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, g.est))}</span><span class="av-ci-text">${esc(`${fmtDiff(m, g.ci[0], false)} to ${fmtDiff(m, g.ci[1], false)}`)}</span>` : g.est !== null ? `<span class="av-cmp-v">${esc(fmtDiff(m, g.est))}</span><span class="av-ci-text" title="${esc(g.method)}">no interval</span>` : `<span class="av-cmp-v av-cmp-v--none" title="${esc(g.method)}">—</span>`}${place ? `<span class="av-cmp-place av-cmp-place--${place}${tone ? ` av-cmp-place--${tone}` : ""}">${place === "spans" ? "includes 0" : `excludes 0${tone ? ` · ${tone}` : ""}`}</span>` : ""}</div>`;
     const label = `<span class="av-eyebrow">${esc(`Between ${scopeName}`)}</span><span class="av-cmp-gap-name">${esc(g.a)} <span class="av-cmp-minus">minus</span> ${esc(g.b)}</span>`;
     return row(label, cell, nums, { style: `--depth:${depth}` }, ` av-cmp-row--gap${place ? ` av-cmp-row--${place}` : ""}`);
@@ -875,12 +882,12 @@ function groupedView(src: Source, m: Metric, ctx: RenderContext, o: { maxDepth: 
       if ("alt" in it) {
         const id = it.alt, s = sums.get(id), h = heads.get(id)!;
         const refs = [...baseRefs, ...(parent?.h.ok && parent.h.v !== null && m.kind !== "ordinal" ? [{ value: parent.h.v, kind: "parent" as const }] : [])];
-        out += row(ctx.arms.tag(id), track(m, s, h, sc, { color: ctx.arms.color(id), refs, aria: trackAria(m, ctx.arms.label(id), h, center), places, center }), numbers(h, s), { "data-arm": id, style: `--depth:${depth}` }, " av-cmp-row--alt");
+        out += row(ctx.arms.tag(id), track(m, s, h, sc, { color: ctx.arms.color(id), refs, aria: trackAria(m, ctx.arms.label(id), h, center), places, center, who: ctx.arms.label(id), mark: ctx.arms.mark(id) }), numbers(h, s), { "data-arm": id, style: `--depth:${depth}` }, " av-cmp-row--alt");
       } else {
         const g = it.node, p = pooledOf(g), h = p?.h || head(m, undefined), name = groupName(g.path[g.path.length - 1]);
         const subgroups = g.items.filter(x => "node" in x).length;
         const label = `<span class="av-cmp-gname">${esc(name)}</span><span class="av-cmp-gmeta">${esc(`${g.members.length} ${g.members.length === 1 ? "alternative" : "alternatives"}${subgroups ? ` in ${subgroups} ${subgroups === 1 ? "group" : "groups"}` : ""}, pooled`)}</span>`;
-        out += `${row(label, track(m, p?.s, h, sc, { color: "var(--av-ink-2)", refs: baseRefs, aria: trackAria(m, `${name} (pooled)`, h, center), places, center, dots: false }), numbers(h, p?.s), { "data-group": JSON.stringify(g.path), style: `--depth:${depth}` }, " av-cmp-row--group")}${render(g, depth + 1)}`;
+        out += `${row(label, track(m, p?.s, h, sc, { color: "var(--av-ink-2)", refs: baseRefs, aria: trackAria(m, `${name} (pooled)`, h, center), places, center, dots: false, who: `${name}, pooled` }), numbers(h, p?.s), { "data-group": JSON.stringify(g.path), style: `--depth:${depth}` }, " av-cmp-row--group")}${render(g, depth + 1)}`;
       }
     }
     return out;

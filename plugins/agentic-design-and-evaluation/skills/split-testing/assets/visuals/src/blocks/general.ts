@@ -1,7 +1,7 @@
 /** General evidence views a report composes alongside, or instead of, trial
  * views: text, callouts, lists, facts, tables, requirement matrices, interval
  * comparisons, composition bars, trends across rounds, excerpts and diagrams. */
-import { attrs, count, esc, fmtInt, fmtNum, fmtPct, inline, isNum, isOutcome, niceTicks, num, Outcome, outcomeBadge, outcomeMark, prose, wilson } from "../core";
+import { attrs, axisTicks, count, esc, fmtInt, fmtNum, fmtPct, inline, isNum, isOutcome, niceTicks, num, Outcome, outcomeBadge, outcomeMark, prose, ticksHtml, tipAttr, wilson } from "../core";
 import { mermaidDiagram } from "../figures";
 import type { RenderContext } from "../model";
 import { empty, frame, FrameInput, pos } from "./frame";
@@ -110,10 +110,15 @@ export function intervals(input: IntervalsInput, ctx: RenderContext): string {
   const percent = input.percent ?? rows.every(r => r.k !== undefined || (isNum(r.value) && r.value >= 0 && r.value <= 1));
   const nums = rows.flatMap(r => [r.value, r.lo, r.hi]).filter(isNum);
   if (input.reference && isNum(input.reference.value)) nums.push(input.reference.value);
-  const domain = input.domain || (percent ? [0, 1] as [number, number] : [Math.min(0, ...nums), Math.max(...nums, 1e-9)] as [number, number]);
+  // A measure that is not a share runs from zero (or its lowest value) to the round tick at or past its highest.
+  const round = percent ? null : axisTicks(Math.min(0, ...nums), Math.max(...nums, 1e-9), 4);
+  const domain = input.domain || (percent ? [0, 1] as [number, number] : [round![0], round![round!.length - 1]] as [number, number]);
   const x = (v: number) => (v - domain[0]) / Math.max(1e-12, domain[1] - domain[0]);
-  const f = (v: number | null | undefined) => esc(percent ? fmtPct(v) : `${fmtNum(v)}${input.unit ? " " + input.unit : ""}`);
-  const ticks = percent ? [0, .25, .5, .75, 1].filter(t => t >= domain[0] && t <= domain[1]) : niceTicks(domain[0], domain[1], 4);
+  const said = (v: number | null | undefined) => percent ? fmtPct(v) : `${fmtNum(v)}${input.unit ? " " + input.unit : ""}`;
+  const f = (v: number | null | undefined) => esc(said(v));
+  const ticks = (percent ? [0, .25, .5, .75, 1] : niceTicks(domain[0], domain[1], 4)).filter(t => t >= domain[0] - 1e-9 && t <= domain[1] + 1e-9);
+  const tickList = ticks.map(t => ({ x: x(t), label: said(t) }));
+  const axisRow = (top: boolean) => `<div class="av-ladder-axis${top ? "" : " av-ladder-axis--bottom"}" role="row" aria-hidden="true"><span class="av-axis-title">${esc(input.unit && !percent ? input.unit : percent ? "share" : "value")}</span>${ticksHtml(tickList, { top })}<span></span></div>`;
   const body = rows.map(r => {
     const color = r.arm ? ctx.arms.color(r.arm) : "var(--av-ink-2)";
     const has = isNum(r.value);
@@ -121,10 +126,10 @@ export function intervals(input: IntervalsInput, ctx: RenderContext): string {
     const frac = isNum(r.k) && isNum(r.n) ? `<span class="av-frac"><b>${r.k}</b>/${r.n}</span>` : "";
     // A count pooled over several cases reads as a share of its n, never as an estimate; one whose sampling is not stated keeps its rate.
     const across = has && r.k !== undefined && r.pooled !== 0, share = has && !!r.pooled;
-    return `<div class="av-ladder-row" role="row"><div class="av-ladder-label" role="rowheader">${r.arm ? ctx.arms.tag(r.arm, { id: false }) : `<span class="av-arm-label">${esc(r.label)}</span>`}${r.arm && r.label && r.label !== ctx.arms.label(r.arm) ? `<span class="av-ladder-note">${esc(r.label)}</span>` : ""}${r.note ? `<span class="av-ladder-note">${esc(r.note)}</span>` : ""}</div><div class="av-ladder-track${has ? "" : " av-ladder-track--empty"}" role="cell" style="${style}">${isNum(r.lo) && isNum(r.hi) ? '<span class="av-ci"></span>' : ""}${has ? (share ? '<span class="av-share"></span>' : '<span class="av-pt"></span>') : '<span class="av-ladder-none">no value</span>'}</div><div class="av-ladder-num" role="cell">${frac}${share ? "" : `<span class="av-rate">${f(r.value)}</span>`}${isNum(r.lo) && isNum(r.hi) ? `<span class="av-ci-text">${f(r.lo)}–${f(r.hi)}</span>` : across ? `<span class="av-across">${noInterval(r.pooled)}</span>` : ""}</div></div>`;
+    return `<div class="av-ladder-row" role="row"><div class="av-ladder-label" role="rowheader">${r.arm ? ctx.arms.tag(r.arm, { id: false }) : `<span class="av-arm-label">${esc(r.label)}</span>`}${r.arm && r.label && r.label !== ctx.arms.label(r.arm) ? `<span class="av-ladder-note">${esc(r.label)}</span>` : ""}${r.note ? `<span class="av-ladder-note">${esc(r.note)}</span>` : ""}</div><div class="av-ladder-track${has ? "" : " av-ladder-track--empty"}" role="cell" style="${style}"${tipAttr({ over: input.title || "", title: r.arm ? ctx.arms.label(r.arm) : String(r.label ?? ""), mark: r.arm ? ctx.arms.mark(r.arm) : undefined, rows: [["Value", share ? "" : has ? said(r.value) : "none"], ["Counts", isNum(r.k) && isNum(r.n) ? `${r.k} of ${r.n}` : ""], ["95% interval", isNum(r.lo) && isNum(r.hi) ? `${said(r.lo)} to ${said(r.hi)}` : across ? noInterval(r.pooled) : ""]], note: r.note })}>${isNum(r.lo) && isNum(r.hi) ? '<span class="av-ci"></span>' : ""}${has ? (share ? '<span class="av-share" data-av-tip-at></span>' : '<span class="av-pt" data-av-tip-at></span>') : '<span class="av-ladder-none">no value</span>'}</div><div class="av-ladder-num" role="cell">${frac}${share ? "" : `<span class="av-rate">${f(r.value)}</span>`}${isNum(r.lo) && isNum(r.hi) ? `<span class="av-ci-text">${f(r.lo)}–${f(r.hi)}</span>` : across ? `<span class="av-across">${noInterval(r.pooled)}</span>` : ""}</div></div>`;
   }).join("");
   const ref = input.reference && isNum(input.reference.value) ? `<div class="av-ladder-ref" aria-hidden="true" style="--x:${pos(x(input.reference.value))}"><span>${esc(input.reference.label)}</span></div>` : "";
-  return frame("ladder", input, `<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}" role="table"><div class="av-ladder-axis" role="row" aria-hidden="true"><span></span><div class="av-ladder-ticks">${ticks.map(t => `<span style="--x:${pos(x(t))}">${f(t)}</span>`).join("")}</div><span></span></div>${body}${ref}</div>`, {}, "intervals");
+  return frame("ladder", input, `<div class="av-ladder-grid${ref ? " av-ladder-grid--ref" : ""}" role="table">${axisRow(true)}${body}${ref}${rows.length > 4 ? axisRow(false) : ""}</div>`, {}, "intervals");
 }
 
 // ------------------------------------------------------------------ bars
@@ -136,16 +141,19 @@ export interface BarsInput extends FrameInput {
 export function bars(input: BarsInput, ctx: RenderContext): string {
   const segs = input.segments || [];
   const sum = (r: BarsInput["rows"][number]) => segs.reduce((n, s) => n + (isNum(r.values?.[s.id]) && r.values[s.id]! > 0 ? r.values[s.id]! : 0), 0);
-  const maxTotal = Math.max(1e-12, ...(input.rows || []).map(sum));
+  // Bars are drawn against the round tick at or past the longest, so the axis under them reads to its end.
+  const scale = axisTicks(0, Math.max(1e-12, ...(input.rows || []).map(sum)), 4), maxTotal = scale[scale.length - 1] || 1;
   const rows = (input.rows || []).map(r => {
     r = { ...r, values: r.values || {} };
     const total = sum(r);
-    const parts = segs.map(s => { const v = r.values[s.id]; return isNum(v) && v > 0 ? `<span class="av-bar-seg av-tone--${tone(s.tone)}" style="flex:${v}" title="${esc(`${s.label}: ${v}`)}">${total && v / total > .07 ? fmtNum(v) : ""}</span>` : ""; }).join("");
+    const parts = segs.map(s => { const v = r.values[s.id]; return isNum(v) && v > 0 ? `<span class="av-bar-seg av-tone--${tone(s.tone)}" style="flex:${v}"${tipAttr({ over: r.label, title: s.label, mark: r.arm ? ctx.arms.mark(r.arm) : undefined, rows: [["Value", fmtNum(v)], ["Share of the row", fmtPct(v / total)], ["Row total", fmtNum(total)]] })}>${total && v / total > .07 ? fmtNum(v) : ""}</span>` : ""; }).join("");
     const absent = segs.filter(s => !isNum(r.values[s.id])).map(s => s.label);
     return `<div class="av-bar-row"><div class="av-bar-label">${r.arm ? ctx.arms.tag(r.arm, { id: false }) : esc(r.label)}${r.arm && r.label && r.label !== ctx.arms.label(r.arm) ? `<span class="av-ladder-note">${esc(r.label)}</span>` : ""}${r.note ? `<span class="av-ladder-note">${esc(r.note)}</span>` : ""}</div><div class="av-bar-track"><div class="av-bar" style="width:${pos(total / maxTotal)}" role="img" aria-label="${esc(`${r.label}: ${segs.map(s => `${s.label} ${isNum(r.values[s.id]) ? r.values[s.id] : "missing"}`).join(", ")}`)}">${parts || '<span class="av-bar-empty">no values</span>'}</div></div><div class="av-bar-total">${fmtNum(total)}${absent.length ? `<span class="av-missing" title="${esc(absent.join(", "))} not recorded">${absent.length} missing</span>` : ""}</div></div>`;
   }).join("");
   const legend = `<p class="av-legend">${segs.map(s => `<span><span class="av-sw av-tone--${tone(s.tone)}"></span>${esc(s.label)}</span>`).join("")}</p>`;
-  return frame("bars", input, legend + `<div class="av-bars">${rows}</div>`);
+  // Bar length is the row's total, on one scale for every row: its axis runs under the rows.
+  const axis = scale.length > 1 ? `<div class="av-bar-row av-bar-axis" aria-hidden="true"><span class="av-axis-title">total</span><div class="av-bar-track">${ticksHtml(scale.map(t => ({ x: t / maxTotal, label: fmtNum(t) })))}</div><span></span></div>` : "";
+  return frame("bars", input, legend + `<div class="av-bars">${rows}${axis}</div>`);
 }
 
 // ------------------------------------------------------------------ trend
@@ -175,8 +183,10 @@ export function trend(input: TrendInput, ctx: RenderContext): string {
   const X = (i: number) => L + (stages.length === 1 ? (W - L - R) / 2 : i * (W - L - R) / (stages.length - 1));
   const Y = (v: number) => T + (1 - (v - bottom) / Math.max(1e-12, top - bottom)) * (H - T - B);
   const f = (v: number) => percent ? fmtPct(v) : `${fmtNum(v)}${input.unit ? " " + input.unit : ""}`;
-  const grid = ticks.map(t => `<line x1="${L}" x2="${W - R}" y1="${Y(t).toFixed(1)}" y2="${Y(t).toFixed(1)}" class="av-svg-grid"/><text x="${L - 8}" y="${(Y(t) + 4).toFixed(1)}" text-anchor="end" class="av-svg-tick">${esc(f(t))}</text>`).join("");
-  const xs = stages.map((s, i) => `<text x="${X(i).toFixed(1)}" y="${H - B + 22}" text-anchor="middle" class="av-svg-tick">${esc(s)}</text>`).join("");
+  // Both axes drawn as axes: a line with a tick mark at each labelled value or stage.
+  const grid = ticks.map(t => `<line x1="${L}" x2="${W - R}" y1="${Y(t).toFixed(1)}" y2="${Y(t).toFixed(1)}" class="av-svg-grid"/><line x1="${L - 5}" x2="${L}" y1="${Y(t).toFixed(1)}" y2="${Y(t).toFixed(1)}" class="av-svg-axis"/><text x="${L - 9}" y="${(Y(t) + 4).toFixed(1)}" text-anchor="end" class="av-svg-tick">${esc(f(t))}</text>`).join("")
+    + `<line x1="${L}" x2="${L}" y1="${T}" y2="${H - B}" class="av-svg-axis"/><line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" class="av-svg-axis"/>`;
+  const xs = stages.map((s, i) => `<line x1="${X(i).toFixed(1)}" x2="${X(i).toFixed(1)}" y1="${H - B}" y2="${H - B + 5}" class="av-svg-axis"/><text x="${X(i).toFixed(1)}" y="${H - B + 20}" text-anchor="middle" class="av-svg-tick">${esc(s)}</text>`).join("");
   const labels: Array<{ y: number; html: string }> = [];
   const dodge = (si: number) => (si - (series.length - 1) / 2) * Math.min(7, 28 / Math.max(1, series.length));
   const lines = series.map((s, si) => {
@@ -185,8 +195,9 @@ export function trend(input: TrendInput, ctx: RenderContext): string {
     const pts = stages.map((st, i) => ({ i, p: s.points.find(p => p.stage === st) })).filter(o => o.p && isNum(o.p.value)) as Array<{ i: number; p: { value: number; lo?: number | null; hi?: number | null; k?: number; n?: number; pooled?: number | null } }>;
     // A stage without a value breaks the line rather than bridging the gap.
     const path = pts.map((o, j) => `${j && pts[j - 1].i === o.i - 1 ? "L" : "M"}${Xs(o.i).toFixed(1)},${Y(o.p.value).toFixed(1)}`).join("");
-    const whiskers = pts.filter(o => isNum(o.p.lo) && isNum(o.p.hi)).map(o => `<line x1="${Xs(o.i).toFixed(1)}" x2="${Xs(o.i).toFixed(1)}" y1="${Y(o.p.lo!).toFixed(1)}" y2="${Y(o.p.hi!).toFixed(1)}" class="av-svg-whisker"/>`).join("");
-    const dots = pts.map(o => `<circle cx="${Xs(o.i).toFixed(1)}" cy="${Y(o.p.value).toFixed(1)}" r="4.5" class="av-svg-dot"><title>${esc(`${s.label} · ${stages[o.i]}: ${f(o.p.value)}${isNum(o.p.k) ? ` (${o.p.k}/${o.p.n}${o.p.pooled !== 0 ? `, ${noInterval(o.p.pooled)}` : ""})` : ""}`)}</title></circle>`).join("");
+    const whiskers = pts.filter(o => isNum(o.p.lo) && isNum(o.p.hi)).map(o => { const x = Xs(o.i).toFixed(1), cap = (v: number) => `<line x1="${(Xs(o.i) - 5).toFixed(1)}" x2="${(Xs(o.i) + 5).toFixed(1)}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" class="av-svg-cap"/>`; return `<line x1="${x}" x2="${x}" y1="${Y(o.p.lo!).toFixed(1)}" y2="${Y(o.p.hi!).toFixed(1)}" class="av-svg-whisker"/>${cap(o.p.lo!)}${cap(o.p.hi!)}`; }).join("");
+    // Each point's card on a hit area wider than the dot, so a point is easy to land on.
+    const dots = pts.map(o => `<circle cx="${Xs(o.i).toFixed(1)}" cy="${Y(o.p.value).toFixed(1)}" r="4.5" class="av-svg-dot"/><circle cx="${Xs(o.i).toFixed(1)}" cy="${Y(o.p.value).toFixed(1)}" r="12" class="av-svg-hit"${tipAttr({ over: stages[o.i], title: s.label, mark: s.arm ? ctx.arms.mark(s.arm) : undefined, rows: [["Value", f(o.p.value)], ["Counts", isNum(o.p.k) ? `${o.p.k} of ${o.p.n}` : ""], ["95% interval", isNum(o.p.lo) && isNum(o.p.hi) ? `${f(o.p.lo)} to ${f(o.p.hi)}` : o.p.pooled !== 0 && isNum(o.p.k) ? noInterval(o.p.pooled) : ""]] })}/>`).join("");
     const last = pts[pts.length - 1];
     if (last) labels.push({ y: Y(last.p.value), html: `<text x="${W - R + 12}" class="av-svg-label" style="fill:${color}">${esc(s.label)}</text>` });
     return `<g style="--c:${color}" class="av-svg-series">${whiskers}<path d="${path}" class="av-svg-line"/>${dots}</g>`;
@@ -195,7 +206,7 @@ export function trend(input: TrendInput, ctx: RenderContext): string {
   labels.sort((a, b) => a.y - b.y);
   for (let i = 1; i < labels.length; i++) if (labels[i].y - labels[i - 1].y < 15) labels[i].y = labels[i - 1].y + 15;
   const endLabels = labels.map(l => l.html.replace("<text ", `<text y="${(l.y + 4).toFixed(1)}" `)).join("");
-  const svgText = `<svg viewBox="0 0 ${W} ${H}" class="av-svg" role="img" aria-label="${esc(input.title || "Trend across stages")}"><title>${esc(input.title || "Trend across stages")}</title>${grid}${xs}${lines}${endLabels}</svg>`;
+  const svgText = `<svg viewBox="0 0 ${W} ${H}" class="av-svg" role="img" aria-label="${esc(input.title || "Trend across stages")}">${grid}<text class="av-svg-axis-title" transform="translate(14 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle">${esc(percent ? "pass rate" : input.unit || "value")}</text>${xs}${lines}${endLabels}</svg>`;
   const tableRows = series.map(s => `<tr><th scope="row">${esc(s.label)}</th>${stages.map(st => { const p = s.points.find(q => q.stage === st); return `<td class="av-num">${p && isNum(p.value) ? esc(f(p.value)) + (isNum(p.k) ? ` <span class="av-muted">${p.k}/${p.n}${p.pooled !== 0 ? `, ${noInterval(p.pooled)}` : ""}</span>` : "") : missing()}</td>`; }).join("")}</tr>`).join("");
   return frame("trend", input, `<div class="av-scroll-x"><div class="av-svg-wrap">${svgText}</div></div><details class="av-data"><summary>Values</summary><div class="av-scroll-x"><table class="av-table"><thead><tr><th scope="col">Series</th>${stages.map(s => `<th scope="col" class="av-num">${esc(s)}</th>`).join("")}</tr></thead><tbody>${tableRows}</tbody></table></div></details>`);
 }

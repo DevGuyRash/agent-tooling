@@ -107,8 +107,9 @@ test("numeric with center median: the median leads and no interval is claimed fo
 test("ordinal: diverging level bars with counts, the median level named, no score", () => {
   const html = render({ type: "metric", metric: "taste" }, sandwich());
   H.equal(H.count(html, 'class="av-cmp-lk"'), 2, "one bar per alternative");
-  H.includes(html, "Good: 2 (67%)", "peanut butter's Good count");
-  H.includes(html, "Bad: 1 (33%)", "jelly's Bad count");
+  const level = (who, name) => H.cards(html).find(c => c.title === name && c.over.startsWith(who));
+  H.equal(level("Peanut butter", "Good")?.rows, { Observations: "2 of 3", Share: "67%" }, "peanut butter's Good count");
+  H.equal(level("Jelly", "Bad")?.rows, { Observations: "1 of 3", Share: "33%" }, "jelly's Bad count");
   for (const level of ["Bad", "Okay", "Good", "Great"]) H.includes(html, `${level}</span>`, `legend level ${level}`);
   H.excludes(html, 'class="av-pt"', "a point for an ordinal mean");
 });

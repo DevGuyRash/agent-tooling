@@ -1,6 +1,9 @@
 /** The shared frame every block sits in: an optional heading, description and
  * note, so blocks read alike without each one inventing its own chrome. */
-import { attrs, esc, prose } from "../core";
+import { attrs, esc, num, outcomeLabel, prose, tipAttr } from "../core";
+import type { RenderContext } from "../model";
+import { outcomeOf } from "../trial-model";
+import type { TrialRun } from "../trial-model";
 import { readHtml } from "../reading";
 import type { Reading } from "../reading";
 
@@ -21,7 +24,10 @@ export function empty(message: string): string {
   return `<p class="av-empty">${esc(message)}</p>`;
 }
 
-/** Percent position for CSS custom properties, clamped to the track. */
-export function pos(x: number): string {
-  return `${(Math.max(0, Math.min(1, x)) * 100).toFixed(3)}%`;
+export { pos } from "../core";
+
+/** A run mark's hover card: the case it ran (what was tested) and its repeat above, its arm beside the arm's mark, then
+ * its outcome and what the view adds. Selecting the mark opens the run's record. */
+export function runCard(ctx: RenderContext, run: TrialRun, rows: Array<[string, string]> = []): string {
+  return tipAttr({ over: `${ctx.caseLabels[run.scenario] || run.scenario} · repeat ${num(run.repeat) ?? "?"}`, title: ctx.arms.label(run.arm), mark: ctx.arms.mark(run.arm), rows: [["Outcome", outcomeLabel[outcomeOf(run)]], ...rows], note: "Select it to open the run's record." });
 }

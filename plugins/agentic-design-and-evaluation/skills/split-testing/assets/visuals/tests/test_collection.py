@@ -26,9 +26,11 @@ class CollectionViewsTest(NodeCases):
         self.run_script_cases()
 
 
-def write_collection(directory: Path, **changes) -> Path:
+def write_collection(directory: Path, costs: bool = False, **changes) -> Path:
     """Three members by file: the fictional trial with its narrative, the same trial and narrative again, and a
-    comparison; the collection tells its own story and reads each of its sections."""
+    comparison; the collection tells its own story and reads each of its sections. With `costs`, every run of the trial
+    records a cost that differs by arm, and the trial its per-arm cost change from the baseline, so changes can be set
+    against their cost."""
     collection = {
         "title": "Collected reports",
         "story": {"background": "Two readings of one invented trial and one invented lunch.", "intent": "Show a collection to a reader new to it.", "questions": ["Does the collection read as one story?"], "covers": "Three reports.", "notCovered": "Anything real."},
@@ -46,6 +48,15 @@ def write_collection(directory: Path, **changes) -> Path:
     for name, source in (("fictional-trial.json", EXAMPLES / "fictional-trial.json"), ("narratives/fictional-narrative.json", EXAMPLES / "fictional-narrative.json"),
                          ("sandwich.json", EXAMPLES / "comparisons/sandwich.json"), ("sandwich-narrative.json", EXAMPLES / "comparisons/sandwich-narrative.json")):
         (directory / name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    if costs:
+        trial = json.loads((directory / "fictional-trial.json").read_text(encoding="utf-8"))
+        arms = list(dict.fromkeys(r["arm"] for r in trial["runs"]))
+        for r in trial["runs"]:
+            r.setdefault("usage", {})["cost_usd"] = round(0.02 * (1 + 0.35 * arms.index(r["arm"])) * (1 + 0.05 * (r.get("repeat") or 0)), 4)
+        # trial.py's per-case median difference in cost per run from the baseline, as a share, for every other arm.
+        trial["baseline"] = "current"
+        trial["pct_vs_baseline"] = {a: {"cost_usd": {"median": round(0.35 * i - 0.2, 2)}} for i, a in enumerate(arms) if a != "current"}
+        (directory / "fictional-trial.json").write_text(json.dumps(trial), encoding="utf-8")
     again = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
     again["decision"] = {**again["decision"], "verdict": "mixed", "label": "Read again"}
     (directory / "narratives/again.json").write_text(json.dumps(again), encoding="utf-8")
@@ -265,6 +276,49 @@ class CollectionBrowserTest(unittest.TestCase):
     """The collection in a real browser, driven as test_browser.py drives a report."""
 
     setUp, tearDown, build, drive = TB.BrowserRenderTest.setUp, TB.BrowserRenderTest.tearDown, TB.BrowserRenderTest.build, TB.BrowserRenderTest.drive
+
+    def test_each_setup_reads_on_its_own_row_and_the_scatter_spreads_its_points(self) -> None:
+        # The owner, of the setups' tracks: "how would I know what marks are what when the triangle has it's own min and
+        # max?", "better upper/lower bounds and spacing between the marks (but not overdoing it)"; of the scatter, a hover
+        # that showed the chart's caption rather than the point's own numbers.
+        page = self.build("--collection", write_collection(self.dir, costs=True))
+        script = TB.CARD + """
+const box = e => e.getBoundingClientRect(), meets = (a, b) => a.left < b.right - 0.5 && b.left < a.right - 0.5 && a.top < b.bottom - 0.5 && b.top < a.bottom - 0.5;
+const plots = [...document.querySelectorAll(".av-block--shifts .av-cx-lanes")].map(plot => {
+  const rows = [...plot.querySelectorAll(".av-cx-row")];
+  const marks = rows.map(r => r.querySelector(".av-cx-pt")).filter(Boolean).map(box);
+  return { rows: rows.length, named: rows.filter(r => r.querySelector(".av-cx-who").textContent.trim()).length, valued: rows.filter(r => /\\d|—/.test(r.querySelector(".av-cx-val").textContent)).length,
+    overlaps: marks.filter((a, i) => marks.some((b, j) => j > i && meets(a, b))).length, ticks: [...plot.querySelectorAll(".av-cx-axis .av-tick")].map(t => t.textContent) };
+});
+const row = document.querySelector(".av-block--shifts .av-cx-row");
+point(row, "pointerover"); const card = tip(), who = row.querySelector(".av-cx-who").textContent.trim(), report = row.closest(".av-sh-row").querySelector(".av-sh-name a").textContent.trim();
+const dots = [...document.querySelectorAll(".av-cg-pt")];
+const spots = dots.map(d => box(d.querySelector(".av-cg-dot")));
+const pt = dots[0]; if (pt) point(pt, "pointerover");
+return { plots, card, who, report, points: dots.length, links: dots.filter(d => /^#report\\//.test(d.getAttribute("href"))).length, pointOverlaps: spots.filter((a, i) => spots.some((b, j) => j > i && meets(a, b))).length,
+  x: [...document.querySelectorAll(".av-cg > .av-ticks .av-tick")].map(t => t.textContent), y: [...document.querySelectorAll(".av-cg-yticks span")].map(t => t.textContent), pointCard: pt ? tip() : null };
+"""
+        out = self.drive(page, width=1440, script=script)["result"]
+        self.assertTrue(out["plots"], "no setup plot drawn")
+        for plot in out["plots"]:
+            self.assertGreater(plot["rows"], 1)
+            self.assertEqual(plot["named"], plot["rows"], "a setup's row does not name it")
+            self.assertEqual(plot["valued"], plot["rows"], "a setup's row does not say its value")
+            self.assertEqual(plot["overlaps"], 0, "two setups' marks are drawn over each other")
+            self.assertEqual(plot["ticks"], ["0%", "25%", "50%", "75%", "100%"], "a pass rate is not read against a labelled 0–100% axis")
+        self.assertTrue(out["card"]["shown"])
+        self.assertEqual(out["card"]["title"], out["who"], "a setup's card does not name the setup")
+        self.assertTrue(out["card"]["over"].startswith(out["report"]), "a setup's card does not name the report it was tested in")
+        self.assertIn("Pass rate", out["card"]["rows"])
+        self.assertGreater(out["points"], 1, "the scatter draws no changes to spread")
+        self.assertEqual(out["links"], out["points"], "a change on the scatter does not open its report")
+        self.assertEqual(out["pointOverlaps"], 0, "two changes are drawn over each other")
+        for axis in ("x", "y"):
+            labels = out[axis]
+            self.assertEqual(labels[0].lstrip("−"), labels[-1].lstrip("+"), f"the {axis} axis is not symmetric about zero: {labels}")
+            self.assertTrue(all(t.strip("+−%") in ("±0", "0") or int(t.strip("+−%")) % 5 == 0 for t in labels), f"the {axis} axis has bounds that are not round: {labels}")
+        self.assertTrue(out["pointCard"]["shown"] and out["pointCard"]["rows"], "a change's card is empty")
+        self.assertNotIn("Cost against gain", out["pointCard"]["title"], "a change shows the chart's caption, not its own numbers")
 
     def test_the_reader_opens_compares_and_returns(self) -> None:
         page = self.build("--collection", write_collection(self.dir))

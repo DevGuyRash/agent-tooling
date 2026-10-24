@@ -63,6 +63,8 @@ export class ArmRegistry {
   note(id: string): string | undefined { return this.info.get(id)?.note; }
   color(id: string): string { return `var(--av-arm-${this.index(id) % 8})`; }
   shape(id: string): string { const i = this.index(id); return SHAPES[(i + Math.floor(i / 8)) % SHAPES.length]; }
+  /** The arm's shape and color, for a hover card's mark. */
+  mark(id: string): { shape: string; color: string } { return { shape: this.shape(id), color: this.color(id) }; }
   /** A small colored shape that identifies an arm without relying on color. */
   glyph(id: string, extra = ""): string {
     return `<span class="av-glyph${extra ? " " + extra : ""}" data-shape="${this.shape(id)}" style="--c:${this.color(id)}" aria-hidden="true"></span>`;

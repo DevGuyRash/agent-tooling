@@ -5,6 +5,7 @@
  * browser feature is used only where present, so a partial document (or a test
  * double) gets the behaviors it can support and never an error. */
 import { esc, fmtNum, fmtSeconds, inline, isNum, outcomeBadge, outcomeLabel, outcomeMark, entriesOf, keysIn } from "./core";
+import type { Tip } from "./core";
 import { failureCause, invalidReason } from "./failure";
 import { attachMermaid, DiagramController } from "./mermaid";
 import { createContext, RenderContext, ReportSpec } from "./model";
@@ -327,32 +328,59 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     }
   }
 
-  // Tooltips: run marks show their accessible name at once, in the report's
-  // own style. The native title would repeat it late, so it moves to aria-label.
+  // Hover cards: a mark shows its card at once, in the report's own style: a card written for it (data-av-tip, see
+  // tipAttr in core.ts) or else its accessible name. The native title would repeat it late, so it moves to aria-label.
+  // A touch shows the card of the mark touched; a touch elsewhere, Escape or scrolling puts it away.
   const tip = make("div", { class: "av-tip", "aria-hidden": "true" });
   if (tip) report.appendChild(tip);
   let tipFor: Element | null = null;
   for (const el of all(`${MARKS}[title]`)) { if (!el.getAttribute("aria-label")) el.setAttribute("aria-label", el.title); el.removeAttribute("title"); }
   const hideTip = () => { if (tip && tipFor) { tip.removeAttribute("data-show"); tipFor = null; } };
+  const part = (tag: string, cls: string, text?: string) => { const el = doc.createElement(tag); el.className = cls; if (text !== undefined) el.textContent = text; return el; };
+  /** Fill the card from the mark; false when the mark has nothing to say. */
+  const fill = (el: HTMLElement): boolean => {
+    const raw = el.getAttribute("data-av-tip") || el.getAttribute("aria-label") || "";
+    let card: Tip | null = null;
+    if (raw.startsWith("{")) { try { const v = JSON.parse(raw); if (v && typeof v.title === "string") card = v; } catch { /* plain text */ } }
+    tip!.replaceChildren();
+    tip!.style.removeProperty("--c");
+    tip!.toggleAttribute("data-rich", !!card);
+    if (!card) { tip!.textContent = raw; return !!raw; }
+    if (card.over) tip!.append(part("p", "av-tip-over", card.over));
+    const head = part("p", "av-tip-head");
+    if (card.mark) {
+      const glyph = part("span", "av-glyph");
+      glyph.setAttribute("data-shape", String(card.mark.shape)); glyph.style.setProperty("--c", String(card.mark.color));
+      tip!.style.setProperty("--c", String(card.mark.color));
+      head.append(glyph);
+    }
+    head.append(part("span", "av-tip-title", card.title));
+    tip!.append(head);
+    const rows = Array.isArray(card.rows) ? card.rows.filter(r => Array.isArray(r) && r.length === 2) : [];
+    if (rows.length) { const dl = part("dl", "av-tip-rows"); for (const [k, v] of rows) dl.append(part("dt", "", String(k)), part("dd", "", String(v))); tip!.append(dl); }
+    if (card.note) tip!.append(part("p", "av-tip-note", card.note));
+    return true;
+  };
   const showTip = (el: HTMLElement) => {
     if (!tip || dialog?.open) return;
-    const text = el.getAttribute("data-av-tip") || el.getAttribute("aria-label") || "";
-    if (!text) { hideTip(); return; }
-    tipFor = el; tip.textContent = text;
+    if (!fill(el)) { hideTip(); return; }
+    tipFor = el;
     tip.setAttribute("data-show", "");
-    const r = el.getBoundingClientRect(), t = tip.getBoundingClientRect(), vw = doc.documentElement.clientWidth || win.innerWidth;
+    // A row's card points at the row's own mark (data-av-tip-at), not at the middle of the row.
+    const r = (el.querySelector("[data-av-tip-at]") || el).getBoundingClientRect(), t = tip.getBoundingClientRect(), vw = doc.documentElement.clientWidth || win.innerWidth;
     const cx = r.left + r.width / 2, top = bar ? bar.getBoundingClientRect().bottom : 0;
     const left = Math.max(8, Math.min(vw - t.width - 8, cx - t.width / 2));
-    const above = r.top - t.height - 10 >= top + 4;
+    const above = r.top - t.height - 12 >= top + 4;
     tip.style.left = `${Math.round(left)}px`;
-    tip.style.top = `${Math.round(above ? r.top - t.height - 10 : r.bottom + 10)}px`;
-    tip.style.setProperty("--ax", `${Math.round(cx - left)}px`);
+    tip.style.top = `${Math.round(above ? r.top - t.height - 12 : r.bottom + 12)}px`;
     tip.setAttribute("data-side", above ? "top" : "bottom");
   };
-  on(report, "pointerover", (e: PointerEvent) => { const el = (e.target as Element).closest?.<HTMLElement>(TIPPED); if (el && el !== tipFor) showTip(el); });
-  on(report, "pointerout", (e: PointerEvent) => { const el = (e.target as Element).closest?.(TIPPED); if (el && !(e.relatedTarget instanceof Node && el.contains(e.relatedTarget))) hideTip(); });
+  on(report, "pointerover", (e: PointerEvent) => { if (e.pointerType === "touch") return; const el = (e.target as Element).closest?.<HTMLElement>(TIPPED); if (el && el !== tipFor) showTip(el); });
+  on(report, "pointerout", (e: PointerEvent) => { if (e.pointerType === "touch") return; const el = (e.target as Element).closest?.(TIPPED); if (el && !(e.relatedTarget instanceof Node && el.contains(e.relatedTarget))) hideTip(); });
+  on(doc, "pointerdown", (e: PointerEvent) => { if (e.pointerType !== "touch") return; const el = (e.target as Element).closest?.<HTMLElement>(TIPPED); if (el && report.contains(el)) showTip(el); else hideTip(); });
   on(report, "focusin", (e: FocusEvent) => { const el = (e.target as Element).closest?.<HTMLElement>(TIPPED); if (el) showTip(el); else hideTip(); });
   on(report, "focusout", (e: FocusEvent) => { if (!(e.relatedTarget instanceof Element && e.relatedTarget.closest(TIPPED))) hideTip(); });
+  on(doc, "keydown", (e: KeyboardEvent) => { if (e.key === "Escape") hideTip(); });
   on(win, "scroll", hideTip, { passive: true });
 
   // Roving focus: each tapestry, cost panel and invalid group is one tab stop.

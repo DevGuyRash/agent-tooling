@@ -13,7 +13,7 @@ import type { RenderContext } from "../model";
 import { outcomeOf, trialAxes } from "../trial-model";
 import type { TrialReport, TrialRun, TrialScenario } from "../trial-model";
 import { clip, failureCause, FailureCause, failureDetail, invalidReason, judgeDecides, judgeFailed, oneLine, plainText, unmetChecks } from "../failure";
-import { frame, FrameInput } from "./frame";
+import { frame, FrameInput, runCard } from "./frame";
 
 export interface FailuresInput extends FrameInput {
   /** Cases (scenario names) to include; default every case that ran. */
@@ -86,7 +86,7 @@ export function failures(input: FailuresInput, ctx: RenderContext): string {
   const who = (f: Failed) => `${caseLabel(f.run.scenario)} · ${ctx.arms.label(f.run.arm)} · repeat ${num(f.run.repeat) ?? "?"}`;
   const mark = (f: Failed) => {
     const label = `${who(f)}: Failed. ${f.cause.text}`;
-    return `<button type="button" class="av-run av-run--fail"${attrs({ "data-run": f.i, title: label, "aria-label": label })}></button>`;
+    return `<button type="button" class="av-run av-run--fail"${attrs({ "data-run": f.i, "aria-label": label })}${runCard(ctx, f.run, [["Why", f.cause.text]])}></button>`;
   };
   const multiArm = arms.length > 1;
   /** The runs as marks, grouped behind each arm's glyph when several arms are shown. */

@@ -328,7 +328,8 @@ test("ordinal ratings share a scale only when their ordered levels are the same"
   H.includes(text(apart), "Each report on its own measure", "each on its own scale");
   const own = apart.slice(apart.indexOf("Each report on its own measure"), apart.indexOf("av-rc-full"));
   H.equal(own.match(/median level “good”/g)?.length, 6, "each rating in its own words, in its label, its tip and its list");
-  H.equal(own.match(/<span>“bad”<\/span><span>“good”<\/span>/g)?.length, 2, "each scale's ends named by its own levels");
+  const scales = [...own.matchAll(/<div class="av-cx-axis"[\s\S]*?<\/div><span><\/span><\/div>/g)].map(m => [...m[0].matchAll(/class="av-tick"[^>]*>([^<]*)</g)].map(x => x[1]));
+  H.equal(scales, [["bad", "ok", "good"], ["bad", "good"]], "each scale's ticks named by its own levels");
   // The control: the same ordered levels share one scale, and the same rating draws a flat connector.
   const together = render({ type: "report-compare", a: "a", b: "b" }, pair(["bad", "ok", "good"], ["bad", "ok", "good"]));
   H.includes(together, "av-cx-shift--flat", "no change between equal ratings");
@@ -555,7 +556,7 @@ test("round 10: every view reads one per-setup summary, from one choice of evide
     H.equal([row.value, row.balanced, row.perCase.map(c => c.id)], [0, 0, ["c1"]], `${kind}: the value, the balanced value and the cases from the same evidence`);
     const html = render({ type: "reports", layouts: ["cards"] }, { members: [{ id: "a", comparison: mixed(kind) }] });
     H.includes(html, 'style="--x:0.000%', `${kind}: plotted at 0`);
-    H.includes(html, kind === "binary" ? "x: 0 of 1 (0%)" : "x: mean 0 (n = 1)", `${kind}: its words agree`);
+    H.equal(H.cards(html).find(c => c.title === "x")?.rows.Observed, kind === "binary" ? "0 of 1 (0%)" : "mean 0 (n = 1)", `${kind}: its words agree`);
   }
   // 3. Judgments and rankings that name c1 and c2, with no cases declared: both reports ran both, and the values stay apart.
   const pair = (a, b) => ({ members: [{ id: "a", comparison: a }, { id: "b", comparison: b }] });
@@ -640,8 +641,13 @@ test("sweep (a selected matrix): each rate and number kind reads the same value,
       if (type === "matchups") continue; // a matchup needs two reports: the trial sweep below covers it
       const html = render({ type, ...(layouts ? { layouts } : {}) }, data);
       H.includes(html, `av-cx-shift av-cx-shift--good" style="${e.line}"`, `${kind} (${type}): the line between the values the change is taken over`);
-      H.includes(html, `data-av-tip="x: ${e.words.x.replace(/"/g, "&quot;")} · the reference"`, `${kind} (${type}): x's words`);
-      H.includes(html, `data-av-tip="y: ${e.words.y}"`, `${kind} (${type}): y's words`);
+      // Each setup's card names it and says its value in the words every view uses; the reference's card says it is one.
+      for (const who of ["x", "y"]) {
+        const card = H.cards(html).find(c => c.title === who);
+        H.ok(card, `${kind} (${type}): a card for ${who}`);
+        H.equal(Object.values(card.rows).slice(0, 2).reverse().join("; "), e.words[who], `${kind} (${type}): ${who}'s words`);
+        H.equal(/reference/.test(card.note), who === "x", `${kind} (${type}): only the reference's card says it is the reference`);
+      }
       H.excludes(html, 'class="av-cx-ci"', `${kind} (${type}): no interval for a value over two cases`);
     }
     H.includes(render({ type: "shifts" }, data), e.changeText, `${kind}: the stated change`);
@@ -679,7 +685,9 @@ test("sweep (a selected matrix): ordinal levels, judgments, rankings and their t
     const shifts = render({ type: "shifts" }, members);
     H.includes(shifts, 'av-cx-shift av-cx-shift--good" style="--a:0.000%;--b:50.000%"', `${kind}: the line from "bad" to "ok"`);
     H.includes(text(shifts), "“bad” → “ok” (median levels balanced over the 2 cases both ran)", `${kind}: the change in levels`);
-    H.includes(shifts, 'data-av-tip="x: median level “good” (n = 4, across 2 cases); median level “bad” with each case weighted equally · the reference"', `${kind}: x's words`);
+    const xCard = H.cards(shifts).find(c => c.title === "x");
+    H.equal([xCard.rows.Observed, Object.values(xCard.rows)[0]], ["median level “good” (n = 4, across 2 cases)", "median level “bad” with each case weighted equally"], `${kind}: x's words`);
+    H.ok(/reference/.test(xCard.note), `${kind}: x's card says it is the reference`);
     const table = render({ type: "reports", layouts: ["table"] }, members);
     H.includes(text(table), "“bad” → “ok”", `${kind}: the table says the change in levels`); H.excludes(table, "data-g=", `${kind}: and sorts it after every sized change`);
     H.equal((render({ type: "report-compare", a: "a", b: "b" }, { members: [{ id: "a", comparison: data }, { id: "b", comparison: data }] }).match(/av-cx-shift av-cx-shift--flat/g) || []).length, 2, `${kind}: flat lines against a copy`);

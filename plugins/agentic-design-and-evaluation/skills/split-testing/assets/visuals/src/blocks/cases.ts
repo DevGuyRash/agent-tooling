@@ -3,12 +3,12 @@
  * Variants of one case (the same prompt with an added turn, say) sit side by
  * side with the difference per arm. For a single-arm trial this is the main
  * result view, so it opens with the pass rate of every case. */
-import { count, esc, fmtInt, fmtPct, inline, num, outcomeLabel, outcomeMark, prose, slug, entriesOf, keysIn, stripText, WS_RUN } from "../core";
+import { count, esc, fmtInt, fmtPct, inline, num, outcomeLabel, outcomeMark, prose, slug, entriesOf, keysIn, stripText, ticksHtml, tipAttr, WS_RUN } from "../core";
 import { failureCause, failureDetail, oneLine } from "../failure";
 import type { RenderContext } from "../model";
 import { casesWords, newcombe } from "../stats";
 import { judgeFor, outcomeOf, tally, Tally, TrialReport, TrialRun, TrialScenario, trialAxes } from "../trial-model";
-import { empty, frame, FrameInput, pos } from "./frame";
+import { empty, frame, FrameInput, pos, runCard } from "./frame";
 
 export interface CaseGroup { label: string; cases: string[]; note?: string }
 /** One explicit variant set: `[base, variant]`; `{base, variant | variants, label?, baseLabel?}`
@@ -194,11 +194,17 @@ function pieces(ps: Piece[], what: string, extra = ""): string {
   return `<div class="av-cs-switch"><div class="av-cs-short">${list.map(p => piece(p, true)).join("")}</div><details class="av-cs-more"><summary><span class="av-cs-show">${esc(what)}${n ? ` · ${plural(n, "word")}` : ""}</span><span class="av-cs-hide">Show less</span></summary><div class="av-cs-full">${list.map(p => piece(p, false)).join("")}${extra}</div></details></div>`;
 }
 
-function track(color: string, t: Tally, label: string, mini = false): string {
+function track(color: string, t: Tally, label: string, mini = false, card = ""): string {
   const p = t.rate, ci = t.interval;
   const style = `--c:${color};${p !== null ? `--p:${pos(p)};` : ""}${ci ? `--lo:${pos(ci[0])};--hi:${pos(ci[1])};` : ""}`;
-  return `<div class="av-cs-track${mini ? " av-cs-track--mini" : ""}${p === null ? " av-cs-track--empty" : ""}" role="img" style="${style}" aria-label="${esc(label)}">${ci ? '<span class="av-ci"></span>' : ""}${p !== null ? '<span class="av-pt"></span>' : '<span class="av-cs-track-none">no valid runs</span>'}</div>`;
+  return `<div class="av-cs-track${mini ? " av-cs-track--mini" : ""}${p === null ? " av-cs-track--empty" : ""}" role="img" style="${style}" aria-label="${esc(label)}"${card}>${ci ? '<span class="av-ci"></span>' : ""}${p !== null ? '<span class="av-pt" data-av-tip-at></span>' : '<span class="av-cs-track-none">no valid runs</span>'}</div>`;
 }
+
+/** An arm's card on a case: the case (what was tested) above, the arm beside its mark, then its counts. */
+function rateCard(ctx: RenderContext, caseName: string, arm: string, t: Tally): string {
+  return tipAttr({ over: caseName, title: ctx.arms.label(arm), mark: ctx.arms.mark(arm), rows: [["Passed", t.valid ? `${count(t.pass)} of ${count(t.valid)} valid runs` : "no valid runs"], ["Pass rate", fmtPct(t.rate)], ["95% interval", t.interval ? `${fmtPct(t.interval[0])} to ${fmtPct(t.interval[1])}` : "none"], ["Invalid", t.invalid ? fmtInt(t.invalid) : ""]] });
+}
+const QUARTERS = [0, .25, .5, .75, 1].map(x => ({ x, label: fmtPct(x) }));
 
 function figures(t: Tally, interval = true): string {
   const ci = t.interval;
@@ -219,7 +225,7 @@ function marks(ctx: RenderContext, m: Member, runs: TrialRun[]): string {
     const o = outcomeOf(r), why = o === "pass" ? "" : causeText(r, m);
     const label = `${caseLabel(ctx, m.name)} · ${ctx.arms.label(r.arm)} · repeat ${num(r.repeat) ?? "?"}: ${outcomeLabel[o]}${why ? ` · ${cut(why, 160)}` : ""}`;
     const i = ctx.runIndex.get(r);
-    return `<button type="button" class="av-run av-run--${o}"${i === undefined ? "" : ` data-run="${count(i)}"`} title="${esc(label)}" aria-label="${esc(label)}"></button>`;
+    return `<button type="button" class="av-run av-run--${o}"${i === undefined ? "" : ` data-run="${count(i)}"`} aria-label="${esc(label)}"${runCard(ctx, r, why ? [["Why", cut(why, 160)]] : [])}></button>`;
   }).join("");
 }
 
@@ -367,10 +373,10 @@ function armRows(ctx: RenderContext, m: Member): string {
   const ran = m.cells.filter(c => c.runs.length);
   const rows = m.cells.map(c => {
     if (!c.runs.length) return ran.length ? `<div class="av-cs-arm av-cs-arm--none" role="row" data-arm="${esc(c.arm)}"><div class="av-cs-arm-tag" role="rowheader">${ctx.arms.tag(c.arm, { id: false })}</div><div class="av-cs-arm-none" role="cell">not run on this case</div></div>` : "";
-    return `<div class="av-cs-arm" role="row" data-arm="${esc(c.arm)}" data-av-row><div class="av-cs-arm-tag" role="rowheader">${ctx.arms.tag(c.arm, { id: false })}</div><div class="av-cs-arm-track" role="cell">${track(ctx.arms.color(c.arm), c.t, `${ctx.arms.label(c.arm)}: ${sayRate(c.t)}`)}</div><div class="av-cs-num" role="cell">${figures(c.t)}${thin(c.t)}</div><div class="av-cs-marks" role="cell">${marks(ctx, m, c.runs)}</div>${whyChips(c, ran.length > 1) ? `<div class="av-cs-arm-why" role="cell">${whyChips(c, ran.length > 1)}</div>` : ""}</div>`;
+    return `<div class="av-cs-arm" role="row" data-arm="${esc(c.arm)}" data-av-row><div class="av-cs-arm-tag" role="rowheader">${ctx.arms.tag(c.arm, { id: false })}</div><div class="av-cs-arm-track" role="cell">${track(ctx.arms.color(c.arm), c.t, `${ctx.arms.label(c.arm)}: ${sayRate(c.t)}`, false, rateCard(ctx, caseLabel(ctx, m.name), c.arm, c.t))}</div><div class="av-cs-num" role="cell">${figures(c.t)}${thin(c.t)}</div><div class="av-cs-marks" role="cell">${marks(ctx, m, c.runs)}</div>${whyChips(c, ran.length > 1) ? `<div class="av-cs-arm-why" role="cell">${whyChips(c, ran.length > 1)}</div>` : ""}</div>`;
   }).join("");
   // The rate axis, labelled once above the rows, so a bar reads without the figures beside it.
-  const axis = ran.length ? `<div class="av-cs-arm av-cs-arm--axis" aria-hidden="true"><span></span><div class="av-cs-ix-ticks">${[0, .5, 1].map(t => `<span style="--x:${pos(t)}">${t * 100}%</span>`).join("")}</div></div>` : "";
+  const axis = ran.length ? `<div class="av-cs-arm av-cs-arm--axis" aria-hidden="true"><span class="av-axis-title">pass rate</span>${ticksHtml(QUARTERS, { top: true })}</div>` : "";
   return `<div class="av-cs-arms" role="table" aria-label="${esc(`How ${caseLabel(ctx, m.name)} went, by arm`)}">${axis}${rows}</div>`;
 }
 
@@ -543,11 +549,11 @@ export function cases(input: CasesInput, ctx: RenderContext): string {
       const lead = `<div class="av-cs-ix-label" role="rowheader">${variant ? '<span class="av-cs-ix-n" aria-hidden="true">↳</span>' : `<span class="av-cs-ix-n">${String(n).padStart(2, "0")}</span>`}<a href="#${esc(variant ? m.anchor : ms[0].anchor)}">${esc(name)}</a>${!variant && e.kind === "set" ? `<span class="av-cs-ix-tag">${esc(m.label)}</span>` : ""}</div>`;
       if (single) {
         const c = m.cells[0];
-        return `<div class="av-cs-ix-row${variant ? " av-cs-ix-row--variant" : ""}" role="row">${lead}<div class="av-cs-ix-track" role="cell">${track(ctx.arms.color(c.arm), c.t, `${name}: ${sayRate(c.t)}`)}</div><div class="av-cs-ix-num" role="cell">${figures(c.t)}${thin(c.t)}${invalidChip(c.t.invalid, c.invalid)}${variant && ms[0].cells[0].t.valid ? `<span class="av-cs-ix-delta">${deltaHtml(ms[0].cells[0].t, c.t)}</span>` : ""}</div></div>`;
+        return `<div class="av-cs-ix-row${variant ? " av-cs-ix-row--variant" : ""}" role="row">${lead}<div class="av-cs-ix-track" role="cell">${track(ctx.arms.color(c.arm), c.t, `${name}: ${sayRate(c.t)}`, false, rateCard(ctx, name, c.arm, c.t))}</div><div class="av-cs-ix-num" role="cell">${figures(c.t)}${thin(c.t)}${invalidChip(c.t.invalid, c.invalid)}${variant && ms[0].cells[0].t.valid ? `<span class="av-cs-ix-delta">${deltaHtml(ms[0].cells[0].t, c.t)}</span>` : ""}</div></div>`;
       }
       const placed = m.cells.filter(c => c.t.valid), lane = lanes(placed);
       const deepest = Math.max(0, ...[...lane.values()].map(Math.abs));
-      const dots = placed.map(c => `<span class="av-cs-dot" style="--x:${pos(c.t.rate ?? 0)};--j:${(lane.get(c.arm) ?? 0).toFixed(1)};--gap:${STEP}px" title="${esc(`${ctx.arms.label(c.arm)}: ${sayRate(c.t)}`)}">${ctx.arms.glyph(c.arm)}</span>`).join("");
+      const dots = placed.map(c => `<span class="av-cs-dot" style="--x:${pos(c.t.rate ?? 0)};--j:${(lane.get(c.arm) ?? 0).toFixed(1)};--gap:${STEP}px" ${rateCard(ctx, name, c.arm, c.t)}>${ctx.arms.glyph(c.arm)}</span>`).join("");
       const say = m.cells.filter(c => c.runs.length).map(c => `${ctx.arms.label(c.arm)} ${sayRate(c.t)}`).join("; ") || "not run";
       const none = m.cells.filter(c => c.runs.length && !c.t.valid).length;
       const numbers = m.pooled.valid
@@ -570,8 +576,8 @@ export function cases(input: CasesInput, ctx: RenderContext): string {
   } else blocks.push({ items: entries.map(e => [e, ++n] as [Entry, number]) });
 
   const showIndex = input.index ?? entries.length + entries.reduce((k, e) => k + (e.kind === "set" ? e.ms.length - 1 : 0), 0) > 1;
-  const ticks = [0, .25, .5, .75, 1].map(t => `<span style="--x:${pos(t)}">${t * 100}%</span>`).join("");
-  const index = showIndex ? `<nav class="av-cs-index" aria-label="${single ? "Pass rate by case" : "Cases at a glance"}"><p class="av-cs-eyebrow">${single ? "Pass rate by case" : "Cases at a glance"}</p><p class="av-cs-index-desc">${single ? `One arm ran (${esc(ctx.arms.label(arms[0]))}); each case pools its repeats. Select a case for its dossier.` : "Each arm's pass rate on each case, placed by its shape and color; the figures on the right pool every arm. Select a case for its dossier."}</p>${single ? "" : `<p class="av-cs-index-arms">${arms.map(a => ctx.arms.tag(a, { id: false })).join("")}</p>`}<div class="av-cs-ix" role="table" aria-label="${single ? "Pass rate by case" : "Pass rate by case and arm"}"><div class="av-cs-ix-axis" role="row" aria-hidden="true"><span></span><div class="av-cs-ix-ticks">${ticks}</div><span></span></div>${blocks.map(b => `${b.group ? `<div class="av-cs-ix-group" role="row"><span role="rowheader">${esc(b.group.label)}</span></div>` : ""}${b.items.map(([e, k]) => indexRows(e, k)).join("")}`).join("")}</div></nav>` : "";
+  const axisRow = (top: boolean) => `<div class="av-cs-ix-axis${top ? "" : " av-cs-ix-axis--bottom"}" role="row" aria-hidden="true"><span class="av-axis-title">pass rate</span>${ticksHtml(QUARTERS, { top })}<span></span></div>`;
+  const index = showIndex ? `<nav class="av-cs-index" aria-label="${single ? "Pass rate by case" : "Cases at a glance"}"><p class="av-cs-eyebrow">${single ? "Pass rate by case" : "Cases at a glance"}</p><p class="av-cs-index-desc">${single ? `One arm ran (${esc(ctx.arms.label(arms[0]))}); each case pools its repeats. Select a case for its dossier.` : "Each arm's pass rate on each case, placed by its shape and color; the figures on the right pool every arm. Select a case for its dossier."}</p>${single ? "" : `<p class="av-cs-index-arms">${arms.map(a => ctx.arms.tag(a, { id: false })).join("")}</p>`}<div class="av-cs-ix" role="table" aria-label="${single ? "Pass rate by case" : "Pass rate by case and arm"}">${axisRow(true)}${blocks.map(b => `${b.group ? `<div class="av-cs-ix-group" role="row"><span role="rowheader">${esc(b.group.label)}</span></div>` : ""}${b.items.map(([e, k]) => indexRows(e, k)).join("")}`).join("")}${n > 6 ? axisRow(false) : ""}</div></nav>` : "";
 
   const body = blocks.map(b => {
     const head = b.group ? (() => {

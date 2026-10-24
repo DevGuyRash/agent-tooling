@@ -3,7 +3,7 @@
  * Rows come from explicit counts, from a baseline arm, or from two named sets of
  * runs; identical arms add a "chance alone" reference. Invalid runs are left
  * out of both sides and counted beside them, never as failures. */
-import { esc, fmtInt, fmtPct, isNum, outcomeMark, stripText, WS_RUN } from "../core";
+import { esc, fmtInt, fmtPct, gridlines, isNum, outcomeMark, stripText, ticksHtml, tipAttr, WS_RUN } from "../core";
 import type { RenderContext } from "../model";
 import { casesWords, countPooling, newcombe, placement, Placement } from "../stats";
 import { armCases, tally, TrialReport, TrialRun, trialAxes } from "../trial-model";
@@ -53,7 +53,7 @@ export interface ContrastInput extends FrameInput {
 
 interface Side { html: string; text: string; k: number | null; n: number | null; invalid: number; arm?: string; /** Cases its valid runs come from: above one, its counts are pooled. */ cases?: number; /** Counts written by hand whose sampling is not stated (countPooling). */ unstated?: boolean }
 type Kind = "main" | "case" | "noise";
-interface Row { kind: Kind; head?: string; a: Side; b: Side; note?: string; uneven?: boolean; children?: Row[]; /** Runs both sides select: they are not independent. */ shared?: number }
+interface Row { kind: Kind; head?: string; /** The heading in plain words, for the row's card. */ label?: string; a: Side; b: Side; note?: string; uneven?: boolean; children?: Row[]; /** Runs both sides select: they are not independent. */ shared?: number }
 /** The difference, with a 95% interval only when neither side pools runs from several cases. */
 interface Computed { d: number; ci: [number, number] | null }
 /** How many cases the row's more pooled side spans. */
@@ -125,6 +125,7 @@ export function contrast(input: ContrastInput, ctx: RenderContext): string {
       const row: Row = {
         kind: raw.identical === true ? "noise" : "main",
         head: typeof raw.label === "string" && raw.label ? `<span class="av-contrast-head-label">${esc(raw.label)}</span>` : undefined,
+        label: typeof raw.label === "string" && raw.label ? raw.label : undefined,
         a: side(raw.arm, aName, raw.k1, raw.n1, raw.invalid1), b: side(raw.vs, bName, raw.k2, raw.n2, raw.invalid2),
         note: typeof raw.note === "string" && raw.note ? raw.note : undefined,
       };
@@ -176,7 +177,7 @@ export function contrast(input: ContrastInput, ctx: RenderContext): string {
       if (withCases) row.children = (keep || axes.cases).flatMap(c => {
         const cx = tallyOf([x], [c]), cy = tallyOf([y], [c]);
         if (!cx.runs && !cy.runs) return [];
-        return [{ kind: "case" as Kind, head: caseHead(c), a: armSide(x, cx.pass, cx.valid, cx.invalid), b: armSide(y, cy.pass, cy.valid, cy.invalid) }];
+        return [{ kind: "case" as Kind, head: caseHead(c), label: caseName(c), a: armSide(x, cx.pass, cx.valid, cx.invalid), b: armSide(y, cy.pass, cy.valid, cy.invalid) }];
       });
       return row;
     };
@@ -245,7 +246,7 @@ export function contrast(input: ContrastInput, ctx: RenderContext): string {
         if (!both.length) problems.push("No arm ran on both sides, so there are no per-arm rows.");
         main.children = both.map(x => {
           const ta = tallyOf([x], A.cases), tb = tallyOf([x], B.cases);
-          return { kind: "case" as Kind, head: ctx.arms.tag(x, { id: false }), shared: sharedRuns([x], A.cases, [x], B.cases), a: { html: esc(firstName), text: firstName, k: ta.pass, n: ta.valid, invalid: ta.invalid, cases: ta.cases, arm: x }, b: { html: esc(secondName), text: secondName, k: tb.pass, n: tb.valid, invalid: tb.invalid, cases: tb.cases, arm: x } };
+          return { kind: "case" as Kind, head: ctx.arms.tag(x, { id: false }), label: ctx.arms.label(x), shared: sharedRuns([x], A.cases, [x], B.cases), a: { html: esc(firstName), text: firstName, k: ta.pass, n: ta.valid, invalid: ta.invalid, cases: ta.cases, arm: x }, b: { html: esc(secondName), text: secondName, k: tb.pass, n: tb.valid, invalid: tb.invalid, cases: tb.cases, arm: x } };
         });
       } else if (by === "case") {
         main.children = pairs.flatMap(([ca, cb]) => {
@@ -254,7 +255,7 @@ export function contrast(input: ContrastInput, ctx: RenderContext): string {
           const head = ca === cb ? caseHead(ca) : suffix ? caseHead(cb)
             : ca.startsWith(cb) && ca.length > cb.length ? `${caseHead(cb)}<span class="av-contrast-head-note">with <code>${esc(ca.slice(cb.length))}</code> against without</span>`
             : `${caseHead(ca)}<span class="av-contrast-head-note">against ${esc(caseName(cb))}</span>`;
-          return [{ kind: "case" as Kind, head, shared: sharedRuns(A.arms, [ca], B.arms, [cb]), a: { html: esc(firstName), text: firstName, k: ta.pass, n: ta.valid, invalid: ta.invalid, cases: ta.cases, arm: main.a.arm }, b: { html: esc(secondName), text: secondName, k: tb.pass, n: tb.valid, invalid: tb.invalid, cases: tb.cases, arm: main.b.arm } }];
+          return [{ kind: "case" as Kind, head, label: ca === cb ? caseName(ca) : suffix ? caseName(cb) : `${caseName(ca)} against ${caseName(cb)}`, shared: sharedRuns(A.arms, [ca], B.arms, [cb]), a: { html: esc(firstName), text: firstName, k: ta.pass, n: ta.valid, invalid: ta.invalid, cases: ta.cases, arm: main.a.arm }, b: { html: esc(secondName), text: secondName, k: tb.pass, n: tb.valid, invalid: tb.invalid, cases: tb.cases, arm: main.b.arm } }];
         });
       }
       rows = [main];
@@ -284,7 +285,7 @@ export function contrast(input: ContrastInput, ctx: RenderContext): string {
   // A little headroom so an interval ending near a round number does not touch the frame.
   const M = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.8, 1].find(m => m >= Math.min(1, extent + 0.02) - 1e-9) ?? 1;
   const x = (v: number) => pos((v + M) / (2 * M));
-  const ticks = [-M, -M / 2, 0, M / 2, M];
+  const ticks = [-M, -M / 2, 0, M / 2, M], grid = gridlines(ticks.map(t => ({ x: (t + M) / (2 * M), label: "" })));
   const barText = bar ? `the ${fmtPoints(bar.value)}-point bar` : "";
 
   const sideLine = (s: Side, short: boolean, glyph = true) => {
@@ -326,7 +327,14 @@ export function contrast(input: ContrastInput, ctx: RenderContext): string {
     const style = `--c:${color};--z:${x(0)};${c ? `--p:${x(c.d)};${c.ci ? `--lo:${x(c.ci[0])};--hi:${x(c.ci[1])};` : ""}` : ""}${bar && r.kind !== "noise" ? `--t:${x(bar.value)};` : ""}${band && r.kind === "main" ? `--b0:${x(-band)};--b1:${x(band)};` : ""}`;
     const counts = (s: Side) => s.k === null || s.n === null ? "missing counts" : `${s.k} of ${s.n} valid runs passed${s.invalid ? `, ${s.invalid} invalid` : ""}`;
     const aria = `${r.a.text} minus ${r.b.text}${r.head ? ` (${stripTags(r.head)})` : ""}: ${c ? (c.ci ? `${fmtPoints(c.d)} points, 95% interval ${fmtPoints(c.ci[0])} to ${fmtPoints(c.ci[1])}` : `${fmtPoints(c.d)} points, ${noCi(r)}`) : "no interval"}. ${r.a.text}: ${counts(r.a)}. ${r.b.text}: ${counts(r.b)}.`;
-    const track = `<div class="av-contrast-track${c ? "" : " av-contrast-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}">${band && r.kind === "main" && c ? '<span class="av-contrast-band"></span>' : ""}<span class="av-contrast-zero"></span>${bar && r.kind !== "noise" ? '<span class="av-contrast-bar"></span>' : ""}${c ? `${c.ci ? '<span class="av-contrast-ci"></span>' : ""}<span class="av-contrast-pt${c.ci ? "" : " av-contrast-pt--pooled"}"></span>` : `<span class="av-contrast-none"><span>${esc(compact ? "no interval" : "no interval: see below")}</span></span>`}</div>`;
+    const said = (s: Side) => s.k === null || s.n === null ? "missing counts" : `${s.k} of ${s.n} passed${s.n ? ` (${fmtPct(s.k / s.n)})` : ""}${s.invalid ? `, ${s.invalid} invalid` : ""}`;
+    const card = tipAttr({
+      over: r.kind === "noise" ? "Chance alone: identical material" : r.label || "Difference in pass rate",
+      title: `${r.a.text} minus ${r.b.text}`, mark: r.a.arm ? ctx.arms.mark(r.a.arm) : undefined,
+      rows: [["Difference", c ? `${fmtPoints(c.d)} points` : "none"], ["95% interval", c?.ci ? `${fmtPoints(c.ci[0])} to ${fmtPoints(c.ci[1])} points` : c ? noCi(r) : why || "none"], [r.a.text, said(r.a)], [r.b.text, said(r.b)],
+        ...(bar && r.kind !== "noise" && c ? [[bar.label || "Bar", `${fmtPoints(bar.value)} points: ${c.d >= bar.value ? "met" : "not met"}`]] as Array<[string, string]> : [])],
+    });
+    const track = `<div class="av-contrast-track${c ? "" : " av-contrast-track--empty"}" role="img" aria-label="${esc(aria)}" style="${style}"${card}>${grid}${band && r.kind === "main" && c ? '<span class="av-contrast-band"></span>' : ""}<span class="av-contrast-zero"></span>${bar && r.kind !== "noise" ? '<span class="av-contrast-bar"></span>' : ""}${c ? `${c.ci ? '<span class="av-contrast-ci"></span>' : ""}<span class="av-contrast-pt${c.ci ? "" : " av-contrast-pt--pooled"}" data-av-tip-at></span>` : `<span class="av-contrast-none"><span>${esc(compact ? "no interval" : "no interval: see below")}</span></span>`}</div>`;
     const passes = c && r.a.n === r.b.n && r.a.k !== null && r.b.k !== null
       ? `<span class="av-contrast-passes" title="${esc(`${r.a.k} against ${r.b.k} passes, of ${r.a.n} valid runs each`)}">${r.a.k - r.b.k > 0 ? "+" : r.a.k - r.b.k < 0 ? "−" : "±"}${Math.abs(r.a.k - r.b.k)} ${Math.abs(r.a.k - r.b.k) === 1 ? "pass" : "passes"}</span>` : "";
     const place = c && c.ci ? placement(c.ci, 0) : null;
@@ -342,10 +350,11 @@ export function contrast(input: ContrastInput, ctx: RenderContext): string {
     return `<div class="av-contrast-row av-contrast-row--${r.kind}"${place ? ` data-place="${place}"` : ""}>${label}${track}${num}${reading}</div>${kids}`;
   };
 
-  const tickHtml = ticks.map(t => `<span style="--x:${x(t)}">${esc(fmtPoints(t))}</span>`).join("");
-  const axis = `<div class="av-contrast-axis" aria-hidden="true"><span class="av-contrast-axis-unit">difference, points</span><div class="av-contrast-ticks">${tickHtml}</div><span></span></div>
+  const tickList = ticks.map(t => ({ x: (t + M) / (2 * M), label: fmtPoints(t) }));
+  const axisRow = (top: boolean) => `<div class="av-contrast-axis" aria-hidden="true"><span class="av-axis-title">difference, points</span>${ticksHtml(tickList, { top })}<span></span></div>`;
+  const axis = `${axisRow(true)}
 <div class="av-contrast-dir" aria-hidden="true"><span></span><div class="av-contrast-dir-track"><span class="av-contrast-dir-left">← ${esc(secondName)} higher</span><span class="av-contrast-dir-right">${esc(firstName)} higher →</span></div><span></span></div>`;
-  const legend = `<p class="av-legend av-contrast-legend"><span><span class="av-legend-pt"></span>difference in pass rate</span>${all.some(r => computed(r)?.ci) ? '<span><span class="av-legend-ci"></span>95% Newcombe interval</span>' : ""}<span><span class="av-contrast-legend-zero"></span>zero: no difference</span>${bar ? `<span><span class="av-legend-ref av-legend-ref--rule"></span>${esc(bar.label || `bar: ${fmtPoints(bar.value)} points`)}</span>` : ""}${band ? `<span><span class="av-legend-noise"></span>gap between identical arms (${esc(fmtPoints(band).replace(/^\+/, ""))} points), either way</span>` : ""}</p>`;
+  const legend = `<p class="av-legend av-contrast-legend"><span><span class="av-legend-pt"></span>difference in pass rate</span>${all.some(r => { const c = computed(r); return c && !c.ci && across(r) > 1; }) ? '<span><span class="av-contrast-legend-pooled"></span>pooled over cases: no interval</span>' : ""}${all.some(r => computed(r)?.ci) ? '<span><span class="av-legend-ci"></span>95% Newcombe interval</span>' : ""}<span><span class="av-contrast-legend-zero"></span>zero: no difference</span>${bar ? `<span><span class="av-legend-ref av-legend-ref--rule"></span>${esc(bar.label || `bar: ${fmtPoints(bar.value)} points`)}</span>` : ""}${band ? `<span><span class="av-legend-noise"></span>gap between identical arms (${esc(fmtPoints(band).replace(/^\+/, ""))} points), either way</span>` : ""}</p>`;
   const list = `<ul class="av-contrast-list" aria-label="${esc(input.title || "Difference in pass rate")}">${rows.map(r => `<li class="av-contrast-item">${rowHtml(r)}</li>`).join("")}</ul>`;
   const noiseHtml = noise.length ? `<div class="av-contrast-group" role="group" aria-label="Chance alone"><p class="av-contrast-group-label"><span class="av-eyebrow">Chance alone</span><span>Arms that received identical material. Their gap is what chance produces between runs of the same thing.</span></p><ul class="av-contrast-list">${noise.map(r => `<li class="av-contrast-item">${rowHtml(r)}</li>`).join("")}</ul></div>` : "";
   const anyUneven = all.some(r => r.uneven);
@@ -353,7 +362,7 @@ export function contrast(input: ContrastInput, ctx: RenderContext): string {
   const method = input.method === false ? "" : `<details class="av-contrast-method"><summary>How these differences are computed</summary><p>Each row is the first pass rate minus the second, in percentage points, over valid runs. Invalid runs are left out of both sides and counted beside them, never as failures. The interval is a 95% Newcombe hybrid score interval for the difference of two independent rates (Newcombe 1998, method 10). A row that pools runs from several cases has no interval: runs on one case repeat that case rather than sample new cases, so an interval over them all would overstate certainty; each case's own row has its interval. It covers run-to-run variation on these cases, not cases the trial did not include, and it is the only statistic this view adds: no p-values and no winners.${anyUneven ? " “Uneven case mix” marks rows whose two sides spread their valid runs over the cases very differently, so their pooled rates weight the cases differently; read the per-case rows for those." : ""}</p></details>`;
   // With no interval anywhere (every side empty, say) the axis and legend would describe nothing.
   const drawn = all.some(r => computed(r));
-  return frame("contrast", input, `${problemList(problems)}${drawn ? legend : ""}${scope}<div class="av-contrast-grid">${drawn ? axis : ""}${list}${noiseHtml}</div>${method}`);
+  return frame("contrast", input, `${problemList(problems)}${drawn ? legend : ""}${scope}<div class="av-contrast-grid">${drawn ? axis : ""}${list}${noiseHtml}${drawn && all.length > 4 ? axisRow(false) : ""}</div>${method}`);
 }
 
 function thresholdOf(raw: ContrastInput["threshold"], problems: string[]): { value: number; label: string } | null {
