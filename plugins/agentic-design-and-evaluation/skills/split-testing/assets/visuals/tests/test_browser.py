@@ -479,14 +479,20 @@ out.parked = { inWindow: m.left >= 0 && m.right <= innerWidth, onBorder: m.left 
 out.afterBoxScroll = tip().shown;
 // A mark fixed in place inside a transformed box that clips it, and drawn outside that box, is hidden: a scroll takes its
 // card away (a transformed box holds its fixed descendants, so it clips them).
-const held = document.createElement("div"); held.style.cssText = "transform:translateZ(0);overflow:hidden;height:40px;width:200px";
-const pinned = document.createElement("span"); pinned.style.cssText = "position:fixed;top:60px;left:10px;width:8px;height:8px"; pinned.setAttribute("data-av-tip", "a held mark");
-held.appendChild(pinned); document.querySelector(".av-block").prepend(held);
-held.scrollIntoView({ block: "center", behavior: "instant" }); await frames(); await frames();
-// Touched where it stands, without scrolling anything (scrolling it into view would scroll the box to show it).
-pinned.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })); out.heldShown = tip().shown; out.heldClipped = pinned.getBoundingClientRect().top >= held.getBoundingClientRect().bottom;
-const y0 = scrollY; window.scrollBy({ top: 10, behavior: "instant" }); await frames();
-out.heldScrolled = scrollY - y0; out.afterHeldScroll = tip().shown;
+// Held by a transform, an individual translate, or paint containment (which clips whatever its overflow).
+out.held = [];
+for (const style of ["transform:translateZ(0);overflow:hidden", "translate:0px;overflow:hidden", "contain:paint"]) {
+  const held = document.createElement("div"); held.style.cssText = style + ";height:40px;width:200px";
+  const pinned = document.createElement("span"); pinned.style.cssText = "position:fixed;top:60px;left:10px;width:8px;height:8px"; pinned.setAttribute("data-av-tip", "a held mark");
+  held.appendChild(pinned); document.querySelector(".av-block").prepend(held);
+  held.scrollIntoView({ block: "center", behavior: "instant" }); await frames(); await frames();
+  // Touched where it stands, without scrolling anything (scrolling it into view would scroll the box to show it).
+  pinned.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" }));
+  const shown = tip().shown, clipped = pinned.getBoundingClientRect().top >= held.getBoundingClientRect().bottom;
+  const y0 = scrollY; window.scrollBy({ top: 10, behavior: "instant" }); await frames();
+  out.held.push({ style, shown, clipped, scrolled: scrollY - y0, after: tip().shown });
+  held.remove();
+}
 
 return out;
 """
@@ -512,10 +518,12 @@ return out;
         self.assertTrue(out["boxShown"])
         self.assertEqual(out["parked"], {"inWindow": True, "onBorder": True}, "the mark was not left on the box's border, in the window")
         self.assertFalse(out["afterBoxScroll"], "the card stays after its mark has scrolled out of the box that clips it")
-        self.assertTrue(out["heldShown"])
-        self.assertEqual(out["heldScrolled"], 10, "the page did not scroll: this checks nothing")
-        self.assertTrue(out["heldClipped"], "the held mark is not outside its box: this checks nothing")
-        self.assertFalse(out["afterHeldScroll"], "the card stays for a fixed mark its transformed box hides")
+        for held in out["held"]:
+            with self.subTest(box=held["style"]):
+                self.assertTrue(held["shown"])
+                self.assertEqual(held["scrolled"], 10, "the page did not scroll: this checks nothing")
+                self.assertTrue(held["clipped"], "the held mark is not outside its box: this checks nothing")
+                self.assertFalse(held["after"], "the card stays for a fixed mark the box that holds it hides")
 
     def test_a_card_longer_than_a_short_window_still_fits_it_whole(self) -> None:
         # In a window 420 px high, under the top bar: a run's very long reason, and a card whose value and note each run far

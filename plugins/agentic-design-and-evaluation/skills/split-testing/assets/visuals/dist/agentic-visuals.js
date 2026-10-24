@@ -12723,14 +12723,16 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             bottom = Math.min(bottom, doc.documentElement.clientHeight || win.innerHeight);
             // Above an element fixed to the window, no box clips it until one that holds fixed elements (a transformed, filtered
             // or contained one), which clips it again, as do the boxes above that.
-            const holdsFixed = (cs) => cs.transform !== "none" || cs.filter !== "none" || cs.perspective !== "none" || /paint|layout|strict|content/.test(cs.contain) || /transform|filter|perspective/.test(cs.willChange);
+            const set = (v) => !!v && v !== "none";
+            const holdsFixed = (cs) => [cs.transform, cs.translate, cs.rotate, cs.scale, cs.filter, cs.backdropFilter, cs.perspective].some(set) || /paint|layout|strict|content/.test(cs.contain) || /transform|translate|rotate|scale|filter|perspective/.test(cs.willChange);
             let escaping = win.getComputedStyle(mark).position === "fixed";
             for (let box = mark.parentElement; box && box !== doc.body && left < right && top < bottom; box = box.parentElement) {
                 const cs = win.getComputedStyle(box);
                 if (escaping && !holdsFixed(cs))
                     continue;
                 escaping = cs.position === "fixed";
-                if (cs.overflowX === "visible" && cs.overflowY === "visible")
+                // A box clips by its overflow, or by paint containment whatever its overflow.
+                if (cs.overflowX === "visible" && cs.overflowY === "visible" && !/paint|strict|content/.test(cs.contain))
                     continue;
                 const b = box.getBoundingClientRect(), x = b.left + box.clientLeft, y = b.top + box.clientTop;
                 left = Math.max(left, x);
