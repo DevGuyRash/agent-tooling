@@ -1,13 +1,16 @@
 """Shared paths and helpers for the visual library's tests."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 
 TESTS = Path(__file__).resolve().parent
@@ -77,6 +80,51 @@ def run_node(*args: object, timeout: int = 60) -> subprocess.CompletedProcess:
     if not NODE:
         raise unittest.SkipTest("node is not on PATH")
     return subprocess.run([NODE, *map(str, args)], capture_output=True, text=True, timeout=timeout, cwd=TESTS)
+
+
+
+# A Chromium-family browser that ends within a few seconds of starting, as
+# most test runs do, leaves an empty <app-id>.<name>_url_fetcher_.* folder
+# (com.google.Chrome.chrome_chrome_url_fetcher_.*, com.microsoft.Edge.
+# msedge_url_fetcher_.*) in its temp directory: its TMPDIR, or /tmp when a
+# wrapper such as firejail strips that variable. It never removes the folder,
+# however it is stopped.
+FETCHER_LEFTOVER = re.compile(r"^(?:com|org)\.[\w-]+\.[\w-]+\.\w*url_fetcher_\.\w+$")
+
+
+def fetcher_leftovers() -> set[Path]:
+    """This user's empty fetcher folders in the temp directories a browser uses."""
+    found = set()
+    for root in {Path(tempfile.gettempdir()), Path("/tmp")}:
+        try:
+            entries = list(root.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if FETCHER_LEFTOVER.match(entry.name) and entry.is_dir() and entry.stat().st_uid == os.getuid() and not any(entry.iterdir()):
+                    found.add(entry)
+            except (OSError, AttributeError):
+                continue
+    return found
+
+
+@contextlib.contextmanager
+def no_fetcher_leftovers():
+    """Remove, when the block ends, the empty fetcher folders that appeared
+    while it ran. A folder is attributed by time, not by process: one that
+    another browser made during the block goes too, which is harmless because
+    those folders stay empty; rmdir keeps any folder that holds something."""
+    since, before = time.time() - 1, fetcher_leftovers()
+    try:
+        yield
+    finally:
+        for folder in fetcher_leftovers() - before:
+            try:
+                if folder.stat().st_mtime >= since:
+                    folder.rmdir()
+            except OSError:
+                continue
 
 
 _CASES: dict[str, list[dict]] = {}
