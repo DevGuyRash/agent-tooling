@@ -451,6 +451,31 @@ return out;
                     out = self.drive(page, width=width, script=script % (json.dumps(hash), "() => {" + TB.CRAMPED + "}"))
                     self.assertEqual(out["result"], [], "text crushed into a column under 200 px")
 
+    def test_report_cards_fill_their_rows_on_a_wide_screen(self) -> None:
+        # A group with one report showed it as a lone 38rem card beside an empty row while other groups filled theirs.
+        # Cards now share each row evenly, a lone card filling its row, and their text keeps a readable cap.
+        source = write_collection(self.dir)
+        page = self.dir / "collection.html"
+        built = run_python(REPORT, "--collection", source, "--output", page)
+        self.assertEqual(built.returncode, 0, built.stderr)
+        script = """
+const chOf = el => { const p = document.createElement("span"); p.textContent = "0000000000"; p.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap"; el.appendChild(p); const w = p.getBoundingClientRect().width / 10; p.remove(); return w; };
+return [...document.querySelectorAll(".av-rx-list")].filter(l => l.getBoundingClientRect().width).map(list => ({
+  list: Math.round(list.getBoundingClientRect().width),
+  cards: [...list.children].map(c => { const r = c.getBoundingClientRect(); return [Math.round(r.top), Math.round(r.width)]; }),
+  headlineCaps: [...list.querySelectorAll(".av-rx-headline")].map(h => { const m = parseFloat(getComputedStyle(h).maxWidth); return Number.isFinite(m) ? Math.round(m / chOf(h) * 10) / 10 : 9999; }),
+}));
+"""
+        groups = self.drive(page, width=1920, script=script)["result"]
+        lone = [g for g in groups if len(g["cards"]) == 1]
+        pair = [g for g in groups if len(g["cards"]) == 2]
+        self.assertTrue(lone and pair, groups)
+        self.assertGreaterEqual(lone[0]["cards"][0][1], lone[0]["list"] * 0.95, "a lone report card leaves its row empty")
+        (top_a, width_a), (top_b, width_b) = pair[0]["cards"]
+        self.assertEqual(top_a, top_b, "two report cards do not share a row on a wide screen")
+        self.assertLessEqual(abs(width_a - width_b), 2, "two report cards in a row get different widths")
+        self.assertLessEqual(max(cap for g in groups for cap in g["headlineCaps"]), 92.6, "a card's headline has no readable cap")
+
     def test_phone_width_never_scrolls_the_collection_sideways(self) -> None:
         page = self.build("--collection", write_collection(self.dir))
         script = """

@@ -402,7 +402,11 @@ class BrowserRenderTest(unittest.TestCase):
         # my own screen horizontally". Running text keeps a readable measure at ordinary widths (the story's 75ch, the
         # summary's 62ch) and widens on wide screens, inside a wider page; the story's scope box sets "This report covers"
         # and "It does not cover" side by side at one width, where the second used to sit alone in a narrow track.
-        page = self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", EXAMPLES / "fictional-narrative.json")
+        narrative = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
+        narrative.setdefault("readings", {})["setup"] = " ".join(["The setup section shows each arm's settings and the texts compared, so a reader can see what differs before any result."] * 5)
+        path = self.dir / "long-reading.json"
+        path.write_text(json.dumps(narrative), encoding="utf-8")
+        page = self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", path)
         script = """
 const chOf = el => { const p = document.createElement("span"); p.textContent = "0000000000"; p.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap"; el.appendChild(p); const w = p.getBoundingClientRect().width / 10; p.remove(); return w; };
 const cap = el => { const m = parseFloat(getComputedStyle(el).maxWidth); return Number.isFinite(m) ? Math.round(m / chOf(el) * 10) / 10 : 9999; };  // 9999: no limit at all
@@ -411,23 +415,36 @@ const reads = [...document.querySelectorAll(".av-read-shows, .av-read-how .av-re
 const story = document.querySelector(".av-story > .av-story-part:first-child .av-story-prose");
 const summary = document.querySelector(".av-summary");
 const scope = [...document.querySelectorAll(".av-story-scope > .av-story-part")].map(p => { const r = p.getBoundingClientRect(); return [Math.round(r.top), Math.round(r.width)]; });
-return { page: Math.round(document.querySelector(".av-sections").getBoundingClientRect().width), story: cap(story), storyShown: shown(story), summary: cap(summary), scope, readCaps: reads.map(cap), readShown: reads.map(shown) };
+// A block set in columns: how many there are and how wide each is, in its own characters.
+const flow = el => { const cs = getComputedStyle(el), w = el.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight); const gap = parseFloat(cs.columnGap) || 0;
+  const n = cs.columnWidth === "auto" ? 1 : Math.max(1, Math.floor((w + gap) / (parseFloat(cs.columnWidth) + gap))); return { n, column: Math.round((w - (n - 1) * gap) / n / chOf(el) * 10) / 10, share: Math.round(el.getBoundingClientRect().width / el.parentElement.getBoundingClientRect().width * 100) / 100 }; };
+const reading = document.querySelector("#setup .av-section-reading");
+// A block set in columns is readable when each column is; any other block, when its cap and drawn width are.
+const flows = el => getComputedStyle(el).columnWidth !== "auto";
+return { page: Math.round(document.querySelector(".av-sections").getBoundingClientRect().width), story: cap(story), storyShown: shown(story), storyFlow: flow(story), summary: cap(summary), scope,
+  readCaps: reads.map(el => flows(el) ? flow(el).column : cap(el)), readShown: reads.map(el => flows(el) ? flow(el).column : shown(el)), readingFlow: reading && flow(reading) };
 """
         ordinary = self.drive(page, width=1024, script=script)["result"]
         self.assertAlmostEqual(ordinary["story"], 75, delta=0.6, msg="the story's measure changed at an ordinary width")
         self.assertAlmostEqual(ordinary["summary"], 62, delta=0.6, msg="the summary's measure changed at an ordinary width")
+        self.assertEqual(1, ordinary["storyFlow"]["n"], "the story's background is split into columns at an ordinary width")
+        self.assertEqual(1, ordinary["readingFlow"]["n"], "a section's reading is split into columns at an ordinary width")
         wide = self.drive(page, width=1920, script=script)["result"]
         self.assertGreaterEqual(wide["page"], 1400, "the page stays narrow on a wide screen")
-        self.assertGreaterEqual(wide["story"], 88, "the story's text stays in a narrow column on a wide screen")
-        self.assertLessEqual(wide["story"], 92.6, "the story's lines grow past a readable length")
+        # Long running text uses the row on a wide screen by flowing into columns, each a readable width.
+        for name in ("storyFlow", "readingFlow"):
+            with self.subTest(block=name):
+                self.assertGreaterEqual(wide[name]["n"], 2, "long text stays in one narrow column on a wide screen")
+                self.assertLessEqual(wide[name]["column"], 95, "a column grows past a readable length")
+                self.assertGreaterEqual(wide[name]["share"], 0.85, "long text leaves most of its row empty on a wide screen")
         self.assertGreaterEqual(wide["summary"], 76, "the summary stays in a narrow column on a wide screen")
         self.assertLessEqual(wide["summary"], 92.6, "the summary's lines grow past a readable length")
         self.assertGreaterEqual(wide["storyShown"], 85, "the story's text is drawn narrow on a wide screen whatever its cap says")
         # Each view's own explanation ("This view", "How to read it", "Here") keeps the same readable limit as the rest of
         # the prose, however wide the view it explains.
         self.assertTrue(wide["readCaps"], "no view explanation found to measure")
-        self.assertLessEqual(max(wide["readCaps"]), 92.6, "a view's explanation has no readable limit on a wide screen")
-        self.assertLessEqual(max(wide["readShown"]), 92.6, "a view's explanation is drawn past a readable length")
+        self.assertLessEqual(max(wide["readCaps"]), 95, "a view's explanation has no readable limit on a wide screen")
+        self.assertLessEqual(max(wide["readShown"]), 95, "a view's explanation is drawn past a readable length")
         # The sizes respond to the screen: two nearby wide screens get different widths.
         nearer, farther = (self.drive(page, width=w, script=script)["result"] for w in (1650, 1750))
         self.assertLess(nearer["page"], farther["page"], "the page width does not respond to the screen between 1650 and 1750 px")

@@ -1047,8 +1047,8 @@ a.av-btn { text-decoration: none; color: inherit; }
 .av-rx-theme-head .av-dec-seg b { font-size: .8rem; }
 .av-rx-story { color: var(--av-ink-2); font-size: .92rem; }
 /* Cards fill each row and a short last row keeps cards near their row's width rather than stretching one across the page. */
-.av-rx-list { display: flex; flex-wrap: wrap; gap: 14px; margin: 0; padding: 0; list-style: none; }
-.av-rx-list > .av-rx-card { flex: 1 1 22rem; max-width: min(100%, 38rem); }
+/* Cards share each row evenly and line up across groups; a group's lone card fills its row. */
+.av-rx-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
 .av-rx-card { display: flex; }
 .av-rx-card[hidden] { display: none; }
 .av-rx-card > article { display: flex; flex-direction: column; gap: 10px; width: 100%; min-width: 0; padding: 16px 16px 14px; border-radius: 12px; background: var(--av-raised); border: 1px solid var(--av-line); border-top: 4px solid var(--v); box-shadow: var(--av-shadow); }
@@ -1056,7 +1056,7 @@ a.av-btn { text-decoration: none; color: inherit; }
 .av-rx-title { font: 600 1rem/1.35 var(--av-font-text); }
 .av-rx-title a { color: var(--av-ink); text-decoration: none; }
 .av-rx-title a:hover { text-decoration: underline; text-underline-offset: 3px; }
-.av-rx-headline { font-size: .86rem; line-height: 1.5; color: var(--av-ink-2); }
+.av-rx-headline { font-size: .86rem; line-height: 1.5; color: var(--av-ink-2); max-width: min(calc(var(--av-measure) + 4ch), 92ch); }
 .av-rx-note { font-size: .78rem; color: var(--av-ink-3); border-left: 2px solid var(--av-line-strong); padding-left: 8px; }
 .av-rx-chart { display: grid; gap: 4px; padding: 8px 4px 2px; border-radius: 8px; background: var(--av-surface); }
 .av-rx-chart .av-eyebrow { font-size: .6rem; padding-left: 4px; }
@@ -2216,6 +2216,16 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
 @media print {
   .av-read-how { display: block; }
 }
+
+/* Long running text (prose() marks it av-flow) fills a wide row by flowing into columns of a readable width, two or more
+   where its section has room; a narrower section keeps its single measure. A reading box or theme head holding such text
+   spans its row with it. The class is doubled to outrank each block's own measure. */
+.av-section, .av-masthead-inner { container: av-page / inline-size; }
+@container av-page (min-width: 72rem) {
+  .av-flow.av-flow, .av-section-reading:has(> .av-flow) { max-width: none; column-width: 58ch; column-gap: 2.5rem; }
+  .av-rx-theme-head:has(.av-flow) { max-width: none; }
+}
+
 
 /* styles/blocks/trial-views.css */
 /* The trial views' own refinements: the verdict without a decision and the
