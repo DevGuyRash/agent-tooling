@@ -4,9 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-import re
 import shutil
-import signal
 import subprocess
 import sys
 import tempfile
@@ -18,10 +16,6 @@ EXAMPLES = VISUALS / "examples"
 REPORT = VISUALS / "report.py"
 NODE = shutil.which("node")
 PYTHON_ENV = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1"}
-# The first Chromium-family browser on PATH; the browser tests need its
-# headless --dump-dom and DevTools protocol.
-BROWSER = next((path for path in map(shutil.which, ("google-chrome-stable", "google-chrome", "chromium", "chromium-browser", "microsoft-edge-stable", "microsoft-edge", "brave-browser")) if path), None)
-NO_BROWSER = "no Chromium-family browser (Chrome, Chromium, Edge or Brave) is on PATH"
 
 
 TRIAL_SECTIONS = ["setup", "arms", "cases", "grid", "failures", "checks", "pairwise", "cost", "invalid", "runs"]
@@ -83,76 +77,6 @@ def run_node(*args: object, timeout: int = 60) -> subprocess.CompletedProcess:
     if not NODE:
         raise unittest.SkipTest("node is not on PATH")
     return subprocess.run([NODE, *map(str, args)], capture_output=True, text=True, timeout=timeout, cwd=TESTS)
-
-
-# How a Chromium-family browser names what it puts in the system temp
-# directory: its application ID, then a random suffix (com.google.Chrome.*,
-# org.chromium.Chromium.*, com.microsoft.Edge.*, com.brave.Browser.*).
-BROWSER_TEMP = re.compile(r"^(?:com|org)\.[\w-]+\.[\w-]+\.")
-
-
-def _browser_temp_folders() -> set[Path]:
-    found = set()
-    for root in {Path(tempfile.gettempdir()), Path("/tmp")}:
-        try:
-            found.update(entry for entry in root.iterdir() if BROWSER_TEMP.match(entry.name) and entry.is_dir() and entry.stat().st_uid == os.getuid())
-        except (OSError, AttributeError):
-            continue
-    return found
-
-
-def _remove_left_behind(before: set[Path]) -> None:
-    """Remove the folders a browser left in the shared temp directory.
-
-    A browser whose wrapper strips TMPDIR (firejail does) writes there, and
-    Chrome leaves an empty folder behind after some runs even when it closes
-    cleanly. Only a folder that appeared during this launch, belongs to this
-    user, holds nothing but the singleton entries, and has no listening socket
-    is removed, so a browser that is still running keeps its own.
-    """
-    sockets = Path("/proc/net/unix").read_text() if Path("/proc/net/unix").exists() else ""
-    for folder in _browser_temp_folders() - before:
-        try:
-            if str(folder) in sockets or any(not entry.name.startswith("Singleton") for entry in folder.iterdir()):
-                continue
-            shutil.rmtree(folder)
-        except OSError:
-            continue
-
-
-def run_browser(command: list, *, timeout: int, scratch: Path) -> subprocess.CompletedProcess:
-    """Run a browser, or browser-drive.cjs, so that it leaves nothing behind.
-
-    It runs in its own process group with its temp directory inside the test's
-    scratch directory, so a browser that honours TMPDIR leaves nothing outside
-    it; what one whose wrapper strips TMPDIR leaves is removed afterwards. On
-    timeout the group is asked to stop (SIGTERM, which the driver answers by
-    closing its browser), killed only if it has not, and TimeoutExpired is
-    raised.
-    """
-    tmp = scratch / "browser-tmp"
-    tmp.mkdir(exist_ok=True)
-    env = {**os.environ, "TMPDIR": str(tmp), "TMP": str(tmp), "TEMP": str(tmp)}
-    before = _browser_temp_folders()
-    try:
-        with subprocess.Popen(list(map(str, command)), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, start_new_session=True) as process:
-            try:
-                stdout, stderr = process.communicate(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                for sig, grace in ((signal.SIGTERM, 20), (getattr(signal, "SIGKILL", signal.SIGTERM), 5)):
-                    try:
-                        os.killpg(process.pid, sig) if hasattr(os, "killpg") else process.kill()
-                    except ProcessLookupError:
-                        pass
-                    try:
-                        process.communicate(timeout=grace)
-                        break
-                    except subprocess.TimeoutExpired:
-                        continue
-                raise
-    finally:
-        _remove_left_behind(before)
-    return subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
 
 
 _CASES: dict[str, list[dict]] = {}
