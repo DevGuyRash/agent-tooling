@@ -12432,7 +12432,8 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             if (!strip)
                 return;
             const r = a.getBoundingClientRect(), t = strip.getBoundingClientRect();
-            if (r.left < t.left)
+            // An entry wider than the strip shows its beginning (its number and the start of its title).
+            if (r.left < t.left || r.width > t.width - 24)
                 strip.scrollLeft -= t.left - r.left + 12;
             else if (r.right > t.right)
                 strip.scrollLeft += r.right - t.right + 12;
@@ -12717,7 +12718,8 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             top = Math.max(top, 0);
             right = Math.min(right, doc.documentElement.clientWidth || win.innerWidth);
             bottom = Math.min(bottom, doc.documentElement.clientHeight || win.innerHeight);
-            for (let box = mark.parentElement; box && box !== doc.body && left < right && top < bottom; box = box.parentElement) {
+            // A box clips what it holds only up to an element fixed to the window, which escapes every box above it.
+            for (let box = win.getComputedStyle(mark).position === "fixed" ? null : mark.parentElement; box && box !== doc.body && left < right && top < bottom; box = win.getComputedStyle(box).position === "fixed" ? null : box.parentElement) {
                 const cs = win.getComputedStyle(box);
                 if (cs.overflowX === "visible" && cs.overflowY === "visible")
                     continue;

@@ -10,7 +10,7 @@ from visual_harness import VISUALS
 STYLESHEET = VISUALS / "styles" / "agentic-visuals.css"
 COMPONENTS = VISUALS / "styles" / "components.css"
 # Tokens that do not change with the theme; only :root defines them.
-THEME_INDEPENDENT = {"font-display", "font-text", "font-mono", "radius", "radius-sm", "measure", "page", "gutter"}
+THEME_INDEPENDENT = {"font-display", "font-text", "font-mono", "radius", "radius-sm", "measure", "page", "gutter", "bar-h"}
 # (theme, foreground, background): minimum contrast ratio.
 REQUIRED_CONTRAST = {
     **{(theme, "ink", ground): 7.0 for theme in ("light", "dark") for ground in ("bg", "surface", "raised")},

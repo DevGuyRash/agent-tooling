@@ -519,6 +519,8 @@ const out = {};
 const reason = [...document.querySelectorAll(".av-ledger .av-why > span[data-av-tip]")].find(s => s.getAttribute("data-av-tip").length > 4000);
 point(reason, "pointerdown", "touch"); out.reason = box();
 const big = document.createElement("span"); big.textContent = "x"; big.setAttribute("data-av-tip", JSON.stringify({ title: "A long value", rows: [["Value", "word ".repeat(2000)], ["More", "word ".repeat(2000)], ["Still more", "word ".repeat(2000)]], note: "note ".repeat(2000) }));
+// Kept in view just under the top bar, so only the room for its card, never its own scrolling away, can close it.
+big.style.cssText = "position:fixed;top:" + (document.querySelector(".av-topbar").getBoundingClientRect().bottom + 2) + "px;left:120px;width:10px;height:6px;font-size:0;overflow:hidden;z-index:50";
 document.querySelector(".av-block").appendChild(big); point(big, "pointerover"); out.huge = box();
 // The window shrinks with the card open, and nothing else happens: the card is fitted again to the room left.
 const resized = new Promise(done => addEventListener("resize", done, { once: true }));
@@ -529,8 +531,6 @@ await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done
 // With too little room for even a card's frame and a line, it closes; with room again, pointing at the mark reopens it.
 const frames = () => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
 const resize = size => { const r = new Promise(done => addEventListener("resize", done, { once: true })); avDriveResize(size); return r; };
-// The mark is kept in view just under the top bar, so only the lack of room can close its card.
-big.style.cssText = "position:fixed;top:" + (document.querySelector(".av-topbar").getBoundingClientRect().bottom + 2) + "px;left:120px;width:10px;height:6px;font-size:0;overflow:hidden;z-index:50";
 await resize("1440x" + Math.round(bar() + 12 + 30)); await frames(); out.tiny = box(); out.tinyMarkSeen = big.getBoundingClientRect().bottom <= innerHeight;
 await resize("1440x420"); await frames();
 big.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })); out.again = box();
@@ -567,9 +567,15 @@ const look = async () => {
   return { lines, cut: name.scrollWidth > name.clientWidth + 1, bar: bar.getBoundingClientRect().bottom, head: section.getBoundingClientRect().top };
 };
 const wide = await look();
+// The section index's current entry stays in view as the page is scrolled to its last section, on a phone too.
+const current = async () => { const last = [...document.querySelectorAll(".av-section[id]")].pop(); last.scrollIntoView({ block: "start", behavior: "instant" });
+  await new Promise(done => setTimeout(done, 300)); const a = document.querySelector(".av-toc a[aria-current]"), strip = document.querySelector(".av-toc").getBoundingClientRect(), r = a.getBoundingClientRect();
+  return { id: a.getAttribute("href"), last: "#" + last.id, inside: r.left >= strip.left - 1 && (r.right <= strip.right + 1 || r.width > strip.width) }; };
+const indexWide = await current();
 const resized = new Promise(done => addEventListener("resize", done, { once: true }));
 avDriveResize("320x900"); await resized; await frames();
-return { wide, narrow: await look() };
+const narrow = await look();
+return { wide, narrow, indexWide, indexNarrow: await current() };
 """
         out = self.drive(page, width=1440, script=script)["result"]
         for width in ("wide", "narrow"):
@@ -581,6 +587,10 @@ return { wide, narrow: await look() };
                 self.assertGreaterEqual(look["head"], look["bar"] - 1, "a scroll to a section leaves its start under the top bar")
                 self.assertLessEqual(look["head"], look["bar"] + 20, "a scroll to a section stops well below the bar, as for another bar's height")
         self.assertGreater(out["narrow"]["bar"], out["wide"]["bar"] + 12, "the bar did not grow when the window narrowed: this checks nothing")
+        for width in ("indexWide", "indexNarrow"):
+            with self.subTest(index=width):
+                self.assertEqual(out[width]["id"], out[width]["last"], "the section index does not mark the last section")
+                self.assertTrue(out[width]["inside"], "the section index's current entry is out of its view")
 
     def test_a_per_case_panel_reads_against_an_axis_that_spans_its_tracks(self) -> None:
         comparisons = EXAMPLES / "comparisons"

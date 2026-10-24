@@ -230,7 +230,8 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     const strip = a.closest<HTMLElement>(".av-toc");
     if (!strip) return;
     const r = a.getBoundingClientRect(), t = strip.getBoundingClientRect();
-    if (r.left < t.left) strip.scrollLeft -= t.left - r.left + 12;
+    // An entry wider than the strip shows its beginning (its number and the start of its title).
+    if (r.left < t.left || r.width > t.width - 24) strip.scrollLeft -= t.left - r.left + 12;
     else if (r.right > t.right) strip.scrollLeft += r.right - t.right + 12;
   };
   // A scroll to a section stops just under the top bar, however tall the bar has grown (a long name wraps in it). The page
@@ -421,7 +422,8 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     let { left, top, right, bottom } = r;
     left = Math.max(left, 0); top = Math.max(top, 0);
     right = Math.min(right, doc.documentElement.clientWidth || win.innerWidth); bottom = Math.min(bottom, doc.documentElement.clientHeight || win.innerHeight);
-    for (let box = mark.parentElement; box && box !== doc.body && left < right && top < bottom; box = box.parentElement) {
+    // A box clips what it holds only up to an element fixed to the window, which escapes every box above it.
+    for (let box = win.getComputedStyle(mark).position === "fixed" ? null : mark.parentElement; box && box !== doc.body && left < right && top < bottom; box = win.getComputedStyle(box).position === "fixed" ? null : box.parentElement) {
       const cs = win.getComputedStyle(box);
       if (cs.overflowX === "visible" && cs.overflowY === "visible") continue;
       const b = box.getBoundingClientRect(), x = b.left + box.clientLeft, y = b.top + box.clientTop;
