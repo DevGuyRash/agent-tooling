@@ -677,10 +677,10 @@ export function ledger(input: LedgerInput, ctx: RenderContext): string {
     // A reason cut to two lines here has its whole text in its card.
     if (c.invalid) { const w = invalidReason(c.invalid); return `<span${tipAttr({ over: "Invalid run", title: c.invalid, note: w.text.replace(/`/g, "") })}><code class="av-why-code">${esc(c.invalid)}</code> ${inline(w.text)}</span>`; }
     // Judge reasons mark names as `code`, as the drawer shows them.
-    if (outcomeOf(r) === "pass") { const why = String(r.judge?.reason || ""); return `<span${why ? tipAttr({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Judge's reason", note: why.replace(/`/g, "") }) : ""}>${inline(clip(why, 240))}</span>`; }
+    if (outcomeOf(r) === "pass") { const why = String(r.judge?.reason || ""); return `<span${why ? tipAttr({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Judge's reason", note: why.replace(/`/g, ""), rows: why.length > 600 ? [["Whole text", "select the run"]] : [] }) : ""}>${inline(clip(why, 240))}</span>`; }
     const chips = c.checks.slice(0, 3).map(n => `<span class="av-why-chip">✕ ${esc(n)}</span>`).join("") + (c.checks.length > 3 ? `<span class="av-why-chip av-why-chip--more">+${c.checks.length - 3}</span>` : "");
     const text = c.judge !== null ? `${c.judge ? `judge: ${c.judge}` : "judge said fail"}` : c.checks.length ? "" : c.text || "no recorded cause";
-    return `<span${tipAttr({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Why it failed", rows: [["Failed checks", c.checks.join(", ")]], note: text.replace(/`/g, "") || undefined })}>${chips}${text ? `${chips ? " " : ""}${inline(clip(text, 240))}` : ""}</span>`;
+    return `<span${tipAttr({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Why it failed", rows: [["Failed checks", c.checks.join(", ")], ["Whole text", text.length > 600 ? "select the run" : ""]], note: text.replace(/`/g, "") || undefined })}>${chips}${text ? `${chips ? " " : ""}${inline(clip(text, 240))}` : ""}</span>`;
   };
   const rows = data.runs.map((r, i) => {
     const o = outcomeOf(r), tk = tokens ? num(tokens.get(r)) : null, sec = num(r.seconds);

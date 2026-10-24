@@ -331,27 +331,18 @@ export function costGain(input: Subset, ctx: RenderContext): string {
   // Both axes run symmetric about zero to the round tick past the largest value (and its interval), so no change sits
   // past a labelled bound and either side of zero reads at the same scale.
   const half = (largest: number, cap: number) => { const t = axisTicks(0, Math.min(cap, largest * 1.04), 2); return [...t.slice(1).reverse().map(v => -v), ...t]; };
-  const xs = half(Math.max(.1, ...points.map(p => Math.abs(p.g.costChange!))), 10);
+  const xs = half(Math.max(.1, ...points.map(p => Math.abs(p.g.costChange!))), Infinity);
   const ys = half(Math.max(.1, ...points.flatMap(p => [Math.abs(p.g.delta!), ...(p.g.interval ? p.g.interval.map(Math.abs) : [])])), 1);
   const mx = xs[xs.length - 1], my = ys[ys.length - 1];
   const x = (v: number) => (Math.max(-mx, Math.min(mx, v)) + mx) / (2 * mx), y = (v: number) => (my - Math.max(-my, Math.min(my, v))) / (2 * my);
   const tick = (v: number) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(Math.round(v * 100))}%`;
   const pts = (v: number) => { const p = Math.round(v * 100); return signed(p, `${Math.abs(p)}`); };
-  // Changes that land on (nearly) the same spot fan out side by side, so each keeps a mark to hover and a number to read.
-  const spots = points.map(p => ({ x: x(p.g.costChange!), y: y(p.g.delta!), dx: 0 }));
-  const done = new Set<number>();
-  spots.forEach((a, i) => {
-    if (done.has(i)) return;
-    const near = spots.map((_, j) => j).filter(j => !done.has(j) && Math.abs(spots[j].x - a.x) < .03 && Math.abs(spots[j].y - a.y) < .045);
-    // Side by side about the cluster's middle, in the order they sit, 24px apart (a mark is 22px wide).
-    const mid = near.reduce((t, j) => t + spots[j].x, 0) / near.length;
-    near.sort((j, k) => spots[j].x - spots[k].x).forEach((j, k) => { done.add(j); spots[j].x = near.length > 1 ? mid : spots[j].x; spots[j].dx = (k - (near.length - 1) / 2) * 24; });
-  });
+  // Changes that land on one spot are fanned out where the plot is drawn, at its size (enhance.ts).
   const marks = points.map((p, i) => {
-    const { x: px, y: py, dx } = spots[i], m = p.s.measure;
-    const ci = p.g.interval ? `<span class="av-whisker av-whisker--v av-cg-ci" style="--x:${pos(px)};--dx:${dx}px;--a:${pos(y(p.g.interval[1]))};--b:${pos(y(p.g.interval[0]))};--v:${p.s.arms.color(p.g.arm)}"></span>` : "";
+    const px = x(p.g.costChange!), py = y(p.g.delta!), m = p.s.measure;
+    const ci = p.g.interval ? `<span class="av-whisker av-whisker--v av-cg-ci" style="--x:${pos(px)};--a:${pos(y(p.g.interval[1]))};--b:${pos(y(p.g.interval[0]))};--v:${p.s.arms.color(p.g.arm)}"></span>` : "";
     const card = tipAttr({ over: `${p.s.short}${p.g.lane ? ` · ${p.g.lane}` : ""}`, title: p.s.arms.label(p.g.arm), mark: p.s.arms.mark(p.g.arm), rows: [["Against", p.s.arms.label(p.g.base)], ["Pass rate change", changeText(m, p.g.delta)], ["Its 95% interval", gainIntervalText(m, p.g)], ["Cost per run change", tick(p.g.costChange!)], ["Report's decision", p.s.stamp]], note: "Open the report to read it in full." });
-    return `${ci}<a class="av-cg-pt" href="${open(p.s.id)}" style="--x:${pos(px)};--y:${pos(py)};--dx:${dx}px;--v:${p.s.arms.color(p.g.arm)}"${card}><span class="av-cg-dot">${i + 1}</span><span class="av-sr"> ${esc(p.s.arms.label(p.g.arm))} in ${esc(p.s.short)}</span></a>`;
+    return `${ci}<a class="av-cg-pt" href="${open(p.s.id)}" style="--x:${pos(px)};--y:${pos(py)};--v:${p.s.arms.color(p.g.arm)}"${card}><span class="av-cg-dot">${i + 1}</span><span class="av-sr"> ${esc(p.s.arms.label(p.g.arm))} in ${esc(p.s.short)}</span></a>`;
   }).join("");
   const quads = [["More passed, cost less", "tl"], ["More passed, cost more", "tr"], ["Fewer passed, cost less", "bl"], ["Fewer passed, cost more", "br"]].map(([t, c]) => `<span class="av-cg-quad av-cg-quad--${c}" aria-hidden="true">${t}</span>`).join("");
   const grid = xs.map(v => `<span class="av-cg-vline${v === 0 ? " av-cg-zero" : ""}" style="--x:${pos(x(v))}"></span>`).join("") + ys.map(v => `<span class="av-cg-hline${v === 0 ? " av-cg-zero" : ""}" style="--y:${pos(y(v))}"></span>`).join("");

@@ -49,6 +49,12 @@
 .av-cmp-track--empty { background: repeating-linear-gradient(135deg, var(--av-sunken) 0 4px, transparent 4px 9px); border-radius: 4px; }
 .av-cmp-none { position: absolute; inset: 0; display: grid; place-items: center; font-size: .72rem; font-style: italic; color: var(--av-ink-3); white-space: nowrap; overflow: hidden; }
 .av-cmp-dot { position: absolute; left: var(--x); top: var(--y); width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; border-radius: 50%; background: color-mix(in srgb, var(--c) 50%, transparent); }
+/* An observation is small to draw but not to point at: its hover area reaches a few pixels past it. */
+.av-cmp-dot::after { content: ""; position: absolute; inset: -4px; }
+.av-cmp-dot:hover { background: var(--c); }
+.av-cmp-mini--axis { padding: 0; }
+.av-cmp-mini--axis .av-ticks { height: 1.2rem; }
+.av-cmp-mini--axis .av-tick { font-size: .6rem; padding-top: 5px; }
 .av-cmp-med { position: absolute; left: var(--x); top: 3px; bottom: 3px; width: 3px; margin-left: -1.5px; border-radius: 2px; background: var(--av-ink-2); }
 .av-cmp-med--mean { background: var(--av-ink-3); }
 .av-cmp-bub { position: absolute; left: var(--x); top: 50%; width: calc(7px + 20px * var(--s)); height: calc(7px + 20px * var(--s)); transform: translate(-50%, -50%); border-radius: 50%; background: color-mix(in srgb, var(--c) 22%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 55%, transparent); }

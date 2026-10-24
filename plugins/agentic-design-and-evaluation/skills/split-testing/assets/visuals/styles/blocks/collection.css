@@ -214,15 +214,17 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-cg-vline { position: absolute; top: 0; bottom: 0; left: var(--x); width: 1px; background: var(--av-line); }
 .av-cg-hline { position: absolute; left: 0; right: 0; top: var(--y); height: 1px; background: var(--av-line); }
 .av-cg-vline.av-cg-zero, .av-cg-hline.av-cg-zero { background: var(--av-ink-3); }
-.av-cg-quad { position: absolute; font: 600 .72rem/1.2 var(--av-font-text); color: var(--av-ink-3); opacity: .75; pointer-events: none; }
+.av-cg-quad { position: absolute; max-width: calc(50% - 16px); font: 600 .72rem/1.2 var(--av-font-text); color: var(--av-ink-3); opacity: .75; pointer-events: none; }
 .av-cg-quad--tl { left: 10px; top: 8px; } .av-cg-quad--tr { right: 10px; top: 8px; text-align: right; }
 .av-cg-quad--bl { left: 10px; bottom: 8px; } .av-cg-quad--br { right: 10px; bottom: 8px; text-align: right; }
-.av-cg-pt { position: absolute; left: calc(var(--x) + var(--dx, 0px)); top: var(--y); z-index: 1; width: 0; height: 0; text-decoration: none; }
-.av-cg-ci { --c: var(--v); left: calc(var(--x) + var(--dx, 0px)); opacity: .55; transition: opacity .12s; }
+.av-cg-pt { position: absolute; left: var(--x); top: var(--y); z-index: 1; width: 0; height: 0; text-decoration: none; }
+/* A point moved off a neighbour keeps a thin line back to where its values put it. */
+.av-cg-pt::before { content: ""; position: absolute; left: 0; top: 0; width: var(--len, 0px); height: 1px; background: var(--v); opacity: .7; transform-origin: 0 50%; transform: rotate(var(--ang, 0rad)); }
+.av-cg-ci { --c: var(--v); left: var(--x); opacity: .55; transition: opacity .12s; }
 .av-cg-ci:has(+ .av-cg-pt:hover) { opacity: 1; }
-.av-cg-dot { position: absolute; left: 0; top: 0; display: grid; place-items: center; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; background: var(--v); color: var(--av-raised); font: 700 .66rem/1 var(--av-font-text); box-shadow: 0 0 0 2px var(--av-surface); transition: transform .12s, box-shadow .12s; }
+.av-cg-dot { position: absolute; left: 0; top: 0; display: grid; place-items: center; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; background: var(--v); color: var(--av-raised); font: 700 .66rem/1 var(--av-font-text); box-shadow: 0 0 0 2px var(--av-surface); transform: translate(var(--dx, 0px), var(--dy, 0px)); transition: transform .12s, box-shadow .12s; }
 .av-cg-pt:hover, .av-cg-pt:focus-visible { z-index: 3; }
-.av-cg-pt:hover .av-cg-dot, .av-cg-pt:focus-visible .av-cg-dot { transform: scale(1.25); box-shadow: 0 0 0 2px var(--av-surface), 0 0 0 5px color-mix(in srgb, var(--v) 35%, transparent); }
+.av-cg-pt:hover .av-cg-dot, .av-cg-pt:focus-visible .av-cg-dot { transform: translate(var(--dx, 0px), var(--dy, 0px)) scale(1.25); box-shadow: 0 0 0 2px var(--av-surface), 0 0 0 5px color-mix(in srgb, var(--v) 35%, transparent); }
 .av-cg > .av-ticks { grid-column: 2; border-top: 0; }
 .av-cg-read { font-size: .8rem; margin: 8px 0 12px; }
 .av-cg-key { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }

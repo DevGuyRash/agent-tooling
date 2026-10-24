@@ -233,7 +233,9 @@
   /* Name and figures on one line (the figures wrap below a long name), then the
      track beside a fixed column of marks, so every arm's track has one scale. */
   .av-cs-arm, .av-cs-arm--none { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
-  .av-cs-arm--axis { display: none; }
+  .av-cs-arm.av-cs-arm--axis { flex-wrap: nowrap; }
+  .av-cs-arm--axis .av-axis-title { display: none; }
+  .av-cs-arm--axis .av-ticks { flex: 1 1 auto; margin-right: calc(9rem + 12px); }
   .av-cs-arm-tag { order: 1; flex: 1 1 auto; min-width: 0; }
   .av-cs-arm .av-cs-num { order: 2; flex: 0 1 auto; margin-left: auto; justify-content: flex-end; gap: 0 7px; }
   .av-cs-arm .av-cs-num .av-ci-text { font-size: .68rem; }

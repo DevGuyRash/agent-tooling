@@ -384,10 +384,11 @@ function track(m: Metric, s: MetricSummary | undefined, h: Head, sc: Scale | nul
   let marks = "";
   if (m.kind === "numeric" && o.dots !== false && s) {
     const vals = thin(Array.isArray(s.values) ? s.values : []);
-    marks += vals.map((x, i) => `<span class="av-cmp-dot" style="--x:${sc.at(x)};--y:${(18 + ((i * 0.6180339887) % 1) * 64).toFixed(1)}%"></span>`).join("");
+    const unit = typeof m.unit === "string" && m.unit ? ` ${m.unit}` : "", over = o.who ? `${o.who} · ${metricName(m)}` : metricName(m);
+    marks += vals.map((x, i) => `<span class="av-cmp-dot" style="--x:${sc.at(x)};--y:${(18 + ((i * 0.6180339887) % 1) * 64).toFixed(1)}%"${tipAttr({ over, title: "One observation", mark: o.mark, rows: [["Value", `${fmtNum(x)}${unit}`]] })}></span>`).join("");
     const med = num(s.median);
-    if (med !== null && o.center !== "median") marks += `<span class="av-cmp-med" style="--x:${sc.at(med)}"></span>`;
-    else if (o.center === "median" && num(s.mean) !== null) marks += `<span class="av-cmp-med av-cmp-med--mean" style="--x:${sc.at(num(s.mean)!)}"></span>`;
+    if (med !== null && o.center !== "median") marks += `<span class="av-cmp-med" style="--x:${sc.at(med)}"${tipAttr({ over, title: "Median", mark: o.mark, rows: [["Value", `${fmtNum(med)}${unit}`]] })}></span>`;
+    else if (o.center === "median" && num(s.mean) !== null) marks += `<span class="av-cmp-med av-cmp-med--mean" style="--x:${sc.at(num(s.mean)!)}"${tipAttr({ over, title: "Mean", mark: o.mark, rows: [["Value", `${fmtNum(num(s.mean))}${unit}`]] })}></span>`;
   }
   if (m.kind === "rank" && s && o.places) {
     const c = rankCounts(s, o.places), total = c.reduce((a, b) => a + b, 0);
@@ -578,7 +579,9 @@ export function metric(input: MetricInput, ctx: RenderContext): string {
       const h = p.hs.get(id)!, s = p.ss.get(id), who = ctx.arms.label(id);
       return `<div class="av-cmp-mini" data-arm="${esc(id)}">${ctx.arms.glyph(id)}<span class="av-cmp-mini-name" title="${esc(who)}">${esc(who)}</span>${track(m, s, h, sc, { color: ctx.arms.color(id), refs: refs.filter(r => r.kind !== "base"), aria: `${name}, ${trackAria(m, who, h, center)}`, mini: true, places, center, dots: false, who, over: `${name} · ${metricName(m)}`, mark: ctx.arms.mark(id) })}<span class="av-cmp-mini-v${h.ok ? "" : " av-cmp-v--none"}">${esc(h.text)}${h.invalid ? `<span class="av-cmp-mini-inv" title="${esc(`${h.invalid} invalid, left out`)}">${outcomeMark("invalid")}</span>` : ""}</span></div>`;
     }).join("");
-    return `<figure class="av-cmp-panel" role="listitem"><figcaption>${path.length ? `<span class="av-cmp-panel-group">${esc(path.join(" › "))}</span>` : ""}<span class="av-cmp-panel-name">${esc(name)}</span></figcaption>${lines}</figure>`;
+    const ticks = m.kind === "ordinal" ? ticksHtml([{ x: 0, label: "lower" }, { x: .5, label: "" }, { x: 1, label: "higher" }]) : sc ? ticksHtml(sc.ticks.map(t => ({ x: (t - sc.min) / (sc.max - sc.min || 1), label: sc.label(t) }))) : "";
+    const axisRow = ticks ? `<div class="av-cmp-mini av-cmp-mini--axis" aria-hidden="true"><span></span><span></span>${ticks}<span></span></div>` : "";
+    return `<figure class="av-cmp-panel" role="listitem"><figcaption>${path.length ? `<span class="av-cmp-panel-group">${esc(path.join(" › "))}</span>` : ""}<span class="av-cmp-panel-name">${esc(name)}</span></figcaption>${lines}${axisRow}</figure>`;
   }).join("")}</div>` : byCase ? empty("No observation names a case, so there is nothing to show by case.") : "";
 
   const levels = m.kind === "ordinal" ? levelsOf(m, [...sums.values()][0]) : undefined;

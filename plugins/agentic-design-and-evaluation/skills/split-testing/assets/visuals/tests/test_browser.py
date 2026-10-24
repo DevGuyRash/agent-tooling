@@ -124,9 +124,9 @@ for (const e of document.querySelectorAll(".av-arm-label, .av-contrast-side-labe
   const t = e.firstChild; if (!t || t.nodeType !== 3 || !shown(e)) continue;
   for (const m of t.textContent.matchAll(/[A-Za-z][A-Za-z'’]{3,}/g)) { const r = document.createRange(); r.setStart(t, m.index); r.setEnd(t, m.index + m[0].length); if (new Set([...r.getClientRects()].filter(q => q.width > 0).map(q => Math.round(q.top))).size > 1) { out.broken.push(name(e) + " at " + m[0]); break; } }
 }
-for (const sel of [".av-cx-lanes", ".av-contrast-grid", ".av-ladder-grid", ".av-cs-ix", ".av-cs-arms", ".av-strip-panel", ".av-duel", ".av-bars", ".av-cmp-grid", ".av-cmp-dgrid", ".av-rc-slope", ".av-cg", ".av-jv-track-wrap"])
-  for (const c of document.querySelectorAll(sel)) if (shown(c) && c.querySelectorAll(".av-ticks .av-tick").length < 2 && !c.querySelector(".av-cg-yticks span")) out.noAxis.push(sel);
-for (const m of document.querySelectorAll(".av-pt, .av-cx-pt, .av-dot, .av-run, .av-cg-dot, .av-duel-seg, .av-bar-seg, .av-cmp-lk-seg, .av-svg-hit, .av-cs-dot, .av-cmp-bub, .av-rc-mark, .av-share, .av-contrast-pt"))
+for (const sel of [".av-cx-lanes", ".av-contrast-grid", ".av-ladder-grid", ".av-cs-ix", ".av-cs-arms", ".av-strip-panel", ".av-duel", ".av-bars", ".av-cmp-grid", ".av-cmp-dgrid", ".av-cmp-panel", ".av-rc-slope", ".av-cg", ".av-jv-track-wrap"])
+  for (const c of document.querySelectorAll(sel)) if (shown(c) && [...c.querySelectorAll(".av-ticks .av-tick")].filter(shown).length < 2 && !c.querySelector(".av-cg-yticks span")) out.noAxis.push(sel);
+for (const m of document.querySelectorAll(".av-pt, .av-cx-pt, .av-dot, .av-run, .av-cg-dot, .av-duel-seg, .av-bar-seg, .av-cmp-lk-seg, .av-svg-hit, .av-cs-dot, .av-cmp-bub, .av-cmp-dot, .av-cmp-med, .av-rc-mark, .av-share, .av-contrast-pt"))
   if (shown(m) && !m.closest("[data-av-tip]")) out.noCard.push(String(m.className).split(" ")[0] + " in " + String(m.parentElement.className).split(" ")[0]);
 for (const k of ["cut", "broken", "noAxis", "noCard"]) out[k] = [...new Set(out[k])].slice(0, 8);
 return out;
@@ -415,7 +415,13 @@ class BrowserRenderTest(unittest.TestCase):
     def test_a_mark_shows_what_was_tested_and_its_numbers_on_hover_and_on_touch(self) -> None:
         # The owner: hovering should "include the title of whatever was tested ... and then rich data in a poppout".
         narrative = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
-        page = self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", EXAMPLES / "fictional-narrative.json")
+        # One run's judge gives a reason far longer than a screen, as a real judge sometimes does.
+        trial = json.loads((EXAMPLES / "fictional-trial.json").read_text(encoding="utf-8"))
+        long_run = next(r for r in trial["runs"] if r.get("passed") is True and isinstance(r.get("judge"), dict))
+        long_run["judge"]["reason"] = " ".join(["The reply names the harbour, the light and the mood, and invents nothing the photograph does not show."] * 60)
+        path = self.dir / "long-reason.json"
+        path.write_text(json.dumps(trial), encoding="utf-8")
+        page = self.build("--trial", path, "--narrative", EXAMPLES / "fictional-narrative.json")
         script = CARD + """
 const out = {};
 const diff = document.querySelector(".av-contrast-row--case .av-contrast-track[data-av-tip]");
@@ -428,6 +434,13 @@ point(document.body, "pointerout");
 point(rate, "pointerdown", "touch"); out.touch = tip();
 point(document.body, "pointerdown", "touch"); out.touchAway = tip().shown;
 point(rate, "pointerdown", "touch"); document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); out.escape = tip().shown;
+// The long reason's card stays on the screen, and scrolling the ledger it sits in puts a touch card away.
+const reason = [...document.querySelectorAll(".av-ledger .av-why > span[data-av-tip]")].find(s => s.getAttribute("data-av-tip").length > 4000);
+point(reason, "pointerdown", "touch");
+const r = document.querySelector(".av-tip").getBoundingClientRect();
+out.long = { shown: tip().shown, top: r.top, bottom: r.bottom, height: innerHeight };
+reason.closest(".av-scroll-x").dispatchEvent(new Event("scroll"));
+out.afterInnerScroll = tip().shown;
 return out;
 """
         out = self.drive(page, width=1440, script=script)["result"]
@@ -443,6 +456,27 @@ return out;
         self.assertTrue(out["touch"]["shown"] and out["touch"]["rows"], "a touch shows no card")
         self.assertFalse(out["touchAway"], "a touch elsewhere leaves the card up")
         self.assertFalse(out["escape"], "Escape leaves the card up")
+        self.assertTrue(out["long"]["shown"])
+        self.assertGreaterEqual(out["long"]["top"], 0, "a long card starts above the screen")
+        self.assertLessEqual(out["long"]["bottom"], out["long"]["height"], "a long card runs off the bottom of the screen")
+        self.assertFalse(out["afterInnerScroll"], "scrolling the list under a touch card leaves it stranded")
+
+    def test_an_observation_shows_its_own_value_and_a_trend_is_not_called_a_pass_rate(self) -> None:
+        page = self.build("--csv", EXAMPLES / "comparisons/commute.csv", "--narrative", EXAMPLES / "comparisons/commute-narrative.json")
+        script = CARD + """
+const dot = document.querySelector(".av-cmp-track .av-cmp-dot[data-av-tip]");
+point(dot, "pointerover");
+const card = tip(), value = document.querySelector(".av-tip-rows dd")?.textContent || "";
+const track = dot.closest(".av-cmp-track"), at = parseFloat(dot.style.getPropertyValue("--x"));
+return { card, value, at };
+"""
+        out = self.drive(page, width=1440, script=script)["result"]
+        self.assertEqual(out["card"]["title"], "One observation", "hovering an observation shows the summary's card instead of its own")
+        self.assertRegex(out["value"], r"\d", "an observation's card gives no value")
+        general = self.build("--spec", EXAMPLES / "showcase-spec.json")
+        titles = self.drive(general, width=1440, script='return [...document.querySelectorAll(".av-svg-axis-title")].map(t => t.textContent);')["result"]
+        self.assertTrue(titles, "the trend draws no axis title")
+        self.assertNotIn("pass rate", titles, "a generic trend of rates is titled as a pass rate")
 
     def test_a_difference_of_shares_is_drawn_within_a_hundred_points(self) -> None:
         page = self.build("--data", EXAMPLES / "comparisons/sandwich.json", "--narrative", EXAMPLES / "comparisons/sandwich-narrative.json")

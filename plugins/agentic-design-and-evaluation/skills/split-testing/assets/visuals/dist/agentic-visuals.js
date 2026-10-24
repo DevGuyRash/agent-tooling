@@ -3415,11 +3415,11 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
             // Judge reasons mark names as `code`, as the drawer shows them.
             if ((0, trial_model_4.outcomeOf)(r) === "pass") {
                 const why = String(r.judge?.reason || "");
-                return `<span${why ? (0, core_8.tipAttr)({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Judge's reason", note: why.replace(/`/g, "") }) : ""}>${(0, core_8.inline)(clip(why, 240))}</span>`;
+                return `<span${why ? (0, core_8.tipAttr)({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Judge's reason", note: why.replace(/`/g, ""), rows: why.length > 600 ? [["Whole text", "select the run"]] : [] }) : ""}>${(0, core_8.inline)(clip(why, 240))}</span>`;
             }
             const chips = c.checks.slice(0, 3).map(n => `<span class="av-why-chip">✕ ${(0, core_8.esc)(n)}</span>`).join("") + (c.checks.length > 3 ? `<span class="av-why-chip av-why-chip--more">+${c.checks.length - 3}</span>` : "");
             const text = c.judge !== null ? `${c.judge ? `judge: ${c.judge}` : "judge said fail"}` : c.checks.length ? "" : c.text || "no recorded cause";
-            return `<span${(0, core_8.tipAttr)({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Why it failed", rows: [["Failed checks", c.checks.join(", ")]], note: text.replace(/`/g, "") || undefined })}>${chips}${text ? `${chips ? " " : ""}${(0, core_8.inline)(clip(text, 240))}` : ""}</span>`;
+            return `<span${(0, core_8.tipAttr)({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Why it failed", rows: [["Failed checks", c.checks.join(", ")], ["Whole text", text.length > 600 ? "select the run" : ""]], note: text.replace(/`/g, "") || undefined })}>${chips}${text ? `${chips ? " " : ""}${(0, core_8.inline)(clip(text, 240))}` : ""}</span>`;
         };
         const rows = data.runs.map((r, i) => {
             const o = (0, trial_model_4.outcomeOf)(r), tk = tokens ? (0, core_8.num)(tokens.get(r)) : null, sec = (0, core_8.num)(r.seconds);
@@ -3618,7 +3618,7 @@ define("blocks/general", ["require", "exports", "core", "figures", "blocks/frame
             if (labels[i].y - labels[i - 1].y < 15)
                 labels[i].y = labels[i - 1].y + 15;
         const endLabels = labels.map(l => l.html.replace("<text ", `<text y="${(l.y + 4).toFixed(1)}" `)).join("");
-        const svgText = `<svg viewBox="0 0 ${W} ${H}" class="av-svg" role="img" aria-label="${(0, core_9.esc)(input.title || "Trend across stages")}">${grid}<text class="av-svg-axis-title" transform="translate(14 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle">${(0, core_9.esc)(percent ? "pass rate" : input.unit || "value")}</text>${xs}${lines}${endLabels}</svg>`;
+        const svgText = `<svg viewBox="0 0 ${W} ${H}" class="av-svg" role="img" aria-label="${(0, core_9.esc)(input.title || "Trend across stages")}">${grid}<text class="av-svg-axis-title" transform="translate(14 ${(T + H - B) / 2}) rotate(-90)" text-anchor="middle">${(0, core_9.esc)(input.unit || (percent ? (series.some(s => s.points.some(p => p.k !== undefined)) ? "rate" : "share") : "value"))}</text>${xs}${lines}${endLabels}</svg>`;
         const tableRows = series.map(s => `<tr><th scope="row">${(0, core_9.esc)(s.label)}</th>${stages.map(st => { const p = s.points.find(q => q.stage === st); return `<td class="av-num">${p && (0, core_9.isNum)(p.value) ? (0, core_9.esc)(f(p.value)) + ((0, core_9.isNum)(p.k) ? ` <span class="av-muted">${p.k}/${p.n}${p.pooled !== 0 ? `, ${noInterval(p.pooled)}` : ""}</span>` : "") : missing()}</td>`; }).join("")}</tr>`).join("");
         return (0, frame_2.frame)("trend", input, `<div class="av-scroll-x"><div class="av-svg-wrap">${svgText}</div></div><details class="av-data"><summary>Values</summary><div class="av-scroll-x"><table class="av-table"><thead><tr><th scope="col">Series</th>${stages.map(s => `<th scope="col" class="av-num">${(0, core_9.esc)(s)}</th>`).join("")}</tr></thead><tbody>${tableRows}</tbody></table></div></details>`);
     }
@@ -6722,12 +6722,13 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
         let marks = "";
         if (m.kind === "numeric" && o.dots !== false && s) {
             const vals = thin(Array.isArray(s.values) ? s.values : []);
-            marks += vals.map((x, i) => `<span class="av-cmp-dot" style="--x:${sc.at(x)};--y:${(18 + ((i * 0.6180339887) % 1) * 64).toFixed(1)}%"></span>`).join("");
+            const unit = typeof m.unit === "string" && m.unit ? ` ${m.unit}` : "", over = o.who ? `${o.who} · ${metricName(m)}` : metricName(m);
+            marks += vals.map((x, i) => `<span class="av-cmp-dot" style="--x:${sc.at(x)};--y:${(18 + ((i * 0.6180339887) % 1) * 64).toFixed(1)}%"${(0, core_16.tipAttr)({ over, title: "One observation", mark: o.mark, rows: [["Value", `${(0, core_16.fmtNum)(x)}${unit}`]] })}></span>`).join("");
             const med = (0, core_16.num)(s.median);
             if (med !== null && o.center !== "median")
-                marks += `<span class="av-cmp-med" style="--x:${sc.at(med)}"></span>`;
+                marks += `<span class="av-cmp-med" style="--x:${sc.at(med)}"${(0, core_16.tipAttr)({ over, title: "Median", mark: o.mark, rows: [["Value", `${(0, core_16.fmtNum)(med)}${unit}`]] })}></span>`;
             else if (o.center === "median" && (0, core_16.num)(s.mean) !== null)
-                marks += `<span class="av-cmp-med av-cmp-med--mean" style="--x:${sc.at((0, core_16.num)(s.mean))}"></span>`;
+                marks += `<span class="av-cmp-med av-cmp-med--mean" style="--x:${sc.at((0, core_16.num)(s.mean))}"${(0, core_16.tipAttr)({ over, title: "Mean", mark: o.mark, rows: [["Value", `${(0, core_16.fmtNum)((0, core_16.num)(s.mean))}${unit}`]] })}></span>`;
         }
         if (m.kind === "rank" && s && o.places) {
             const c = rankCounts(s, o.places), total = c.reduce((a, b) => a + b, 0);
@@ -6900,7 +6901,9 @@ define("blocks/compare", ["require", "exports", "core", "comparison-stats", "sta
                 const h = p.hs.get(id), s = p.ss.get(id), who = ctx.arms.label(id);
                 return `<div class="av-cmp-mini" data-arm="${(0, core_16.esc)(id)}">${ctx.arms.glyph(id)}<span class="av-cmp-mini-name" title="${(0, core_16.esc)(who)}">${(0, core_16.esc)(who)}</span>${track(m, s, h, sc, { color: ctx.arms.color(id), refs: refs.filter(r => r.kind !== "base"), aria: `${name}, ${trackAria(m, who, h, center)}`, mini: true, places, center, dots: false, who, over: `${name} · ${metricName(m)}`, mark: ctx.arms.mark(id) })}<span class="av-cmp-mini-v${h.ok ? "" : " av-cmp-v--none"}">${(0, core_16.esc)(h.text)}${h.invalid ? `<span class="av-cmp-mini-inv" title="${(0, core_16.esc)(`${h.invalid} invalid, left out`)}">${(0, core_16.outcomeMark)("invalid")}</span>` : ""}</span></div>`;
             }).join("");
-            return `<figure class="av-cmp-panel" role="listitem"><figcaption>${path.length ? `<span class="av-cmp-panel-group">${(0, core_16.esc)(path.join(" › "))}</span>` : ""}<span class="av-cmp-panel-name">${(0, core_16.esc)(name)}</span></figcaption>${lines}</figure>`;
+            const ticks = m.kind === "ordinal" ? (0, core_16.ticksHtml)([{ x: 0, label: "lower" }, { x: .5, label: "" }, { x: 1, label: "higher" }]) : sc ? (0, core_16.ticksHtml)(sc.ticks.map(t => ({ x: (t - sc.min) / (sc.max - sc.min || 1), label: sc.label(t) }))) : "";
+            const axisRow = ticks ? `<div class="av-cmp-mini av-cmp-mini--axis" aria-hidden="true"><span></span><span></span>${ticks}<span></span></div>` : "";
+            return `<figure class="av-cmp-panel" role="listitem"><figcaption>${path.length ? `<span class="av-cmp-panel-group">${(0, core_16.esc)(path.join(" › "))}</span>` : ""}<span class="av-cmp-panel-name">${(0, core_16.esc)(name)}</span></figcaption>${lines}${axisRow}</figure>`;
         }).join("")}</div>` : byCase ? (0, frame_7.empty)("No observation names a case, so there is nothing to show by case.") : "";
         const levels = m.kind === "ordinal" ? levelsOf(m, [...sums.values()][0]) : undefined;
         const grid = `<div class="av-cmp-grid" role="table" aria-label="${(0, core_16.esc)(input.title || metricName(m))}">${axis(sc, m, headCaption(m, center))}${rows}</div>`;
@@ -9596,28 +9599,18 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
         // Both axes run symmetric about zero to the round tick past the largest value (and its interval), so no change sits
         // past a labelled bound and either side of zero reads at the same scale.
         const half = (largest, cap) => { const t = (0, core_22.axisTicks)(0, Math.min(cap, largest * 1.04), 2); return [...t.slice(1).reverse().map(v => -v), ...t]; };
-        const xs = half(Math.max(.1, ...points.map(p => Math.abs(p.g.costChange))), 10);
+        const xs = half(Math.max(.1, ...points.map(p => Math.abs(p.g.costChange))), Infinity);
         const ys = half(Math.max(.1, ...points.flatMap(p => [Math.abs(p.g.delta), ...(p.g.interval ? p.g.interval.map(Math.abs) : [])])), 1);
         const mx = xs[xs.length - 1], my = ys[ys.length - 1];
         const x = (v) => (Math.max(-mx, Math.min(mx, v)) + mx) / (2 * mx), y = (v) => (my - Math.max(-my, Math.min(my, v))) / (2 * my);
         const tick = (v) => `${v > 0 ? "+" : v < 0 ? "−" : ""}${Math.abs(Math.round(v * 100))}%`;
         const pts = (v) => { const p = Math.round(v * 100); return signed(p, `${Math.abs(p)}`); };
-        // Changes that land on (nearly) the same spot fan out side by side, so each keeps a mark to hover and a number to read.
-        const spots = points.map(p => ({ x: x(p.g.costChange), y: y(p.g.delta), dx: 0 }));
-        const done = new Set();
-        spots.forEach((a, i) => {
-            if (done.has(i))
-                return;
-            const near = spots.map((_, j) => j).filter(j => !done.has(j) && Math.abs(spots[j].x - a.x) < .03 && Math.abs(spots[j].y - a.y) < .045);
-            // Side by side about the cluster's middle, in the order they sit, 24px apart (a mark is 22px wide).
-            const mid = near.reduce((t, j) => t + spots[j].x, 0) / near.length;
-            near.sort((j, k) => spots[j].x - spots[k].x).forEach((j, k) => { done.add(j); spots[j].x = near.length > 1 ? mid : spots[j].x; spots[j].dx = (k - (near.length - 1) / 2) * 24; });
-        });
+        // Changes that land on one spot are fanned out where the plot is drawn, at its size (enhance.ts).
         const marks = points.map((p, i) => {
-            const { x: px, y: py, dx } = spots[i], m = p.s.measure;
-            const ci = p.g.interval ? `<span class="av-whisker av-whisker--v av-cg-ci" style="--x:${(0, frame_9.pos)(px)};--dx:${dx}px;--a:${(0, frame_9.pos)(y(p.g.interval[1]))};--b:${(0, frame_9.pos)(y(p.g.interval[0]))};--v:${p.s.arms.color(p.g.arm)}"></span>` : "";
+            const px = x(p.g.costChange), py = y(p.g.delta), m = p.s.measure;
+            const ci = p.g.interval ? `<span class="av-whisker av-whisker--v av-cg-ci" style="--x:${(0, frame_9.pos)(px)};--a:${(0, frame_9.pos)(y(p.g.interval[1]))};--b:${(0, frame_9.pos)(y(p.g.interval[0]))};--v:${p.s.arms.color(p.g.arm)}"></span>` : "";
             const card = (0, core_22.tipAttr)({ over: `${p.s.short}${p.g.lane ? ` · ${p.g.lane}` : ""}`, title: p.s.arms.label(p.g.arm), mark: p.s.arms.mark(p.g.arm), rows: [["Against", p.s.arms.label(p.g.base)], ["Pass rate change", changeText(m, p.g.delta)], ["Its 95% interval", gainIntervalText(m, p.g)], ["Cost per run change", tick(p.g.costChange)], ["Report's decision", p.s.stamp]], note: "Open the report to read it in full." });
-            return `${ci}<a class="av-cg-pt" href="${open(p.s.id)}" style="--x:${(0, frame_9.pos)(px)};--y:${(0, frame_9.pos)(py)};--dx:${dx}px;--v:${p.s.arms.color(p.g.arm)}"${card}><span class="av-cg-dot">${i + 1}</span><span class="av-sr"> ${(0, core_22.esc)(p.s.arms.label(p.g.arm))} in ${(0, core_22.esc)(p.s.short)}</span></a>`;
+            return `${ci}<a class="av-cg-pt" href="${open(p.s.id)}" style="--x:${(0, frame_9.pos)(px)};--y:${(0, frame_9.pos)(py)};--v:${p.s.arms.color(p.g.arm)}"${card}><span class="av-cg-dot">${i + 1}</span><span class="av-sr"> ${(0, core_22.esc)(p.s.arms.label(p.g.arm))} in ${(0, core_22.esc)(p.s.short)}</span></a>`;
         }).join("");
         const quads = [["More passed, cost less", "tl"], ["More passed, cost more", "tr"], ["Fewer passed, cost less", "bl"], ["Fewer passed, cost more", "br"]].map(([t, c]) => `<span class="av-cg-quad av-cg-quad--${c}" aria-hidden="true">${t}</span>`).join("");
         const grid = xs.map(v => `<span class="av-cg-vline${v === 0 ? " av-cg-zero" : ""}" style="--x:${(0, frame_9.pos)(x(v))}"></span>`).join("") + ys.map(v => `<span class="av-cg-hline${v === 0 ? " av-cg-zero" : ""}" style="--y:${(0, frame_9.pos)(y(v))}"></span>`).join("");
@@ -12636,7 +12629,8 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             const left = Math.max(8, Math.min(vw - t.width - 8, cx - t.width / 2));
             const above = r.top - t.height - 12 >= top + 4;
             tip.style.left = `${Math.round(left)}px`;
-            tip.style.top = `${Math.round(above ? r.top - t.height - 12 : r.bottom + 12)}px`;
+            const vh = doc.documentElement.clientHeight || win.innerHeight;
+            tip.style.top = `${Math.round(Math.max(top + 4, Math.min(vh - t.height - 8, above ? r.top - t.height - 12 : r.bottom + 12)))}px`;
             tip.setAttribute("data-side", above ? "top" : "bottom");
         };
         on(report, "pointerover", (e) => { if (e.pointerType === "touch")
@@ -12658,7 +12652,69 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             hideTip(); });
         on(doc, "keydown", (e) => { if (e.key === "Escape")
             hideTip(); });
-        on(win, "scroll", hideTip, { passive: true });
+        on(doc, "scroll", hideTip, { passive: true, capture: true });
+        // Scatter points that overlap at the plot's drawn size are pushed apart, each by as little as frees it (a few rounds of
+        // relaxation), and a moved point keeps a thin line back to where its values put it; again whenever the plot is resized.
+        const spread = (plot) => {
+            const pts = all(".av-cg-pt", plot);
+            for (const p of pts)
+                for (const v of ["--dx", "--dy", "--len", "--ang"])
+                    p.style.removeProperty(v);
+            if (!plot.getBoundingClientRect().width)
+                return; // hidden: spread again when shown
+            const box = plot.getBoundingClientRect(), r0 = 11; // a point is 22px wide
+            const at = pts.map(p => { const r = p.getBoundingClientRect(); return { x: r.left, y: r.top, dx: 0, dy: 0 }; });
+            const gap = 24;
+            // Each round also holds every point inside the plot, so none is pushed past its edge.
+            const inside = (a) => { a.dx = Math.min(Math.max(a.dx, box.left + r0 - a.x), box.right - r0 - a.x); a.dy = Math.min(Math.max(a.dy, box.top + r0 - a.y), box.bottom - r0 - a.y); };
+            for (let round = 0; round < 40; round++) {
+                let moved = false;
+                for (let i = 0; i < at.length; i++)
+                    for (let j = i + 1; j < at.length; j++) {
+                        const a = at[i], b = at[j];
+                        let ux = a.x + a.dx - b.x - b.dx, uy = a.y + a.dy - b.y - b.dy;
+                        const d = Math.hypot(ux, uy);
+                        if (d >= gap - .01)
+                            continue;
+                        if (d < .01) {
+                            const t = (i + j) * 2.39996;
+                            ux = Math.cos(t);
+                            uy = Math.sin(t);
+                        }
+                        else {
+                            ux /= d;
+                            uy /= d;
+                        }
+                        const push = (gap - d) / 2;
+                        a.dx += ux * push;
+                        a.dy += uy * push;
+                        b.dx -= ux * push;
+                        b.dy -= uy * push;
+                        inside(a);
+                        inside(b);
+                        moved = true;
+                    }
+                if (!moved)
+                    break;
+            }
+            pts.forEach((p, i) => {
+                const { dx, dy } = at[i];
+                if (Math.hypot(dx, dy) < .5)
+                    return;
+                p.style.setProperty("--dx", `${dx.toFixed(1)}px`);
+                p.style.setProperty("--dy", `${dy.toFixed(1)}px`);
+                p.style.setProperty("--len", `${Math.hypot(dx, dy).toFixed(1)}px`);
+                p.style.setProperty("--ang", `${Math.atan2(dy, dx).toFixed(3)}rad`);
+            });
+        };
+        const plots = all(".av-cg-plot");
+        plots.forEach(spread);
+        if (plots.length && typeof win.ResizeObserver === "function") {
+            const watch = new win.ResizeObserver(entries => { for (const x of entries)
+                spread(x.target); });
+            plots.forEach(p => watch.observe(p));
+            offs.push(() => watch.disconnect());
+        }
         // Roving focus: each tapestry, cost panel and invalid group is one tab stop.
         // Arrow keys move between its marks, Home and End go to the ends, and Enter
         // or Space opens the run (they are buttons). The last mark focused keeps the stop.

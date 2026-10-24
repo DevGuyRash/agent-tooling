@@ -372,7 +372,8 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     const left = Math.max(8, Math.min(vw - t.width - 8, cx - t.width / 2));
     const above = r.top - t.height - 12 >= top + 4;
     tip.style.left = `${Math.round(left)}px`;
-    tip.style.top = `${Math.round(above ? r.top - t.height - 12 : r.bottom + 12)}px`;
+    const vh = doc.documentElement.clientHeight || win.innerHeight;
+    tip.style.top = `${Math.round(Math.max(top + 4, Math.min(vh - t.height - 8, above ? r.top - t.height - 12 : r.bottom + 12)))}px`;
     tip.setAttribute("data-side", above ? "top" : "bottom");
   };
   on(report, "pointerover", (e: PointerEvent) => { if (e.pointerType === "touch") return; const el = (e.target as Element).closest?.<HTMLElement>(TIPPED); if (el && el !== tipFor) showTip(el); });
@@ -381,7 +382,46 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
   on(report, "focusin", (e: FocusEvent) => { const el = (e.target as Element).closest?.<HTMLElement>(TIPPED); if (el) showTip(el); else hideTip(); });
   on(report, "focusout", (e: FocusEvent) => { if (!(e.relatedTarget instanceof Element && e.relatedTarget.closest(TIPPED))) hideTip(); });
   on(doc, "keydown", (e: KeyboardEvent) => { if (e.key === "Escape") hideTip(); });
-  on(win, "scroll", hideTip, { passive: true });
+  on(doc, "scroll", hideTip, { passive: true, capture: true });
+
+  // Scatter points that overlap at the plot's drawn size are pushed apart, each by as little as frees it (a few rounds of
+  // relaxation), and a moved point keeps a thin line back to where its values put it; again whenever the plot is resized.
+  const spread = (plot: HTMLElement) => {
+    const pts = all<HTMLElement>(".av-cg-pt", plot);
+    for (const p of pts) for (const v of ["--dx", "--dy", "--len", "--ang"]) p.style.removeProperty(v);
+    if (!plot.getBoundingClientRect().width) return; // hidden: spread again when shown
+    const box = plot.getBoundingClientRect(), r0 = 11; // a point is 22px wide
+    const at = pts.map(p => { const r = p.getBoundingClientRect(); return { x: r.left, y: r.top, dx: 0, dy: 0 }; });
+    const gap = 24;
+    // Each round also holds every point inside the plot, so none is pushed past its edge.
+    const inside = (a: { x: number; y: number; dx: number; dy: number }) => { a.dx = Math.min(Math.max(a.dx, box.left + r0 - a.x), box.right - r0 - a.x); a.dy = Math.min(Math.max(a.dy, box.top + r0 - a.y), box.bottom - r0 - a.y); };
+    for (let round = 0; round < 40; round++) {
+      let moved = false;
+      for (let i = 0; i < at.length; i++) for (let j = i + 1; j < at.length; j++) {
+        const a = at[i], b = at[j];
+        let ux = a.x + a.dx - b.x - b.dx, uy = a.y + a.dy - b.y - b.dy;
+        const d = Math.hypot(ux, uy);
+        if (d >= gap - .01) continue;
+        if (d < .01) { const t = (i + j) * 2.39996; ux = Math.cos(t); uy = Math.sin(t); } else { ux /= d; uy /= d; }
+        const push = (gap - d) / 2;
+        a.dx += ux * push; a.dy += uy * push; b.dx -= ux * push; b.dy -= uy * push; inside(a); inside(b); moved = true;
+      }
+      if (!moved) break;
+    }
+    pts.forEach((p, i) => {
+      const { dx, dy } = at[i];
+      if (Math.hypot(dx, dy) < .5) return;
+      p.style.setProperty("--dx", `${dx.toFixed(1)}px`); p.style.setProperty("--dy", `${dy.toFixed(1)}px`);
+      p.style.setProperty("--len", `${Math.hypot(dx, dy).toFixed(1)}px`); p.style.setProperty("--ang", `${Math.atan2(dy, dx).toFixed(3)}rad`);
+    });
+  };
+  const plots = all(".av-cg-plot");
+  plots.forEach(spread);
+  if (plots.length && typeof win.ResizeObserver === "function") {
+    const watch = new win.ResizeObserver(entries => { for (const x of entries) spread(x.target as HTMLElement); });
+    plots.forEach(p => watch.observe(p));
+    offs.push(() => watch.disconnect());
+  }
 
   // Roving focus: each tapestry, cost panel and invalid group is one tab stop.
   // Arrow keys move between its marks, Home and End go to the ends, and Enter

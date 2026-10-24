@@ -55,7 +55,8 @@ def write_collection(directory: Path, costs: bool = False, **changes) -> Path:
             r.setdefault("usage", {})["cost_usd"] = round(0.02 * (1 + 0.35 * arms.index(r["arm"])) * (1 + 0.05 * (r.get("repeat") or 0)), 4)
         # trial.py's per-case median difference in cost per run from the baseline, as a share, for every other arm.
         trial["baseline"] = "current"
-        trial["pct_vs_baseline"] = {a: {"cost_usd": {"median": round(0.35 * i - 0.2, 2)}} for i, a in enumerate(arms) if a != "current"}
+        # One change costs twenty times its reference more per run (+2000%), past any fixed bound an axis might assume.
+        trial["pct_vs_baseline"] = {a: {"cost_usd": {"median": 20.0 if i == len(arms) - 1 else round(0.35 * i - 0.2, 2)}} for i, a in enumerate(arms) if a != "current"}
         (directory / "fictional-trial.json").write_text(json.dumps(trial), encoding="utf-8")
     again = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
     again["decision"] = {**again["decision"], "verdict": "mixed", "label": "Read again"}
@@ -293,9 +294,10 @@ const plots = [...document.querySelectorAll(".av-block--shifts .av-cx-lanes")].m
 const row = document.querySelector(".av-block--shifts .av-cx-row");
 point(row, "pointerover"); const card = tip(), who = row.querySelector(".av-cx-who").textContent.trim(), report = row.closest(".av-sh-row").querySelector(".av-sh-name a").textContent.trim();
 const dots = [...document.querySelectorAll(".av-cg-pt")];
-const spots = dots.map(d => box(d.querySelector(".av-cg-dot")));
+// The points are round: two overlap when their centres are nearer than a point is wide.
+const spots = dots.map(d => { const r = box(d.querySelector(".av-cg-dot")); return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width }; });
 const pt = dots[0]; if (pt) point(pt, "pointerover");
-return { plots, card, who, report, points: dots.length, links: dots.filter(d => /^#report\\//.test(d.getAttribute("href"))).length, pointOverlaps: spots.filter((a, i) => spots.some((b, j) => j > i && meets(a, b))).length,
+return { plots, card, who, report, points: dots.length, links: dots.filter(d => /^#report\\//.test(d.getAttribute("href"))).length, pointOverlaps: spots.filter((a, i) => spots.some((b, j) => j > i && Math.hypot(a.x - b.x, a.y - b.y) < a.w - 0.5)).length,
   x: [...document.querySelectorAll(".av-cg > .av-ticks .av-tick")].map(t => t.textContent), y: [...document.querySelectorAll(".av-cg-yticks span")].map(t => t.textContent), pointCard: pt ? tip() : null };
 """
         out = self.drive(page, width=1440, script=script)["result"]
@@ -313,6 +315,7 @@ return { plots, card, who, report, points: dots.length, links: dots.filter(d => 
         self.assertGreater(out["points"], 1, "the scatter draws no changes to spread")
         self.assertEqual(out["links"], out["points"], "a change on the scatter does not open its report")
         self.assertEqual(out["pointOverlaps"], 0, "two changes are drawn over each other")
+        self.assertGreaterEqual(int(out["x"][-1].strip("+%")), 2000, f"the cost axis stops short of a +2000% change: {out['x']}")
         for axis in ("x", "y"):
             labels = out[axis]
             self.assertEqual(labels[0].lstrip("−"), labels[-1].lstrip("+"), f"the {axis} axis is not symmetric about zero: {labels}")

@@ -132,7 +132,7 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 .97r
 .av-tip-rows { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 16px; margin: 9px 0 0 !important; padding-top: 9px; border-top: 1px solid var(--av-line); }
 .av-tip-rows dt { color: var(--av-ink-3); white-space: nowrap; }
 .av-tip-rows dd { margin: 0; text-align: right; font: 600 .78rem/1.45 var(--av-font-text); font-variant-numeric: tabular-nums; color: var(--av-ink); }
-.av-tip-note { margin-top: 8px !important; color: var(--av-ink-2); font-size: .74rem; line-height: 1.45; }
+.av-tip-note { margin-top: 8px !important; color: var(--av-ink-2); font-size: .74rem; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 12; -webkit-box-orient: vertical; overflow: hidden; }
 @media (prefers-reduced-motion: reduce) { .av-tip, .av-tip[data-show] { transition: none; transform: none; } }
 /* Axes: every track reads against tick marks with labels (ticksHtml in core.ts) and faint gridlines at the same
    ticks. The end labels turn inward so neither leaves the track; on a narrow track every other label steps aside

@@ -139,7 +139,7 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 .97r
 .av-tip-rows { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 16px; margin: 9px 0 0 !important; padding-top: 9px; border-top: 1px solid var(--av-line); }
 .av-tip-rows dt { color: var(--av-ink-3); white-space: nowrap; }
 .av-tip-rows dd { margin: 0; text-align: right; font: 600 .78rem/1.45 var(--av-font-text); font-variant-numeric: tabular-nums; color: var(--av-ink); }
-.av-tip-note { margin-top: 8px !important; color: var(--av-ink-2); font-size: .74rem; line-height: 1.45; }
+.av-tip-note { margin-top: 8px !important; color: var(--av-ink-2); font-size: .74rem; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 12; -webkit-box-orient: vertical; overflow: hidden; }
 @media (prefers-reduced-motion: reduce) { .av-tip, .av-tip[data-show] { transition: none; transform: none; } }
 /* Axes: every track reads against tick marks with labels (ticksHtml in core.ts) and faint gridlines at the same
    ticks. The end labels turn inward so neither leaves the track; on a narrow track every other label steps aside
@@ -962,7 +962,9 @@ button.av-ledger-more { display: none; }
   /* Name and figures on one line (the figures wrap below a long name), then the
      track beside a fixed column of marks, so every arm's track has one scale. */
   .av-cs-arm, .av-cs-arm--none { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
-  .av-cs-arm--axis { display: none; }
+  .av-cs-arm.av-cs-arm--axis { flex-wrap: nowrap; }
+  .av-cs-arm--axis .av-axis-title { display: none; }
+  .av-cs-arm--axis .av-ticks { flex: 1 1 auto; margin-right: calc(9rem + 12px); }
   .av-cs-arm-tag { order: 1; flex: 1 1 auto; min-width: 0; }
   .av-cs-arm .av-cs-num { order: 2; flex: 0 1 auto; margin-left: auto; justify-content: flex-end; gap: 0 7px; }
   .av-cs-arm .av-cs-num .av-ci-text { font-size: .68rem; }
@@ -1220,15 +1222,17 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-cg-vline { position: absolute; top: 0; bottom: 0; left: var(--x); width: 1px; background: var(--av-line); }
 .av-cg-hline { position: absolute; left: 0; right: 0; top: var(--y); height: 1px; background: var(--av-line); }
 .av-cg-vline.av-cg-zero, .av-cg-hline.av-cg-zero { background: var(--av-ink-3); }
-.av-cg-quad { position: absolute; font: 600 .72rem/1.2 var(--av-font-text); color: var(--av-ink-3); opacity: .75; pointer-events: none; }
+.av-cg-quad { position: absolute; max-width: calc(50% - 16px); font: 600 .72rem/1.2 var(--av-font-text); color: var(--av-ink-3); opacity: .75; pointer-events: none; }
 .av-cg-quad--tl { left: 10px; top: 8px; } .av-cg-quad--tr { right: 10px; top: 8px; text-align: right; }
 .av-cg-quad--bl { left: 10px; bottom: 8px; } .av-cg-quad--br { right: 10px; bottom: 8px; text-align: right; }
-.av-cg-pt { position: absolute; left: calc(var(--x) + var(--dx, 0px)); top: var(--y); z-index: 1; width: 0; height: 0; text-decoration: none; }
-.av-cg-ci { --c: var(--v); left: calc(var(--x) + var(--dx, 0px)); opacity: .55; transition: opacity .12s; }
+.av-cg-pt { position: absolute; left: var(--x); top: var(--y); z-index: 1; width: 0; height: 0; text-decoration: none; }
+/* A point moved off a neighbour keeps a thin line back to where its values put it. */
+.av-cg-pt::before { content: ""; position: absolute; left: 0; top: 0; width: var(--len, 0px); height: 1px; background: var(--v); opacity: .7; transform-origin: 0 50%; transform: rotate(var(--ang, 0rad)); }
+.av-cg-ci { --c: var(--v); left: var(--x); opacity: .55; transition: opacity .12s; }
 .av-cg-ci:has(+ .av-cg-pt:hover) { opacity: 1; }
-.av-cg-dot { position: absolute; left: 0; top: 0; display: grid; place-items: center; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; background: var(--v); color: var(--av-raised); font: 700 .66rem/1 var(--av-font-text); box-shadow: 0 0 0 2px var(--av-surface); transition: transform .12s, box-shadow .12s; }
+.av-cg-dot { position: absolute; left: 0; top: 0; display: grid; place-items: center; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; background: var(--v); color: var(--av-raised); font: 700 .66rem/1 var(--av-font-text); box-shadow: 0 0 0 2px var(--av-surface); transform: translate(var(--dx, 0px), var(--dy, 0px)); transition: transform .12s, box-shadow .12s; }
 .av-cg-pt:hover, .av-cg-pt:focus-visible { z-index: 3; }
-.av-cg-pt:hover .av-cg-dot, .av-cg-pt:focus-visible .av-cg-dot { transform: scale(1.25); box-shadow: 0 0 0 2px var(--av-surface), 0 0 0 5px color-mix(in srgb, var(--v) 35%, transparent); }
+.av-cg-pt:hover .av-cg-dot, .av-cg-pt:focus-visible .av-cg-dot { transform: translate(var(--dx, 0px), var(--dy, 0px)) scale(1.25); box-shadow: 0 0 0 2px var(--av-surface), 0 0 0 5px color-mix(in srgb, var(--v) 35%, transparent); }
 .av-cg > .av-ticks { grid-column: 2; border-top: 0; }
 .av-cg-read { font-size: .8rem; margin: 8px 0 12px; }
 .av-cg-key { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
@@ -1399,6 +1403,12 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-cmp-track--empty { background: repeating-linear-gradient(135deg, var(--av-sunken) 0 4px, transparent 4px 9px); border-radius: 4px; }
 .av-cmp-none { position: absolute; inset: 0; display: grid; place-items: center; font-size: .72rem; font-style: italic; color: var(--av-ink-3); white-space: nowrap; overflow: hidden; }
 .av-cmp-dot { position: absolute; left: var(--x); top: var(--y); width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; border-radius: 50%; background: color-mix(in srgb, var(--c) 50%, transparent); }
+/* An observation is small to draw but not to point at: its hover area reaches a few pixels past it. */
+.av-cmp-dot::after { content: ""; position: absolute; inset: -4px; }
+.av-cmp-dot:hover { background: var(--c); }
+.av-cmp-mini--axis { padding: 0; }
+.av-cmp-mini--axis .av-ticks { height: 1.2rem; }
+.av-cmp-mini--axis .av-tick { font-size: .6rem; padding-top: 5px; }
 .av-cmp-med { position: absolute; left: var(--x); top: 3px; bottom: 3px; width: 3px; margin-left: -1.5px; border-radius: 2px; background: var(--av-ink-2); }
 .av-cmp-med--mean { background: var(--av-ink-3); }
 .av-cmp-bub { position: absolute; left: var(--x); top: 50%; width: calc(7px + 20px * var(--s)); height: calc(7px + 20px * var(--s)); transform: translate(-50%, -50%); border-radius: 50%; background: color-mix(in srgb, var(--c) 22%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--c) 55%, transparent); }
