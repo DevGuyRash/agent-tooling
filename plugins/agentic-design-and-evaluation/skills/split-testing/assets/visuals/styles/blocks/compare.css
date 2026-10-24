@@ -51,7 +51,7 @@
 .av-cmp-dot { position: absolute; left: var(--x); top: var(--y); width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; border-radius: 50%; background: color-mix(in srgb, var(--c) 50%, transparent); }
 /* An observation is small to draw but not to point at: its hover area reaches a few pixels past it. */
 .av-cmp-dot::after { content: ""; position: absolute; inset: -3px; }
-.av-cmp-track .av-cmp-med { z-index: 2; } .av-cmp-track .av-cmp-dot { z-index: 4; }
+.av-cmp-track .av-cmp-dot { z-index: 4; } .av-cmp-track .av-cmp-med { z-index: 5; }
 /* The mean's point lets the pointer through to a rank, median or observation drawn under it; the track around it
    shows the mean's own card everywhere else. */
 .av-cmp-track .av-pt { pointer-events: none; }
@@ -82,7 +82,7 @@
 /* Ordinal levels: one diverging bar around a centre line. */
 .av-cmp-lk { position: relative; height: 24px; }
 .av-cmp-lk--mini { height: 14px; }
-.av-cmp-lk-mid { position: absolute; left: 50%; top: -3px; bottom: -3px; border-left: 1px solid var(--av-ink-3); z-index: 1; }
+.av-cmp-lk-mid { position: absolute; left: 50%; top: -3px; bottom: -3px; border-left: 1px solid var(--av-ink-3); z-index: 1; pointer-events: none; }
 .av-cmp-lk-bar { position: absolute; inset: 0; display: flex; border-radius: 3px; overflow: hidden; }
 .av-cmp-lk-gap { flex: none; width: var(--w); }
 .av-cmp-lk-seg { flex: none; width: var(--w); display: grid; place-items: center; overflow: hidden; white-space: nowrap; background: var(--lc); box-shadow: inset -1px 0 0 var(--av-raised); font: 600 .68rem/1 var(--av-font-mono); color: var(--av-ink); }

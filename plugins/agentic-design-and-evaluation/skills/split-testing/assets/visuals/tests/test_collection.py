@@ -324,7 +324,8 @@ return { plots, card, who, report, points: dots.length, links: dots.filter(d => 
         self.assertNotIn("Cost against gain", out["pointCard"]["title"], "a change shows the chart's caption, not its own numbers")
 
     def test_scatter_points_on_one_spot_stay_apart_inside_the_plot_and_their_cards_follow_them(self) -> None:
-        # Ten reports of the same trial put ten changes on each of three spots, on a phone and a wide screen.
+        # Ten reports of the same trial put ten changes on each of three spots, on a phone and a wide screen; and twelve
+        # changes a few pixels apart along one line, the case a sideways push alone leaves overlapped.
         path = write_collection(self.dir, costs=True)
         collection = json.loads(path.read_text(encoding="utf-8"))
         base = collection["members"][0]
@@ -339,16 +340,35 @@ const outside = dots.filter(a => a.x - a.w / 2 < box.left - 0.5 || a.x + a.w / 2
 // The card of the point moved farthest centres on that point, not on the spot its values put it.
 const far = dots.reduce((m, a) => Math.hypot(parseFloat(a.d.parentElement.style.getPropertyValue("--dx")) || 0, parseFloat(a.d.parentElement.style.getPropertyValue("--dy")) || 0) > Math.hypot(parseFloat(m.d.parentElement.style.getPropertyValue("--dx")) || 0, parseFloat(m.d.parentElement.style.getPropertyValue("--dy")) || 0) ? a : m);
 far.d.scrollIntoView({ block: "center", behavior: "instant" });
-const r = far.d.getBoundingClientRect(); point(far.d.parentElement, "pointerover");
-const t = document.querySelector(".av-tip").getBoundingClientRect(), clamped = t.left <= 8.5 || t.right >= document.documentElement.clientWidth - 8.5;
-return { n: dots.length, overlaps, outside, cardOff: clamped ? 0 : Math.abs((t.left + t.right) / 2 - (r.left + r.right) / 2) };
+await new Promise(done => setTimeout(done, 150)); // the scroll settles, as it does before a reader points
+const r = far.d.getBoundingClientRect(); far.d.parentElement.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }));
+await new Promise(done => setTimeout(done, 300)); // the card's opening movement settles
+// Centred over the point, or as near as the window's 8px margins allow.
+const card = tip(), t = document.querySelector(".av-tip").getBoundingClientRect(), vw = document.documentElement.clientWidth;
+const expected = Math.max(8, Math.min(vw - t.width - 8, (r.left + r.right) / 2 - t.width / 2));
+return { n: dots.length, overlaps, outside, card: card.shown && card.title === JSON.parse(far.d.parentElement.getAttribute("data-av-tip")).title, cardOff: Math.abs(t.left - expected) };
 """
-        for width in (390, 1440):
-            with self.subTest(width=width):
-                out = self.drive(page, width=width, script=script)["result"]
-                self.assertGreaterEqual(out["n"], 30, "the fixture draws fewer changes than it should")
+        cases = [("same spots", page, 30)]
+        # Twelve reports whose one change each lands a little further right on one line: the same gain, cost changes
+        # 0.35 points apart.
+        row = write_collection(self.dir, costs=True)
+        collection = json.loads(row.read_text(encoding="utf-8"))
+        trial = json.loads((self.dir / "fictional-trial.json").read_text(encoding="utf-8"))
+        for i in range(12):
+            t = {**trial, "pct_vs_baseline": {a: {"cost_usd": {"median": -0.0333 + 0.0035 * i}} for a in trial["pct_vs_baseline"]}}
+            (self.dir / f"row-{i}.json").write_text(json.dumps(t), encoding="utf-8")
+        collection["members"] = [{**collection["members"][0], "id": f"row-{i}", "trial": f"row-{i}.json"} for i in range(12)]
+        row.write_text(json.dumps(collection), encoding="utf-8")
+        built = TB.run_python(TB.REPORT, "--collection", row, "--output", self.dir / "row.html", "--replace")
+        self.assertEqual(built.returncode, 0, built.stderr)
+        cases.append(("one line", self.dir / "row.html", 12))
+        for (name, html, least), width in ((c, w) for c in cases for w in (390, 1440)):
+            with self.subTest(case=name, width=width):
+                out = self.drive(html, width=width, script=script)["result"]
+                self.assertGreaterEqual(out["n"], least, "the fixture draws fewer changes than it should")
                 self.assertEqual(out["overlaps"], 0, "changes on one spot are drawn over each other")
                 self.assertEqual(out["outside"], 0, "a change is pushed out of the plot")
+                self.assertTrue(out["card"], "the moved change's own card does not open")
                 self.assertLessEqual(out["cardOff"], 3, "a moved change's card points at where it was, not where it is")
 
     def test_the_reader_opens_compares_and_returns(self) -> None:

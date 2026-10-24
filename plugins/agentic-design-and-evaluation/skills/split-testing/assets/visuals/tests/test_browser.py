@@ -137,10 +137,13 @@ for (const m of document.querySelectorAll(OWN)) { const k = String(m.className.b
 for (const [k, marks] of kinds) for (const m of marks) {
   if (!own(m).hasAttribute("data-av-tip")) { out.noCard.push(k + " has no card of its own"); break; }
   m.scrollIntoView({ block: "center", behavior: "instant" });
-  // Somewhere across the mark (its middle, or a little to either side or above or below it) a pointer finds it.
-  const r = m.getBoundingClientRect(), probes = [[.5, .5], [.2, .5], [.8, .5], [.5, .2], [.5, .8]];
-  const finds = probes.map(([fx, fy]) => document.elementFromPoint(r.left + r.width * fx, r.top + r.height * fy)?.closest("[data-av-tip]"));
-  if (!finds.some(f => f && (f === own(m) || f.matches(OWN.split(", ").map(s => s + ", .av-cg-pt").join(", "))))) { const f = finds[0]; out.noCard.push(k + " is covered by " + (f ? String(f.className.baseVal ?? f.className).split(" ")[0] : "nothing")); break; }
+  // Somewhere on the mark (its middle, or to either side, above or below it, reaching just past a small mark into the
+  // hover area it is given) a pointer finds the mark's own card, not another's.
+  const r = m.getBoundingClientRect(), cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  const ox = Math.max(r.width * .3, Math.min(4, r.width / 2 + 2)), oy = Math.max(r.height * .3, Math.min(4, r.height / 2 + 2));
+  const finds = [[0, 0], [-ox, 0], [ox, 0], [0, -oy], [0, oy]].map(([x, y]) => document.elementFromPoint(cx + x, cy + y)?.closest("[data-av-tip]"));
+  // In a dense cloud one observation may lie on another: a pointer there still finds an observation, never another kind.
+  if (!finds.some(f => f && (f === own(m) || f.matches("." + k) || (k === "av-cg-dot" && f.matches(".av-cg-pt"))))) { const f = finds[0]; out.noCard.push(k + " is covered by " + (f ? String(f.className.baseVal ?? f.className).split(" ")[0] : "nothing")); break; }
 }
 for (const k of ["cut", "broken", "noAxis", "noCard"]) out[k] = [...new Set(out[k])].slice(0, 8);
 return out;

@@ -12622,10 +12622,14 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 return;
             }
             tipFor = el;
+            // The card is never taller than the room under the top bar, so it can always be placed whole.
+            const top = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
+            tip.style.maxHeight = `${Math.max(120, (doc.documentElement.clientHeight || win.innerHeight) - top - 12)}px`;
             tip.setAttribute("data-show", "");
             // A row's card points at the row's own mark (data-av-tip-at), not at the middle of the row.
-            const r = (el.querySelector("[data-av-tip-at]") || el).getBoundingClientRect(), t = tip.getBoundingClientRect(), vw = doc.documentElement.clientWidth || win.innerWidth;
-            const cx = r.left + r.width / 2, top = bar ? bar.getBoundingClientRect().bottom : 0;
+            // The card's own size, not its box mid-animation (it opens from slightly smaller), so it lands exactly where placed.
+            const r = (el.querySelector("[data-av-tip-at]") || el).getBoundingClientRect(), t = { width: tip.offsetWidth, height: tip.offsetHeight }, vw = doc.documentElement.clientWidth || win.innerWidth;
+            const cx = r.left + r.width / 2;
             const left = Math.max(8, Math.min(vw - t.width - 8, cx - t.width / 2));
             const above = r.top - t.height - 12 >= top + 4;
             tip.style.left = `${Math.round(left)}px`;
@@ -12653,39 +12657,40 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         on(doc, "keydown", (e) => { if (e.key === "Escape")
             hideTip(); });
         on(doc, "scroll", hideTip, { passive: true, capture: true });
-        // Scatter points that overlap at the plot's drawn size are set apart, each as little as frees it, every one inside the
-        // plot, and a moved point keeps a thin line back to where its values put it; again whenever the plot is resized.
-        // Points on one spot start on a sunflower spiral about it (pulled in from the edges until it fits), which packs any
-        // number evenly; rounds of pairwise relaxation then free whatever still overlaps.
-        const spread = (plot) => {
-            const pts = all(".av-cg-pt", plot);
-            for (const p of pts)
-                for (const v of ["--dx", "--dy", "--len", "--ang"])
-                    p.style.removeProperty(v);
-            const box = plot.getBoundingClientRect();
-            if (!box.width)
-                return; // hidden: spread again when shown
-            const r0 = 11, gap = 24, W = box.width, H = box.height; // a point is 22px wide
-            const at = pts.map(p => { const r = p.getBoundingClientRect(); return { x: r.left - box.left, y: r.top - box.top, dx: 0, dy: 0 }; });
-            const inside = (a) => { a.dx = Math.min(Math.max(a.dx, r0 - a.x), W - r0 - a.x); a.dy = Math.min(Math.max(a.dy, r0 - a.y), H - r0 - a.y); };
-            const seen = new Set();
-            at.forEach((a, i) => {
-                if (seen.has(i))
-                    return;
-                const same = at.map((_, j) => j).filter(j => !seen.has(j) && Math.hypot(at[j].x - a.x, at[j].y - a.y) < 2);
-                const R = 13.5 * Math.sqrt(same.length - 1) + r0, fit = (v, w) => w >= 2 * R ? Math.min(Math.max(v, R), w - R) : w / 2;
-                const cx = same.length > 1 ? fit(a.x, W) - a.x : 0, cy = same.length > 1 ? fit(a.y, H) - a.y : 0;
-                same.forEach((j, k) => { seen.add(j); const r = 13.5 * Math.sqrt(k), t = k * 2.39996; at[j].dx = cx + r * Math.cos(t); at[j].dy = cy + r * Math.sin(t); });
-            });
+        const R0 = 11, GAP = 24; // a point is 22px wide
+        const layout = (start, W, H, seat) => {
+            const at = start.map(p => ({ ...p, dx: 0, dy: 0 }));
+            const inside = (a) => { a.dx = Math.min(Math.max(a.dx, R0 - a.x), W - R0 - a.x); a.dy = Math.min(Math.max(a.dy, R0 - a.y), H - R0 - a.y); };
+            if (seat) {
+                const seen = new Set();
+                at.forEach((a, i) => {
+                    if (seen.has(i))
+                        return;
+                    const group = [i];
+                    seen.add(i);
+                    for (let k = 0; k < group.length; k++)
+                        at.forEach((b, j) => { if (!seen.has(j) && Math.hypot(b.x - at[group[k]].x, b.y - at[group[k]].y) < GAP) {
+                            seen.add(j);
+                            group.push(j);
+                        } });
+                    if (group.length < 2)
+                        return;
+                    const R = 13.5 * Math.sqrt(group.length - 1) + R0, fit = (v, w) => w >= 2 * R ? Math.min(Math.max(v, R), w - R) : w / 2;
+                    const cx = fit(group.reduce((t, j) => t + at[j].x, 0) / group.length, W), cy = fit(group.reduce((t, j) => t + at[j].y, 0) / group.length, H);
+                    const seats = group.map((_, k) => ({ x: cx + 13.5 * Math.sqrt(k) * Math.cos(k * 2.39996), y: cy + 13.5 * Math.sqrt(k) * Math.sin(k * 2.39996) })).sort((p, q) => p.x - q.x || p.y - q.y);
+                    group.sort((p, q) => at[p].x - at[q].x || at[p].y - at[q].y).forEach((j, k) => { at[j].dx = seats[k].x - at[j].x; at[j].dy = seats[k].y - at[j].y; });
+                });
+            }
             at.forEach(inside);
-            for (let round = 0; round < 400; round++) {
-                let moved = false;
+            let clear = false;
+            for (let round = 0; round < 400 && !clear; round++) {
+                clear = true;
                 for (let i = 0; i < at.length; i++)
                     for (let j = i + 1; j < at.length; j++) {
                         const a = at[i], b = at[j];
                         let ux = a.x + a.dx - b.x - b.dx, uy = a.y + a.dy - b.y - b.dy;
                         const d = Math.hypot(ux, uy);
-                        if (d >= gap - .01)
+                        if (d >= GAP - .01)
                             continue;
                         if (d < .01) {
                             const t = (i + j) * 2.39996;
@@ -12696,18 +12701,29 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                             ux /= d;
                             uy /= d;
                         }
-                        const push = (gap - d) / 2 + .1;
+                        const push = (GAP - d) / 2 + .1;
                         a.dx += ux * push;
                         a.dy += uy * push;
                         b.dx -= ux * push;
                         b.dy -= uy * push;
                         inside(a);
                         inside(b);
-                        moved = true;
+                        clear = false;
                     }
-                if (!moved)
-                    break;
             }
+            return { at, clear, far: Math.max(0, ...at.map(a => Math.hypot(a.dx, a.dy))) };
+        };
+        const spread = (plot) => {
+            const pts = all(".av-cg-pt", plot);
+            for (const p of pts)
+                for (const v of ["--dx", "--dy", "--len", "--ang"])
+                    p.style.removeProperty(v);
+            const box = plot.getBoundingClientRect();
+            if (!box.width)
+                return; // hidden: spread again when shown
+            const start = pts.map(p => { const r = p.getBoundingClientRect(); return { x: r.left - box.left, y: r.top - box.top }; });
+            const pushed = layout(start, box.width, box.height, false), seated = layout(start, box.width, box.height, true);
+            const { at } = pushed.clear && (!seated.clear || pushed.far <= seated.far) ? pushed : seated;
             pts.forEach((p, i) => {
                 const { dx, dy } = at[i];
                 if (Math.hypot(dx, dy) < .5)
