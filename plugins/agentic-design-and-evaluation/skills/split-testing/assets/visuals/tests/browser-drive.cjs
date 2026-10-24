@@ -36,7 +36,7 @@ const args = process.argv.slice(2);
 const option = (name, fallback) => { const i = args.indexOf(name); return i >= 0 && args[i + 1] !== undefined ? args[i + 1] : fallback; };
 const print = value => process.stdout.write(JSON.stringify(value) + "\n");
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
-const within = (ms, promise) => Promise.race([promise, sleep(ms).then(() => { throw new Error("timed out"); })]);
+const within = (ms, promise) => { let timer; return Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("timed out")), ms); })]).finally(() => clearTimeout(timer)); }; // a pending timer would keep the driver alive
 
 // [process group, state] of every process: from /proc where it lists this one
 // (Linux, a slim container without ps included), else from ps; null when

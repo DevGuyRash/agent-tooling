@@ -1087,11 +1087,14 @@ class DriverStopTest(unittest.TestCase):
                 launcher = scratch / f"launcher-{case}"
                 launcher.write_text("#!/bin/sh\nfor a; do case \"$a\" in --user-data-dir=*) p=\"${a#--user-data-dir=}\";; esac; done\n" + make + "printf '1\\n/devtools/browser/none\\n' > \"$p/DevToolsActivePort\"\n", encoding="utf-8")
                 launcher.chmod(0o755)
+                started = time.monotonic()
                 result = subprocess.run([NODE, str(DRIVER), "--browser", str(launcher), "--profile", str(profile), "--url", "about:blank"], capture_output=True, text=True, timeout=90, cwd=profile)
+                elapsed = time.monotonic() - started
                 out = json.loads(result.stdout.strip().splitlines()[-1])
                 if "skip" in out:
                     self.skipTest(out["skip"])
                 self.assertNotEqual(out["stopped"], "closed", case)
+                self.assertLess(elapsed, 5, "the driver lingered after its browser had stopped")  # nothing answered, so no wait was needed
                 self.assertEqual(folder.exists(), case != "own", f"the {case} singleton folder was {'kept' if case == 'own' else 'removed'}")
 
 
