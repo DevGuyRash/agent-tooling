@@ -12621,9 +12621,10 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 return;
             const top = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
             const vw = doc.documentElement.clientWidth || win.innerWidth, vh = doc.documentElement.clientHeight || win.innerHeight;
-            // Below the room a card needs for its frame and a line, it is not shown at all rather than spill past the window.
+            // Below the room a card needs for its frame and a line, it is closed rather than spill past the window; pointing at
+            // its mark again opens it once there is room.
             if (vh - top - 12 < 48) {
-                tip.removeAttribute("data-show");
+                hideTip();
                 return;
             }
             tip.style.maxHeight = `${vh - top - 12}px`;

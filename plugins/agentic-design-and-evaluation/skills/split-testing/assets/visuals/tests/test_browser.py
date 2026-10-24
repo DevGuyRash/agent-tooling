@@ -524,16 +524,26 @@ document.querySelector(".av-block").appendChild(big); point(big, "pointerover");
 const resized = new Promise(done => addEventListener("resize", done, { once: true }));
 avDriveResize("1440x160"); await resized;
 await new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))); out.shrunk = box();
+// With too little room for even a card's frame and a line, it closes; with room again, pointing at the mark reopens it.
+const frames = () => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+const resize = size => { const r = new Promise(done => addEventListener("resize", done, { once: true })); avDriveResize(size); return r; };
+// The mark is kept in view just under the top bar, so only the lack of room can close its card.
+big.style.cssText = "position:fixed;top:" + (document.querySelector(".av-topbar").getBoundingClientRect().bottom + 2) + "px;left:120px;width:10px;height:6px;font-size:0;overflow:hidden;z-index:50";
+await resize("1440x75"); await frames(); out.tiny = box(); out.tinyMarkSeen = big.getBoundingClientRect().bottom <= innerHeight;
+await resize("1440x420"); await frames();
+big.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" })); out.again = box();
 return out;
 """
         out = self.drive(page, width=1440, height=420, script=script)["result"]
-        for name in ("reason", "huge", "shrunk"):
+        for name in ("reason", "huge", "shrunk", "again"):
             card = out[name]
             with self.subTest(card=name):
                 self.assertTrue(card["shown"], "the card does not open")
                 self.assertGreaterEqual(card["top"], card["room"][0], "the card starts under the top bar")
                 self.assertLessEqual(card["bottom"], card["room"][1], "the card runs off the bottom of the window")
         self.assertGreater(out["huge"]["natural"], 420 - out["huge"]["room"][0], "the long card would have fitted anyway: this checks nothing")
+        self.assertTrue(out["tinyMarkSeen"], "the mark left the tiny window, so this checks nothing")
+        self.assertFalse(out["tiny"]["shown"], "a card is shown in a window with no room for it")
 
     def test_a_per_case_panel_reads_against_an_axis_that_spans_its_tracks(self) -> None:
         comparisons = EXAMPLES / "comparisons"
