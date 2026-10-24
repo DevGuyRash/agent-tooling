@@ -361,13 +361,17 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     if (card.note) tip!.append(part("p", "av-tip-note", card.note));
     return true;
   };
-  /** Set the card beside its mark: above it where there is room under the top bar, else below, within the window. */
+  /** Set the card beside its mark: above it where there is room under the top bar, else below, within the window, and
+   * never taller than the room under the top bar, so it can always be placed whole. */
   const place = (el: HTMLElement) => {
     if (!tip) return;
     const top = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
     const vw = doc.documentElement.clientWidth || win.innerWidth, vh = doc.documentElement.clientHeight || win.innerHeight;
-    // A row's card points at the row's own mark (data-av-tip-at), not at the middle of the row. The card's own size is
-    // read, not its box mid-animation (it opens from slightly smaller), so it lands exactly where placed.
+    tip.style.maxHeight = `${Math.max(120, vh - top - 12)}px`;
+    // Measured from the window's left edge, so its width is its own and not what room its last place left it; and by its
+    // own size, not its box mid-animation (it opens from slightly smaller), so it lands exactly where placed. A row's
+    // card points at the row's own mark (data-av-tip-at), not at the middle of the row.
+    tip.style.left = "0px";
     const r = (el.querySelector("[data-av-tip-at]") || el).getBoundingClientRect(), t = { width: tip.offsetWidth, height: tip.offsetHeight };
     const left = Math.max(8, Math.min(vw - t.width - 8, r.left + r.width / 2 - t.width / 2));
     const above = r.top - t.height - 12 >= top + 4;
@@ -379,9 +383,6 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     if (!tip || dialog?.open) return;
     if (!fill(el)) { hideTip(); return; }
     tipFor = el;
-    // The card is never taller than the room under the top bar, so it can always be placed whole.
-    const top = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
-    tip.style.maxHeight = `${Math.max(120, (doc.documentElement.clientHeight || win.innerHeight) - top - 12)}px`;
     tip.setAttribute("data-show", "");
     place(el);
   };
@@ -391,6 +392,21 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
   on(report, "focusin", (e: FocusEvent) => { const el = (e.target as Element).closest?.<HTMLElement>(TIPPED); if (el) showTip(el); else hideTip(); });
   on(report, "focusout", (e: FocusEvent) => { if (!(e.relatedTarget instanceof Element && e.relatedTarget.closest(TIPPED))) hideTip(); });
   on(doc, "keydown", (e: KeyboardEvent) => { if (e.key === "Escape") hideTip(); });
+  /** Whether any of a mark is in view: inside the window and every box around it that clips what overflows it. */
+  const seen = (mark: HTMLElement) => {
+    if (!mark.getClientRects().length) return false;
+    const r = mark.getBoundingClientRect();
+    let { left, top, right, bottom } = r;
+    left = Math.max(left, 0); top = Math.max(top, 0);
+    right = Math.min(right, doc.documentElement.clientWidth || win.innerWidth); bottom = Math.min(bottom, doc.documentElement.clientHeight || win.innerHeight);
+    for (let box = mark.parentElement; box && box !== doc.body && left < right && top < bottom; box = box.parentElement) {
+      const cs = win.getComputedStyle(box);
+      if (cs.overflowX === "visible" && cs.overflowY === "visible") continue;
+      const b = box.getBoundingClientRect();
+      left = Math.max(left, b.left); top = Math.max(top, b.top); right = Math.min(right, b.right); bottom = Math.min(bottom, b.bottom);
+    }
+    return left < right && top < bottom;
+  };
   // When the page, or a box the mark is in, scrolls, the card follows its mark, and goes once the mark has left the window;
   // other boxes scrolling (the top bar's section index following the page) leave it be.
   let follow = 0;
@@ -400,10 +416,10 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
     follow = win.requestAnimationFrame(() => {
       follow = 0;
       if (tipFor !== el) return;
-      const mark = el.querySelector("[data-av-tip-at]") || el, r = mark.getBoundingClientRect(), vh = doc.documentElement.clientHeight || win.innerHeight;
-      if (!mark.getClientRects().length || r.bottom < 0 || r.top > vh) hideTip(); else place(el);
+      if (seen(el.querySelector<HTMLElement>("[data-av-tip-at]") || el)) place(el); else hideTip();
     });
   }, { passive: true, capture: true });
+  on(win, "resize", () => { if (tipFor) place(tipFor as HTMLElement); });
 
   // Scatter points that overlap at the plot's drawn size are set apart, every one inside the plot, and a moved point keeps
   // a thin line back to where its values put it; again whenever the plot is resized. Two layouts are tried: pushing

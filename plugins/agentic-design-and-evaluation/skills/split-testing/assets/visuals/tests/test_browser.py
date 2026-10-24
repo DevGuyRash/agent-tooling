@@ -390,13 +390,13 @@ class BrowserRenderTest(unittest.TestCase):
         self.assertEqual(result["during"], {"theme": "light", "closed": 0})
         self.assertEqual(result["after"], {"theme": None, "closed": result["closedBefore"]})
 
-    def drive(self, page: Path, *, width: int, script: str = "return null;", tab_to: str | None = None) -> dict:
+    def drive(self, page: Path, *, width: int, script: str = "return null;", tab_to: str | None = None, height: int = 900) -> dict:
         """Run browser-drive.cjs: an exact viewport and real key presses over the DevTools protocol."""
         if not NODE:
             self.skipTest("node is not on PATH")
         script_file = self.dir / "drive-script.js"
         script_file.write_text(script, encoding="utf-8")
-        command = [NODE, DRIVER, "--chrome", BROWSER, "--profile", self.dir / "drive-profile", "--url", page.as_uri(), "--width", str(width), "--script", script_file]
+        command = [NODE, DRIVER, "--chrome", BROWSER, "--profile", self.dir / "drive-profile", "--url", page.as_uri(), "--width", str(width), "--height", str(height), "--script", script_file]
         if tab_to:
             command += ["--tab-to", tab_to]
         result = subprocess.run(list(map(str, command)), capture_output=True, text=True, timeout=180)
@@ -451,23 +451,28 @@ point(document.body, "pointerout");
 point(rate, "pointerdown", "touch"); out.touch = tip();
 point(document.body, "pointerdown", "touch"); out.touchAway = tip().shown;
 point(rate, "pointerdown", "touch"); document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" })); out.escape = tip().shown;
-// The long reason's card stays on the screen, and scrolling the ledger it sits in puts a touch card away.
+// The long reason's card opens; scrolling then moves it with its mark.
 const reason = [...document.querySelectorAll(".av-ledger .av-why > span[data-av-tip]")].find(s => s.getAttribute("data-av-tip").length > 4000);
 point(reason, "pointerdown", "touch");
-const r = document.querySelector(".av-tip").getBoundingClientRect();
-out.long = { shown: tip().shown, top: r.top, bottom: r.bottom, height: innerHeight };
+out.long = { shown: tip().shown };
 // Scrolling moves the card with its mark, and once the mark has left the window the card goes with it.
 const frames = () => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
 const before = [reason.getBoundingClientRect().top, document.querySelector(".av-tip").getBoundingClientRect().top];
-window.scrollBy({ top: 40, behavior: "instant" }); await frames();
+window.scrollBy({ top: -40, behavior: "instant" }); await frames();
 const after = [reason.getBoundingClientRect().top, document.querySelector(".av-tip").getBoundingClientRect().top];
 out.follows = { shown: tip().shown, mark: after[0] - before[0], card: after[1] - before[1] };
+// A mark scrolled out of the box that clips it, though still inside the window, takes its card with it.
+const box = document.createElement("div"); box.style.cssText = "width:200px;overflow-x:auto;white-space:nowrap";
+const wide = document.createElement("div"); wide.style.cssText = "width:1200px;padding:10px 0";
+const inner = document.createElement("span"); inner.textContent = "mark"; inner.style.cssText = "display:inline-block;margin-left:60px"; inner.setAttribute("data-av-tip", "a mark in a box");
+wide.appendChild(inner); box.appendChild(wide); document.querySelector(".av-block").prepend(box);
+box.scrollIntoView({ block: "center", behavior: "instant" }); await frames(); await frames();
+point(inner, "pointerdown", "touch"); out.boxShown = tip().shown;
+box.scrollLeft = 500; await frames();
+out.afterBoxScroll = tip().shown;
 window.scrollBy({ top: -innerHeight * 3, behavior: "instant" }); await frames();
 out.afterScrollAway = tip().shown;
-// Any card, whatever it holds, fits the window: one with a value far longer than a screen.
-const big = document.createElement("span"); big.textContent = "x"; big.setAttribute("data-av-tip", JSON.stringify({ title: "A long value", rows: [["Value", "word ".repeat(2000)]], note: "note ".repeat(2000) }));
-document.querySelector(".av-block").appendChild(big); point(big, "pointerover");
-const q = document.querySelector(".av-tip").getBoundingClientRect(); out.huge = { top: q.top, bottom: q.bottom, height: innerHeight };
+
 return out;
 """
         out = self.drive(page, width=1440, script=script)["result"]
@@ -484,13 +489,39 @@ return out;
         self.assertFalse(out["touchAway"], "a touch elsewhere leaves the card up")
         self.assertFalse(out["escape"], "Escape leaves the card up")
         self.assertTrue(out["long"]["shown"])
-        self.assertGreaterEqual(out["long"]["top"], 0, "a long card starts above the screen")
-        self.assertLessEqual(out["long"]["bottom"], out["long"]["height"], "a long card runs off the bottom of the screen")
+        self.assertEqual(out["follows"]["mark"], 40, "the page did not scroll the mark")
         self.assertTrue(out["follows"]["shown"], "a small scroll puts the card away")
         self.assertLessEqual(abs(out["follows"]["card"] - out["follows"]["mark"]), 2, f"the card is stranded when its mark moves: {out['follows']}")
         self.assertFalse(out["afterScrollAway"], "the card stays after its mark has left the window")
-        self.assertGreaterEqual(out["huge"]["top"], 0, "a card longer than the window starts above it")
-        self.assertLessEqual(out["huge"]["bottom"], out["huge"]["height"], "a card longer than the window runs off its bottom")
+        self.assertTrue(out["boxShown"])
+        self.assertFalse(out["afterBoxScroll"], "the card stays after its mark has scrolled out of the box that clips it")
+
+    def test_a_card_longer_than_a_short_window_still_fits_it_whole(self) -> None:
+        # In a window 420 px high, under the top bar: a run's very long reason, and a card whose value and note each run far
+        # past a screen, whether opened by a touch or the pointer; and again after the window shrinks with a card open.
+        trial = json.loads((EXAMPLES / "fictional-trial.json").read_text(encoding="utf-8"))
+        long_run = next(r for r in trial["runs"] if r.get("passed") is True and isinstance(r.get("judge"), dict))
+        long_run["judge"]["reason"] = " ".join(["The reply names the harbour, the light and the mood, and invents nothing the photograph does not show."] * 60)
+        path = self.dir / "long-reason.json"
+        path.write_text(json.dumps(trial), encoding="utf-8")
+        page = self.build("--trial", path, "--narrative", EXAMPLES / "fictional-narrative.json")
+        script = CARD + """
+const box = () => { const t = document.querySelector(".av-tip"), r = t.getBoundingClientRect(), bar = document.querySelector(".av-topbar").getBoundingClientRect().bottom; return { shown: t.hasAttribute("data-show"), top: r.top, bottom: r.bottom, room: [bar, innerHeight], natural: t.scrollHeight }; };
+const out = {};
+const reason = [...document.querySelectorAll(".av-ledger .av-why > span[data-av-tip]")].find(s => s.getAttribute("data-av-tip").length > 4000);
+point(reason, "pointerdown", "touch"); out.reason = box();
+const big = document.createElement("span"); big.textContent = "x"; big.setAttribute("data-av-tip", JSON.stringify({ title: "A long value", rows: [["Value", "word ".repeat(2000)], ["More", "word ".repeat(2000)], ["Still more", "word ".repeat(2000)]], note: "note ".repeat(2000) }));
+document.querySelector(".av-block").appendChild(big); point(big, "pointerover"); out.huge = box();
+return out;
+"""
+        out = self.drive(page, width=1440, height=420, script=script)["result"]
+        for name in ("reason", "huge"):
+            card = out[name]
+            with self.subTest(card=name):
+                self.assertTrue(card["shown"], "the card does not open")
+                self.assertGreaterEqual(card["top"], card["room"][0], "the card starts under the top bar")
+                self.assertLessEqual(card["bottom"], card["room"][1], "the card runs off the bottom of the window")
+        self.assertGreater(out["huge"]["natural"], 420 - out["huge"]["room"][0], "the long card would have fitted anyway: this checks nothing")
 
     def test_a_per_case_panel_reads_against_an_axis_that_spans_its_tracks(self) -> None:
         comparisons = EXAMPLES / "comparisons"

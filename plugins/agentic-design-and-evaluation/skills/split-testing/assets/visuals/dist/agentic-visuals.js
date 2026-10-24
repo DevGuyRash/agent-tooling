@@ -12614,14 +12614,18 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 tip.append(part("p", "av-tip-note", card.note));
             return true;
         };
-        /** Set the card beside its mark: above it where there is room under the top bar, else below, within the window. */
+        /** Set the card beside its mark: above it where there is room under the top bar, else below, within the window, and
+         * never taller than the room under the top bar, so it can always be placed whole. */
         const place = (el) => {
             if (!tip)
                 return;
             const top = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
             const vw = doc.documentElement.clientWidth || win.innerWidth, vh = doc.documentElement.clientHeight || win.innerHeight;
-            // A row's card points at the row's own mark (data-av-tip-at), not at the middle of the row. The card's own size is
-            // read, not its box mid-animation (it opens from slightly smaller), so it lands exactly where placed.
+            tip.style.maxHeight = `${Math.max(120, vh - top - 12)}px`;
+            // Measured from the window's left edge, so its width is its own and not what room its last place left it; and by its
+            // own size, not its box mid-animation (it opens from slightly smaller), so it lands exactly where placed. A row's
+            // card points at the row's own mark (data-av-tip-at), not at the middle of the row.
+            tip.style.left = "0px";
             const r = (el.querySelector("[data-av-tip-at]") || el).getBoundingClientRect(), t = { width: tip.offsetWidth, height: tip.offsetHeight };
             const left = Math.max(8, Math.min(vw - t.width - 8, r.left + r.width / 2 - t.width / 2));
             const above = r.top - t.height - 12 >= top + 4;
@@ -12637,9 +12641,6 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 return;
             }
             tipFor = el;
-            // The card is never taller than the room under the top bar, so it can always be placed whole.
-            const top = bar ? Math.max(0, bar.getBoundingClientRect().bottom) : 0;
-            tip.style.maxHeight = `${Math.max(120, (doc.documentElement.clientHeight || win.innerHeight) - top - 12)}px`;
             tip.setAttribute("data-show", "");
             place(el);
         };
@@ -12662,6 +12663,28 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             hideTip(); });
         on(doc, "keydown", (e) => { if (e.key === "Escape")
             hideTip(); });
+        /** Whether any of a mark is in view: inside the window and every box around it that clips what overflows it. */
+        const seen = (mark) => {
+            if (!mark.getClientRects().length)
+                return false;
+            const r = mark.getBoundingClientRect();
+            let { left, top, right, bottom } = r;
+            left = Math.max(left, 0);
+            top = Math.max(top, 0);
+            right = Math.min(right, doc.documentElement.clientWidth || win.innerWidth);
+            bottom = Math.min(bottom, doc.documentElement.clientHeight || win.innerHeight);
+            for (let box = mark.parentElement; box && box !== doc.body && left < right && top < bottom; box = box.parentElement) {
+                const cs = win.getComputedStyle(box);
+                if (cs.overflowX === "visible" && cs.overflowY === "visible")
+                    continue;
+                const b = box.getBoundingClientRect();
+                left = Math.max(left, b.left);
+                top = Math.max(top, b.top);
+                right = Math.min(right, b.right);
+                bottom = Math.min(bottom, b.bottom);
+            }
+            return left < right && top < bottom;
+        };
         // When the page, or a box the mark is in, scrolls, the card follows its mark, and goes once the mark has left the window;
         // other boxes scrolling (the top bar's section index following the page) leave it be.
         let follow = 0;
@@ -12673,13 +12696,14 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                 follow = 0;
                 if (tipFor !== el)
                     return;
-                const mark = el.querySelector("[data-av-tip-at]") || el, r = mark.getBoundingClientRect(), vh = doc.documentElement.clientHeight || win.innerHeight;
-                if (!mark.getClientRects().length || r.bottom < 0 || r.top > vh)
-                    hideTip();
-                else
+                if (seen(el.querySelector("[data-av-tip-at]") || el))
                     place(el);
+                else
+                    hideTip();
             });
         }, { passive: true, capture: true });
+        on(win, "resize", () => { if (tipFor)
+            place(tipFor); });
         const R0 = 11, GAP = 24; // a point is 22px wide
         const layout = (start, W, H, seat) => {
             const at = start.map(p => ({ ...p, dx: 0, dy: 0 }));
