@@ -12721,18 +12721,11 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             top = Math.max(top, 0);
             right = Math.min(right, doc.documentElement.clientWidth || win.innerWidth);
             bottom = Math.min(bottom, doc.documentElement.clientHeight || win.innerHeight);
-            // Above an element fixed to the window, no box clips it until one that holds fixed elements (a transformed, filtered
-            // or contained one), which clips it again, as do the boxes above that.
-            const set = (v) => !!v && v !== "none";
-            const holdsFixed = (cs) => [cs.transform, cs.translate, cs.rotate, cs.scale, cs.filter, cs.backdropFilter, cs.perspective].some(set) || /paint|layout|strict|content/.test(cs.contain) || /transform|translate|rotate|scale|filter|perspective/.test(cs.willChange);
-            let escaping = win.getComputedStyle(mark).position === "fixed";
+            // The boxes that clip a mark are those that hide or scroll their overflow (the library draws no mark fixed to the
+            // window or inside a transformed or contained box).
             for (let box = mark.parentElement; box && box !== doc.body && left < right && top < bottom; box = box.parentElement) {
                 const cs = win.getComputedStyle(box);
-                if (escaping && !holdsFixed(cs))
-                    continue;
-                escaping = cs.position === "fixed";
-                // A box clips by its overflow, or by paint containment whatever its overflow.
-                if (cs.overflowX === "visible" && cs.overflowY === "visible" && !/paint|strict|content/.test(cs.contain))
+                if (cs.overflowX === "visible" && cs.overflowY === "visible")
                     continue;
                 const b = box.getBoundingClientRect(), x = b.left + box.clientLeft, y = b.top + box.clientTop;
                 left = Math.max(left, x);

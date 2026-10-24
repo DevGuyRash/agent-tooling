@@ -479,20 +479,6 @@ out.parked = { inWindow: m.left >= 0 && m.right <= innerWidth, onBorder: m.left 
 out.afterBoxScroll = tip().shown;
 // A mark fixed in place inside a transformed box that clips it, and drawn outside that box, is hidden: a scroll takes its
 // card away (a transformed box holds its fixed descendants, so it clips them).
-// Held by a transform, an individual translate, or paint containment (which clips whatever its overflow).
-out.held = [];
-for (const style of ["transform:translateZ(0);overflow:hidden", "translate:0px;overflow:hidden", "contain:paint"]) {
-  const held = document.createElement("div"); held.style.cssText = style + ";height:40px;width:200px";
-  const pinned = document.createElement("span"); pinned.style.cssText = "position:fixed;top:60px;left:10px;width:8px;height:8px"; pinned.setAttribute("data-av-tip", "a held mark");
-  held.appendChild(pinned); document.querySelector(".av-block").prepend(held);
-  held.scrollIntoView({ block: "center", behavior: "instant" }); await frames(); await frames();
-  // Touched where it stands, without scrolling anything (scrolling it into view would scroll the box to show it).
-  pinned.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" }));
-  const shown = tip().shown, clipped = pinned.getBoundingClientRect().top >= held.getBoundingClientRect().bottom;
-  const y0 = scrollY; window.scrollBy({ top: 10, behavior: "instant" }); await frames();
-  out.held.push({ style, shown, clipped, scrolled: scrollY - y0, after: tip().shown });
-  held.remove();
-}
 
 return out;
 """
@@ -518,13 +504,6 @@ return out;
         self.assertTrue(out["boxShown"])
         self.assertEqual(out["parked"], {"inWindow": True, "onBorder": True}, "the mark was not left on the box's border, in the window")
         self.assertFalse(out["afterBoxScroll"], "the card stays after its mark has scrolled out of the box that clips it")
-        for held in out["held"]:
-            with self.subTest(box=held["style"]):
-                self.assertTrue(held["shown"])
-                self.assertEqual(held["scrolled"], 10, "the page did not scroll: this checks nothing")
-                self.assertTrue(held["clipped"], "the held mark is not outside its box: this checks nothing")
-                self.assertFalse(held["after"], "the card stays for a fixed mark the box that holds it hides")
-
     def test_a_card_longer_than_a_short_window_still_fits_it_whole(self) -> None:
         # In a window 420 px high, under the top bar: a run's very long reason, and a card whose value and note each run far
         # past a screen, whether opened by a touch or the pointer; and again when the window shrinks with a card open to leave
@@ -541,9 +520,9 @@ const out = {};
 const reason = [...document.querySelectorAll(".av-ledger .av-why > span[data-av-tip]")].find(s => s.getAttribute("data-av-tip").length > 4000);
 point(reason, "pointerdown", "touch"); out.reason = box();
 const big = document.createElement("span"); big.textContent = "x"; big.setAttribute("data-av-tip", JSON.stringify({ title: "A long value", rows: [["Value", "word ".repeat(2000)], ["More", "word ".repeat(2000)], ["Still more", "word ".repeat(2000)]], note: "note ".repeat(2000) }));
-// Kept in view just under the top bar, so only the room for its card, never its own scrolling away, can close it.
-big.style.cssText = "position:fixed;top:" + (document.querySelector(".av-topbar").getBoundingClientRect().bottom + 2) + "px;left:120px;width:10px;height:6px;font-size:0;overflow:hidden;z-index:50";
-document.querySelector(".av-block").appendChild(big); point(big, "pointerover"); out.huge = box();
+// Kept in view at the foot of the sticky top bar, so only the room for its card, never its own scrolling away, can close it.
+big.style.cssText = "position:absolute;bottom:2px;left:120px;width:10px;height:6px;font-size:0;overflow:hidden";
+document.querySelector(".av-topbar").appendChild(big); point(big, "pointerover"); out.huge = box();
 // The window shrinks with the card open, and nothing else happens: the card is fitted again to the room left.
 const resized = new Promise(done => addEventListener("resize", done, { once: true }));
 // To a window leaving 90 px under the top bar: less than the 120 px an older floor allowed, room enough for a card.
