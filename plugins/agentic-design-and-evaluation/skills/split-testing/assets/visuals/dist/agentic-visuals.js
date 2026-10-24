@@ -12476,6 +12476,9 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         } };
         on(win, "scroll", queue, { passive: true });
         on(win, "resize", queue);
+        // A resize can leave the current entry outside a narrower strip though it stays current.
+        on(win, "resize", () => { const a = report.querySelector(".av-toc a[aria-current]"); if (a)
+            showLink(a); });
         if (links.length || bar)
             spy();
         // A second skip link straight to the ledger, the record of every run.
@@ -12718,9 +12721,15 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
             top = Math.max(top, 0);
             right = Math.min(right, doc.documentElement.clientWidth || win.innerWidth);
             bottom = Math.min(bottom, doc.documentElement.clientHeight || win.innerHeight);
-            // A box clips what it holds only up to an element fixed to the window, which escapes every box above it.
-            for (let box = win.getComputedStyle(mark).position === "fixed" ? null : mark.parentElement; box && box !== doc.body && left < right && top < bottom; box = win.getComputedStyle(box).position === "fixed" ? null : box.parentElement) {
+            // Above an element fixed to the window, no box clips it until one that holds fixed elements (a transformed, filtered
+            // or contained one), which clips it again, as do the boxes above that.
+            const holdsFixed = (cs) => cs.transform !== "none" || cs.filter !== "none" || cs.perspective !== "none" || /paint|layout|strict|content/.test(cs.contain) || /transform|filter|perspective/.test(cs.willChange);
+            let escaping = win.getComputedStyle(mark).position === "fixed";
+            for (let box = mark.parentElement; box && box !== doc.body && left < right && top < bottom; box = box.parentElement) {
                 const cs = win.getComputedStyle(box);
+                if (escaping && !holdsFixed(cs))
+                    continue;
+                escaping = cs.position === "fixed";
                 if (cs.overflowX === "visible" && cs.overflowY === "visible")
                     continue;
                 const b = box.getBoundingClientRect(), x = b.left + box.clientLeft, y = b.top + box.clientTop;

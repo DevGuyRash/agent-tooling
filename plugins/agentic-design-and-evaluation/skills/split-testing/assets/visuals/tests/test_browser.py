@@ -477,6 +477,16 @@ box.scrollLeft = 20 + 60 - 6; await frames();
 const m = inner.getBoundingClientRect(), b = box.getBoundingClientRect();
 out.parked = { inWindow: m.left >= 0 && m.right <= innerWidth, onBorder: m.left >= b.left - 0.5 && m.right <= b.left + 20.5 };
 out.afterBoxScroll = tip().shown;
+// A mark fixed in place inside a transformed box that clips it, and drawn outside that box, is hidden: a scroll takes its
+// card away (a transformed box holds its fixed descendants, so it clips them).
+const held = document.createElement("div"); held.style.cssText = "transform:translateZ(0);overflow:hidden;height:40px;width:200px";
+const pinned = document.createElement("span"); pinned.style.cssText = "position:fixed;top:60px;left:10px;width:8px;height:8px"; pinned.setAttribute("data-av-tip", "a held mark");
+held.appendChild(pinned); document.querySelector(".av-block").prepend(held);
+held.scrollIntoView({ block: "center", behavior: "instant" }); await frames(); await frames();
+// Touched where it stands, without scrolling anything (scrolling it into view would scroll the box to show it).
+pinned.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerType: "touch" })); out.heldShown = tip().shown; out.heldClipped = pinned.getBoundingClientRect().top >= held.getBoundingClientRect().bottom;
+const y0 = scrollY; window.scrollBy({ top: 10, behavior: "instant" }); await frames();
+out.heldScrolled = scrollY - y0; out.afterHeldScroll = tip().shown;
 
 return out;
 """
@@ -502,6 +512,10 @@ return out;
         self.assertTrue(out["boxShown"])
         self.assertEqual(out["parked"], {"inWindow": True, "onBorder": True}, "the mark was not left on the box's border, in the window")
         self.assertFalse(out["afterBoxScroll"], "the card stays after its mark has scrolled out of the box that clips it")
+        self.assertTrue(out["heldShown"])
+        self.assertEqual(out["heldScrolled"], 10, "the page did not scroll: this checks nothing")
+        self.assertTrue(out["heldClipped"], "the held mark is not outside its box: this checks nothing")
+        self.assertFalse(out["afterHeldScroll"], "the card stays for a fixed mark its transformed box hides")
 
     def test_a_card_longer_than_a_short_window_still_fits_it_whole(self) -> None:
         # In a window 420 px high, under the top bar: a run's very long reason, and a card whose value and note each run far
@@ -591,6 +605,39 @@ return { wide, narrow, indexWide, indexNarrow: await current() };
             with self.subTest(index=width):
                 self.assertEqual(out[width]["id"], out[width]["last"], "the section index does not mark the last section")
                 self.assertTrue(out[width]["inside"], "the section index's current entry is out of its view")
+
+    def test_the_section_index_keeps_its_current_entry_in_view_however_long_and_after_a_resize(self) -> None:
+        # Every index entry is far wider than a phone's strip. Scrolled to its next-to-last section at 1440 px, then the window
+        # narrows to 320 px with the same section current: the entry is in its strip, and one wider than the strip shows its
+        # beginning.
+        spec = json.loads((EXAMPLES / "showcase-spec.json").read_text(encoding="utf-8"))
+        # Every entry long, so whichever section the index counts as current, its entry is the long kind.
+        for i, section in enumerate(spec["sections"]):
+            section["label"] = f"Section {i + 1}, whose name in the index runs on well past what a phone's strip can show at once"
+        # The next-to-last section runs several screens, so it stays current as the page reflows on the resize.
+        spec["sections"][-2]["blocks"].append({"type": "text", "text": ["A paragraph that gives this section its length on any screen, so a reader scrolled into its middle stays inside it."] * 60})
+        path = self.dir / "long-label.json"
+        path.write_text(json.dumps(spec), encoding="utf-8")
+        page = self.build("--spec", path)
+        script = """
+const frames = () => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+const look = () => { const a = document.querySelector(".av-toc a[aria-current]"), t = document.querySelector(".av-toc").getBoundingClientRect(), r = a.getBoundingClientRect();
+  return { label: a.textContent, wider: r.width > t.width - 24, whole: r.left >= t.left - 1 && r.right <= t.right + 1, begins: r.left >= t.left - 1 && r.left <= t.left + 24 }; };
+const last = [...document.querySelectorAll(".av-section[id]")].slice(-2)[0];
+const middle = () => { const r = last.getBoundingClientRect(); window.scrollTo({ top: scrollY + r.top + r.height / 2, behavior: "instant" }); };
+middle(); await new Promise(done => setTimeout(done, 300));
+const wide = look();
+const resized = new Promise(done => addEventListener("resize", done, { once: true }));
+avDriveResize("320x900"); await resized; await frames(); await new Promise(done => setTimeout(done, 300));
+const before = wide.label;
+return { wide, narrow: look(), still: document.querySelector(".av-toc a[aria-current]").textContent === before };
+"""
+        out = self.drive(page, width=1440, script=script)["result"]
+        self.assertIn("runs on well past", out["narrow"]["label"], "the index's current entry is not the long one")
+        self.assertTrue(out["still"], "the last section stopped being current across the resize: this checks nothing")
+        self.assertTrue(out["narrow"]["wider"], "the long entry fits a phone's strip: this checks nothing")
+        self.assertTrue(out["narrow"]["begins"], "a current entry wider than the strip does not show its beginning after a resize")
+        self.assertTrue(out["wide"]["whole"] or (out["wide"]["wider"] and out["wide"]["begins"]), "the current entry is out of the strip")
 
     def test_a_per_case_panel_reads_against_an_axis_that_spans_its_tracks(self) -> None:
         comparisons = EXAMPLES / "comparisons"
