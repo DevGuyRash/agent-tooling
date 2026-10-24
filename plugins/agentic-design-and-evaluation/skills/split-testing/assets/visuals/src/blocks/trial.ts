@@ -680,7 +680,7 @@ export function ledger(input: LedgerInput, ctx: RenderContext): string {
     if (outcomeOf(r) === "pass") { const why = String(r.judge?.reason || ""); return `<span${why ? tipAttr({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Judge's reason", note: why.replace(/`/g, ""), rows: why.length > 600 ? [["Whole text", "select the run"]] : [] }) : ""}>${inline(clip(why, 240))}</span>`; }
     const chips = c.checks.slice(0, 3).map(n => `<span class="av-why-chip">✕ ${esc(n)}</span>`).join("") + (c.checks.length > 3 ? `<span class="av-why-chip av-why-chip--more">+${c.checks.length - 3}</span>` : "");
     const text = c.judge !== null ? `${c.judge ? `judge: ${c.judge}` : "judge said fail"}` : c.checks.length ? "" : c.text || "no recorded cause";
-    return `<span${tipAttr({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Why it failed", rows: [["Failed checks", c.checks.join(", ")], ["Whole text", text.length > 600 ? "select the run" : ""]], note: text.replace(/`/g, "") || undefined })}>${chips}${text ? `${chips ? " " : ""}${inline(clip(text, 240))}` : ""}</span>`;
+    return `<span${tipAttr({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Why it failed", rows: [["Failed checks", c.checks.join(", ")], ["Whole text", text.length > 600 || c.checks.join(", ").length > 240 ? "select the run" : ""]], note: text.replace(/`/g, "") || undefined })}>${chips}${text ? `${chips ? " " : ""}${inline(clip(text, 240))}` : ""}</span>`;
   };
   const rows = data.runs.map((r, i) => {
     const o = outcomeOf(r), tk = tokens ? num(tokens.get(r)) : null, sec = num(r.seconds);

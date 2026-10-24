@@ -384,18 +384,28 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
   on(doc, "keydown", (e: KeyboardEvent) => { if (e.key === "Escape") hideTip(); });
   on(doc, "scroll", hideTip, { passive: true, capture: true });
 
-  // Scatter points that overlap at the plot's drawn size are pushed apart, each by as little as frees it (a few rounds of
-  // relaxation), and a moved point keeps a thin line back to where its values put it; again whenever the plot is resized.
+  // Scatter points that overlap at the plot's drawn size are set apart, each as little as frees it, every one inside the
+  // plot, and a moved point keeps a thin line back to where its values put it; again whenever the plot is resized.
+  // Points on one spot start on a sunflower spiral about it (pulled in from the edges until it fits), which packs any
+  // number evenly; rounds of pairwise relaxation then free whatever still overlaps.
   const spread = (plot: HTMLElement) => {
     const pts = all<HTMLElement>(".av-cg-pt", plot);
     for (const p of pts) for (const v of ["--dx", "--dy", "--len", "--ang"]) p.style.removeProperty(v);
-    if (!plot.getBoundingClientRect().width) return; // hidden: spread again when shown
-    const box = plot.getBoundingClientRect(), r0 = 11; // a point is 22px wide
-    const at = pts.map(p => { const r = p.getBoundingClientRect(); return { x: r.left, y: r.top, dx: 0, dy: 0 }; });
-    const gap = 24;
-    // Each round also holds every point inside the plot, so none is pushed past its edge.
-    const inside = (a: { x: number; y: number; dx: number; dy: number }) => { a.dx = Math.min(Math.max(a.dx, box.left + r0 - a.x), box.right - r0 - a.x); a.dy = Math.min(Math.max(a.dy, box.top + r0 - a.y), box.bottom - r0 - a.y); };
-    for (let round = 0; round < 40; round++) {
+    const box = plot.getBoundingClientRect();
+    if (!box.width) return; // hidden: spread again when shown
+    const r0 = 11, gap = 24, W = box.width, H = box.height; // a point is 22px wide
+    const at = pts.map(p => { const r = p.getBoundingClientRect(); return { x: r.left - box.left, y: r.top - box.top, dx: 0, dy: 0 }; });
+    const inside = (a: typeof at[number]) => { a.dx = Math.min(Math.max(a.dx, r0 - a.x), W - r0 - a.x); a.dy = Math.min(Math.max(a.dy, r0 - a.y), H - r0 - a.y); };
+    const seen = new Set<number>();
+    at.forEach((a, i) => {
+      if (seen.has(i)) return;
+      const same = at.map((_, j) => j).filter(j => !seen.has(j) && Math.hypot(at[j].x - a.x, at[j].y - a.y) < 2);
+      const R = 13.5 * Math.sqrt(same.length - 1) + r0, fit = (v: number, w: number) => w >= 2 * R ? Math.min(Math.max(v, R), w - R) : w / 2;
+      const cx = same.length > 1 ? fit(a.x, W) - a.x : 0, cy = same.length > 1 ? fit(a.y, H) - a.y : 0;
+      same.forEach((j, k) => { seen.add(j); const r = 13.5 * Math.sqrt(k), t = k * 2.39996; at[j].dx = cx + r * Math.cos(t); at[j].dy = cy + r * Math.sin(t); });
+    });
+    at.forEach(inside);
+    for (let round = 0; round < 400; round++) {
       let moved = false;
       for (let i = 0; i < at.length; i++) for (let j = i + 1; j < at.length; j++) {
         const a = at[i], b = at[j];
@@ -403,7 +413,7 @@ export function enhance(root: HTMLElement, ctx?: RenderContext, options: { hashB
         const d = Math.hypot(ux, uy);
         if (d >= gap - .01) continue;
         if (d < .01) { const t = (i + j) * 2.39996; ux = Math.cos(t); uy = Math.sin(t); } else { ux /= d; uy /= d; }
-        const push = (gap - d) / 2;
+        const push = (gap - d) / 2 + .1;
         a.dx += ux * push; a.dy += uy * push; b.dx -= ux * push; b.dy -= uy * push; inside(a); inside(b); moved = true;
       }
       if (!moved) break;

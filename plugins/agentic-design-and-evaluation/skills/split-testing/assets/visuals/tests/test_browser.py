@@ -128,6 +128,20 @@ for (const sel of [".av-cx-lanes", ".av-contrast-grid", ".av-ladder-grid", ".av-
   for (const c of document.querySelectorAll(sel)) if (shown(c) && [...c.querySelectorAll(".av-ticks .av-tick")].filter(shown).length < 2 && !c.querySelector(".av-cg-yticks span")) out.noAxis.push(sel);
 for (const m of document.querySelectorAll(".av-pt, .av-cx-pt, .av-dot, .av-run, .av-cg-dot, .av-duel-seg, .av-bar-seg, .av-cmp-lk-seg, .av-svg-hit, .av-cs-dot, .av-cmp-bub, .av-cmp-dot, .av-cmp-med, .av-rc-mark, .av-share, .av-contrast-pt"))
   if (shown(m) && !m.closest("[data-av-tip]")) out.noCard.push(String(m.className).split(" ")[0] + " in " + String(m.parentElement.className).split(" ")[0]);
+// A mark that stands for one thing (a run, an observation, a segment, a point) has a card of its own, and a pointer at its
+// middle finds that card rather than a summary's laid over it: checked for the first marks of each kind.
+const OWN = ".av-dot, .av-run, .av-cg-dot, .av-duel-seg, .av-bar-seg, .av-cmp-lk-seg, .av-svg-hit, .av-cs-dot, .av-cmp-bub, .av-cmp-dot, .av-cmp-med, .av-rc-mark";
+const own = m => m.matches(".av-cg-dot") ? m.parentElement : m;
+const kinds = new Map();
+for (const m of document.querySelectorAll(OWN)) { const k = String(m.className.baseVal ?? m.className).split(" ")[0]; if (!kinds.has(k)) kinds.set(k, []); if (kinds.get(k).length < 12 && shown(m)) kinds.get(k).push(m); }
+for (const [k, marks] of kinds) for (const m of marks) {
+  if (!own(m).hasAttribute("data-av-tip")) { out.noCard.push(k + " has no card of its own"); break; }
+  m.scrollIntoView({ block: "center", behavior: "instant" });
+  // Somewhere across the mark (its middle, or a little to either side or above or below it) a pointer finds it.
+  const r = m.getBoundingClientRect(), probes = [[.5, .5], [.2, .5], [.8, .5], [.5, .2], [.5, .8]];
+  const finds = probes.map(([fx, fy]) => document.elementFromPoint(r.left + r.width * fx, r.top + r.height * fy)?.closest("[data-av-tip]"));
+  if (!finds.some(f => f && (f === own(m) || f.matches(OWN.split(", ").map(s => s + ", .av-cg-pt").join(", "))))) { const f = finds[0]; out.noCard.push(k + " is covered by " + (f ? String(f.className.baseVal ?? f.className).split(" ")[0] : "nothing")); break; }
+}
 for (const k of ["cut", "broken", "noAxis", "noCard"]) out[k] = [...new Set(out[k])].slice(0, 8);
 return out;
 """
@@ -441,6 +455,10 @@ const r = document.querySelector(".av-tip").getBoundingClientRect();
 out.long = { shown: tip().shown, top: r.top, bottom: r.bottom, height: innerHeight };
 reason.closest(".av-scroll-x").dispatchEvent(new Event("scroll"));
 out.afterInnerScroll = tip().shown;
+// Any card, whatever it holds, fits the window: one with a value far longer than a screen.
+const big = document.createElement("span"); big.textContent = "x"; big.setAttribute("data-av-tip", JSON.stringify({ title: "A long value", rows: [["Value", "word ".repeat(2000)]], note: "note ".repeat(2000) }));
+document.querySelector(".av-block").appendChild(big); point(big, "pointerover");
+const q = document.querySelector(".av-tip").getBoundingClientRect(); out.huge = { top: q.top, bottom: q.bottom, height: innerHeight };
 return out;
 """
         out = self.drive(page, width=1440, script=script)["result"]
@@ -460,19 +478,52 @@ return out;
         self.assertGreaterEqual(out["long"]["top"], 0, "a long card starts above the screen")
         self.assertLessEqual(out["long"]["bottom"], out["long"]["height"], "a long card runs off the bottom of the screen")
         self.assertFalse(out["afterInnerScroll"], "scrolling the list under a touch card leaves it stranded")
+        self.assertGreaterEqual(out["huge"]["top"], 0, "a card longer than the window starts above it")
+        self.assertLessEqual(out["huge"]["bottom"], out["huge"]["height"], "a card longer than the window runs off its bottom")
+
+    def test_a_per_case_panel_reads_against_an_axis_that_spans_its_tracks(self) -> None:
+        comparisons = EXAMPLES / "comparisons"
+        page = self.build("--data", comparisons / "research-directions.json", "--narrative", comparisons / "research-directions-narrative.json")
+        script = """
+return [...document.querySelectorAll(".av-cmp-panel")].filter(p => p.getBoundingClientRect().width).map(p => {
+  const ticks = p.querySelector(".av-cmp-mini--axis .av-ticks").getBoundingClientRect();
+  return [...p.querySelectorAll(".av-cmp-mini:not(.av-cmp-mini--axis) > :nth-child(3)")].map(t => { const r = t.getBoundingClientRect(); return [Math.round(r.left - ticks.left), Math.round(r.right - ticks.right)]; });
+});
+"""
+        for width in (390, 1440):
+            panels = self.drive(page, width=width, script=script)["result"]
+            self.assertTrue(panels, "no per-case panel drawn")
+            for rows in panels:
+                for left, right in rows:
+                    with self.subTest(width=width):
+                        self.assertLessEqual(abs(left), 1, "a panel's axis starts away from its tracks")
+                        self.assertLessEqual(abs(right), 1, "a panel's axis ends away from its tracks")
 
     def test_an_observation_shows_its_own_value_and_a_trend_is_not_called_a_pass_rate(self) -> None:
         page = self.build("--csv", EXAMPLES / "comparisons/commute.csv", "--narrative", EXAMPLES / "comparisons/commute-narrative.json")
         script = CARD + """
-const dot = document.querySelector(".av-cmp-track .av-cmp-dot[data-av-tip]");
-point(dot, "pointerover");
-const card = tip(), value = document.querySelector(".av-tip-rows dd")?.textContent || "";
-const track = dot.closest(".av-cmp-track"), at = parseFloat(dot.style.getPropertyValue("--x"));
-return { card, value, at };
+// Each observation, pointed at where it is drawn, shows its own card, whose value sits where the dot is on the axis.
+const grid = document.querySelector(".av-cmp-grid"), ticks = [...grid.querySelectorAll(".av-cmp-axis .av-tick")].map(t => [parseFloat(t.textContent), t.getBoundingClientRect()]).filter(t => Number.isFinite(t[0]));
+const track = grid.querySelector(".av-cmp-track"), tb = track.getBoundingClientRect();
+const [a, b] = [ticks[0], ticks[ticks.length - 1]];
+// A tick sits at its label's left edge, middle or right edge as the axis turns its edge labels inward.
+const at = t => t[1].left + t[1].width * (t === ticks[0] ? 0 : t === ticks[ticks.length - 1] ? 1 : .5);
+const value = x => a[0] + (x - at(a)) / (at(b) - at(a)) * (b[0] - a[0]);
+const out = [];
+for (const dot of grid.querySelectorAll(".av-cmp-track .av-cmp-dot")) {
+  dot.scrollIntoView({ block: "center", behavior: "instant" });
+  const r = dot.getBoundingClientRect(), hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+  const target = hit.closest("[data-av-tip]"); target.dispatchEvent(new PointerEvent("pointerover", { bubbles: true, pointerType: "mouse" }));
+  const card = tip(), said = parseFloat(document.querySelector(".av-tip-rows dd")?.textContent || "");
+  out.push({ title: card.title, said, drawn: Math.round(value(r.left + r.width / 2) * 100) / 100, span: b[0] - a[0] });
+}
+return out;
 """
-        out = self.drive(page, width=1440, script=script)["result"]
-        self.assertEqual(out["card"]["title"], "One observation", "hovering an observation shows the summary's card instead of its own")
-        self.assertRegex(out["value"], r"\d", "an observation's card gives no value")
+        dots = self.drive(page, width=1440, script=script)["result"]
+        self.assertTrue(dots, "no observation drawn")
+        for d in dots:
+            self.assertEqual(d["title"], "One observation", "pointing at an observation shows another card")
+            self.assertLessEqual(abs(d["said"] - d["drawn"]), d["span"] * 0.01, f"an observation's card says {d['said']} where it is drawn at {d['drawn']}")
         general = self.build("--spec", EXAMPLES / "showcase-spec.json")
         titles = self.drive(general, width=1440, script='return [...document.querySelectorAll(".av-svg-axis-title")].map(t => t.textContent);')["result"]
         self.assertTrue(titles, "the trend draws no axis title")

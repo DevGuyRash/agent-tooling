@@ -3419,7 +3419,7 @@ define("blocks/trial", ["require", "exports", "core", "failure", "stats", "trial
             }
             const chips = c.checks.slice(0, 3).map(n => `<span class="av-why-chip">✕ ${(0, core_8.esc)(n)}</span>`).join("") + (c.checks.length > 3 ? `<span class="av-why-chip av-why-chip--more">+${c.checks.length - 3}</span>` : "");
             const text = c.judge !== null ? `${c.judge ? `judge: ${c.judge}` : "judge said fail"}` : c.checks.length ? "" : c.text || "no recorded cause";
-            return `<span${(0, core_8.tipAttr)({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Why it failed", rows: [["Failed checks", c.checks.join(", ")], ["Whole text", text.length > 600 ? "select the run" : ""]], note: text.replace(/`/g, "") || undefined })}>${chips}${text ? `${chips ? " " : ""}${(0, core_8.inline)(clip(text, 240))}` : ""}</span>`;
+            return `<span${(0, core_8.tipAttr)({ over: `${caseLabel(ctx, r.scenario)} · ${ctx.arms.label(r.arm)}`, title: "Why it failed", rows: [["Failed checks", c.checks.join(", ")], ["Whole text", text.length > 600 || c.checks.join(", ").length > 240 ? "select the run" : ""]], note: text.replace(/`/g, "") || undefined })}>${chips}${text ? `${chips ? " " : ""}${(0, core_8.inline)(clip(text, 240))}` : ""}</span>`;
         };
         const rows = data.runs.map((r, i) => {
             const o = (0, trial_model_4.outcomeOf)(r), tk = tokens ? (0, core_8.num)(tokens.get(r)) : null, sec = (0, core_8.num)(r.seconds);
@@ -9610,7 +9610,7 @@ ${s.rows.length ? `<details class="av-rx-exact"><summary>Exact numbers</summary>
             const px = x(p.g.costChange), py = y(p.g.delta), m = p.s.measure;
             const ci = p.g.interval ? `<span class="av-whisker av-whisker--v av-cg-ci" style="--x:${(0, frame_9.pos)(px)};--a:${(0, frame_9.pos)(y(p.g.interval[1]))};--b:${(0, frame_9.pos)(y(p.g.interval[0]))};--v:${p.s.arms.color(p.g.arm)}"></span>` : "";
             const card = (0, core_22.tipAttr)({ over: `${p.s.short}${p.g.lane ? ` · ${p.g.lane}` : ""}`, title: p.s.arms.label(p.g.arm), mark: p.s.arms.mark(p.g.arm), rows: [["Against", p.s.arms.label(p.g.base)], ["Pass rate change", changeText(m, p.g.delta)], ["Its 95% interval", gainIntervalText(m, p.g)], ["Cost per run change", tick(p.g.costChange)], ["Report's decision", p.s.stamp]], note: "Open the report to read it in full." });
-            return `${ci}<a class="av-cg-pt" href="${open(p.s.id)}" style="--x:${(0, frame_9.pos)(px)};--y:${(0, frame_9.pos)(py)};--v:${p.s.arms.color(p.g.arm)}"${card}><span class="av-cg-dot">${i + 1}</span><span class="av-sr"> ${(0, core_22.esc)(p.s.arms.label(p.g.arm))} in ${(0, core_22.esc)(p.s.short)}</span></a>`;
+            return `${ci}<a class="av-cg-pt" href="${open(p.s.id)}" style="--x:${(0, frame_9.pos)(px)};--y:${(0, frame_9.pos)(py)};--v:${p.s.arms.color(p.g.arm)}"${card}><span class="av-cg-dot" data-av-tip-at>${i + 1}</span><span class="av-sr"> ${(0, core_22.esc)(p.s.arms.label(p.g.arm))} in ${(0, core_22.esc)(p.s.short)}</span></a>`;
         }).join("");
         const quads = [["More passed, cost less", "tl"], ["More passed, cost more", "tr"], ["Fewer passed, cost less", "bl"], ["Fewer passed, cost more", "br"]].map(([t, c]) => `<span class="av-cg-quad av-cg-quad--${c}" aria-hidden="true">${t}</span>`).join("");
         const grid = xs.map(v => `<span class="av-cg-vline${v === 0 ? " av-cg-zero" : ""}" style="--x:${(0, frame_9.pos)(x(v))}"></span>`).join("") + ys.map(v => `<span class="av-cg-hline${v === 0 ? " av-cg-zero" : ""}" style="--y:${(0, frame_9.pos)(y(v))}"></span>`).join("");
@@ -12653,21 +12653,32 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
         on(doc, "keydown", (e) => { if (e.key === "Escape")
             hideTip(); });
         on(doc, "scroll", hideTip, { passive: true, capture: true });
-        // Scatter points that overlap at the plot's drawn size are pushed apart, each by as little as frees it (a few rounds of
-        // relaxation), and a moved point keeps a thin line back to where its values put it; again whenever the plot is resized.
+        // Scatter points that overlap at the plot's drawn size are set apart, each as little as frees it, every one inside the
+        // plot, and a moved point keeps a thin line back to where its values put it; again whenever the plot is resized.
+        // Points on one spot start on a sunflower spiral about it (pulled in from the edges until it fits), which packs any
+        // number evenly; rounds of pairwise relaxation then free whatever still overlaps.
         const spread = (plot) => {
             const pts = all(".av-cg-pt", plot);
             for (const p of pts)
                 for (const v of ["--dx", "--dy", "--len", "--ang"])
                     p.style.removeProperty(v);
-            if (!plot.getBoundingClientRect().width)
+            const box = plot.getBoundingClientRect();
+            if (!box.width)
                 return; // hidden: spread again when shown
-            const box = plot.getBoundingClientRect(), r0 = 11; // a point is 22px wide
-            const at = pts.map(p => { const r = p.getBoundingClientRect(); return { x: r.left, y: r.top, dx: 0, dy: 0 }; });
-            const gap = 24;
-            // Each round also holds every point inside the plot, so none is pushed past its edge.
-            const inside = (a) => { a.dx = Math.min(Math.max(a.dx, box.left + r0 - a.x), box.right - r0 - a.x); a.dy = Math.min(Math.max(a.dy, box.top + r0 - a.y), box.bottom - r0 - a.y); };
-            for (let round = 0; round < 40; round++) {
+            const r0 = 11, gap = 24, W = box.width, H = box.height; // a point is 22px wide
+            const at = pts.map(p => { const r = p.getBoundingClientRect(); return { x: r.left - box.left, y: r.top - box.top, dx: 0, dy: 0 }; });
+            const inside = (a) => { a.dx = Math.min(Math.max(a.dx, r0 - a.x), W - r0 - a.x); a.dy = Math.min(Math.max(a.dy, r0 - a.y), H - r0 - a.y); };
+            const seen = new Set();
+            at.forEach((a, i) => {
+                if (seen.has(i))
+                    return;
+                const same = at.map((_, j) => j).filter(j => !seen.has(j) && Math.hypot(at[j].x - a.x, at[j].y - a.y) < 2);
+                const R = 13.5 * Math.sqrt(same.length - 1) + r0, fit = (v, w) => w >= 2 * R ? Math.min(Math.max(v, R), w - R) : w / 2;
+                const cx = same.length > 1 ? fit(a.x, W) - a.x : 0, cy = same.length > 1 ? fit(a.y, H) - a.y : 0;
+                same.forEach((j, k) => { seen.add(j); const r = 13.5 * Math.sqrt(k), t = k * 2.39996; at[j].dx = cx + r * Math.cos(t); at[j].dy = cy + r * Math.sin(t); });
+            });
+            at.forEach(inside);
+            for (let round = 0; round < 400; round++) {
                 let moved = false;
                 for (let i = 0; i < at.length; i++)
                     for (let j = i + 1; j < at.length; j++) {
@@ -12685,7 +12696,7 @@ define("enhance", ["require", "exports", "core", "failure", "mermaid", "model", 
                             ux /= d;
                             uy /= d;
                         }
-                        const push = (gap - d) / 2;
+                        const push = (gap - d) / 2 + .1;
                         a.dx += ux * push;
                         a.dy += uy * push;
                         b.dx -= ux * push;

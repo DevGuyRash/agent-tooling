@@ -323,6 +323,34 @@ return { plots, card, who, report, points: dots.length, links: dots.filter(d => 
         self.assertTrue(out["pointCard"]["shown"] and out["pointCard"]["rows"], "a change's card is empty")
         self.assertNotIn("Cost against gain", out["pointCard"]["title"], "a change shows the chart's caption, not its own numbers")
 
+    def test_scatter_points_on_one_spot_stay_apart_inside_the_plot_and_their_cards_follow_them(self) -> None:
+        # Ten reports of the same trial put ten changes on each of three spots, on a phone and a wide screen.
+        path = write_collection(self.dir, costs=True)
+        collection = json.loads(path.read_text(encoding="utf-8"))
+        base = collection["members"][0]
+        collection["members"] += [{**base, "id": f"copy-{i}"} for i in range(9)]
+        path.write_text(json.dumps(collection), encoding="utf-8")
+        page = self.build("--collection", path)
+        script = TB.CARD + """
+const plot = document.querySelector(".av-cg-plot"), box = plot.getBoundingClientRect();
+const dots = [...plot.querySelectorAll(".av-cg-dot")].map(d => { const r = d.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, w: r.width, d }; });
+const overlaps = dots.filter((a, i) => dots.some((b, j) => j > i && Math.hypot(a.x - b.x, a.y - b.y) < a.w - 0.5)).length;
+const outside = dots.filter(a => a.x - a.w / 2 < box.left - 0.5 || a.x + a.w / 2 > box.right + 0.5 || a.y - a.w / 2 < box.top - 0.5 || a.y + a.w / 2 > box.bottom + 0.5).length;
+// The card of the point moved farthest centres on that point, not on the spot its values put it.
+const far = dots.reduce((m, a) => Math.hypot(parseFloat(a.d.parentElement.style.getPropertyValue("--dx")) || 0, parseFloat(a.d.parentElement.style.getPropertyValue("--dy")) || 0) > Math.hypot(parseFloat(m.d.parentElement.style.getPropertyValue("--dx")) || 0, parseFloat(m.d.parentElement.style.getPropertyValue("--dy")) || 0) ? a : m);
+far.d.scrollIntoView({ block: "center", behavior: "instant" });
+const r = far.d.getBoundingClientRect(); point(far.d.parentElement, "pointerover");
+const t = document.querySelector(".av-tip").getBoundingClientRect(), clamped = t.left <= 8.5 || t.right >= document.documentElement.clientWidth - 8.5;
+return { n: dots.length, overlaps, outside, cardOff: clamped ? 0 : Math.abs((t.left + t.right) / 2 - (r.left + r.right) / 2) };
+"""
+        for width in (390, 1440):
+            with self.subTest(width=width):
+                out = self.drive(page, width=width, script=script)["result"]
+                self.assertGreaterEqual(out["n"], 30, "the fixture draws fewer changes than it should")
+                self.assertEqual(out["overlaps"], 0, "changes on one spot are drawn over each other")
+                self.assertEqual(out["outside"], 0, "a change is pushed out of the plot")
+                self.assertLessEqual(out["cardOff"], 3, "a moved change's card points at where it was, not where it is")
+
     def test_the_reader_opens_compares_and_returns(self) -> None:
         page = self.build("--collection", write_collection(self.dir))
         out = self.drive(page, width=1280, script=READER)["result"]

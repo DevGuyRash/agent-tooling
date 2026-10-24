@@ -132,13 +132,13 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 .97r
 .av-tip { position: fixed; left: 0; top: 0; z-index: 40; max-width: min(22rem, calc(100vw - 16px)); padding: 7px 11px; border-radius: 10px; background: color-mix(in srgb, var(--av-raised) 88%, transparent); -webkit-backdrop-filter: blur(16px) saturate(1.5); backdrop-filter: blur(16px) saturate(1.5); color: var(--av-ink); border: 1px solid color-mix(in srgb, var(--av-line-strong) 80%, transparent); box-shadow: 0 22px 44px -22px rgba(0,0,0,.6), 0 6px 14px -8px rgba(0,0,0,.35); font: 500 .78rem/1.45 var(--av-font-text); pointer-events: none; opacity: 0; visibility: hidden; transform: translateY(4px) scale(.985); transform-origin: 50% 100%; transition: opacity .1s, transform .12s cubic-bezier(.2,.8,.2,1), visibility 0s .1s; overflow-wrap: anywhere; }
 .av-tip[data-side="bottom"] { transform-origin: 50% 0; transform: translateY(-4px) scale(.985); }
 .av-tip[data-show] { opacity: 1; visibility: visible; transform: none; transition: opacity .1s, transform .12s cubic-bezier(.2,.8,.2,1); }
-.av-tip[data-rich] { min-width: min(15rem, calc(100vw - 16px)); padding: 10px 13px 11px 14px; }
+.av-tip[data-rich] { min-width: min(15rem, calc(100vw - 16px)); max-height: calc(100vh - 16px); overflow: hidden; padding: 10px 13px 11px 14px; }
 .av-tip[data-rich]::before { content: ""; position: absolute; left: -1px; top: 12px; bottom: 12px; width: 3px; border-radius: 0 3px 3px 0; background: var(--c, var(--av-accent)); }
 .av-tip-over { font: 600 .64rem/1.35 var(--av-font-text); letter-spacing: .1em; text-transform: uppercase; color: var(--av-ink-3); margin-bottom: 5px !important; }
 .av-tip-head { display: flex; align-items: center; gap: 8px; font: 600 .9rem/1.3 var(--av-font-text); letter-spacing: -.005em; }
 .av-tip-rows { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 16px; margin: 9px 0 0 !important; padding-top: 9px; border-top: 1px solid var(--av-line); }
 .av-tip-rows dt { color: var(--av-ink-3); white-space: nowrap; }
-.av-tip-rows dd { margin: 0; text-align: right; font: 600 .78rem/1.45 var(--av-font-text); font-variant-numeric: tabular-nums; color: var(--av-ink); }
+.av-tip-rows dd { margin: 0; display: -webkit-box; -webkit-line-clamp: 6; -webkit-box-orient: vertical; overflow: hidden; text-align: right; font: 600 .78rem/1.45 var(--av-font-text); font-variant-numeric: tabular-nums; color: var(--av-ink); }
 .av-tip-note { margin-top: 8px !important; color: var(--av-ink-2); font-size: .74rem; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 12; -webkit-box-orient: vertical; overflow: hidden; }
 @media (prefers-reduced-motion: reduce) { .av-tip, .av-tip[data-show] { transition: none; transform: none; } }
 /* Axes: every track reads against tick marks with labels (ticksHtml in core.ts) and faint gridlines at the same
@@ -1404,7 +1404,12 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-cmp-none { position: absolute; inset: 0; display: grid; place-items: center; font-size: .72rem; font-style: italic; color: var(--av-ink-3); white-space: nowrap; overflow: hidden; }
 .av-cmp-dot { position: absolute; left: var(--x); top: var(--y); width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; border-radius: 50%; background: color-mix(in srgb, var(--c) 50%, transparent); }
 /* An observation is small to draw but not to point at: its hover area reaches a few pixels past it. */
-.av-cmp-dot::after { content: ""; position: absolute; inset: -4px; }
+.av-cmp-dot::after { content: ""; position: absolute; inset: -3px; }
+.av-cmp-track .av-cmp-med { z-index: 2; } .av-cmp-track .av-cmp-dot { z-index: 4; }
+/* The mean's point lets the pointer through to a rank, median or observation drawn under it; the track around it
+   shows the mean's own card everywhere else. */
+.av-cmp-track .av-pt { pointer-events: none; }
+.av-cmp-track .av-pt { z-index: 3; }
 .av-cmp-dot:hover { background: var(--c); }
 .av-cmp-mini--axis { padding: 0; }
 .av-cmp-mini--axis .av-ticks { height: 1.2rem; }
@@ -1445,16 +1450,17 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-cmp-panel figcaption { margin-bottom: 4px; }
 .av-cmp-panel-group { display: block; font: 600 .62rem/1.3 var(--av-font-text); letter-spacing: .08em; text-transform: uppercase; color: var(--av-ink-3); }
 .av-cmp-panel-name { font-weight: 600; font-size: .86rem; overflow-wrap: anywhere; }
-.av-cmp-mini { display: grid; grid-template-columns: auto minmax(0, 5.5rem) minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 3px 0; }
+/* Every row of a panel, its axis row included, has the same column widths, so the axis lines up with the tracks. */
+.av-cmp-mini { display: grid; grid-template-columns: 14px minmax(0, 5.5rem) minmax(0, 1fr) 4.6rem; gap: 8px; align-items: center; padding: 3px 0; }
 .av-cmp-mini-name { min-width: 0; font-size: .76rem; line-height: 1.3; color: var(--av-ink-2); overflow-wrap: break-word; }
 /* In a narrow panel each name takes its own line above its track, so no name is broken to fit beside it. */
 .av-cmp-panel { container: av-cmp-panel / inline-size; }
 @container av-cmp-panel (max-width: 22rem) {
-  .av-cmp-mini { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "g n n" "t t v"; row-gap: 2px; }
+  .av-cmp-mini { grid-template-columns: 14px minmax(0, 1fr) 4.6rem; grid-template-areas: "g n n" "t t v"; row-gap: 2px; }
   .av-cmp-mini > :nth-child(1) { grid-area: g; } .av-cmp-mini > :nth-child(2) { grid-area: n; }
   .av-cmp-mini > :nth-child(3) { grid-area: t; } .av-cmp-mini > :nth-child(4) { grid-area: v; }
 }
-.av-cmp-mini-v { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 3.4rem; font: 600 .74rem var(--av-font-mono); color: var(--av-ink); }
+.av-cmp-mini-v { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; overflow-wrap: anywhere; font: 600 .74rem var(--av-font-mono); color: var(--av-ink); }
 .av-cmp-mini-inv .av-mark { transform: scale(.8); }
 
 /* ----------------------------------------------------------------- differences */

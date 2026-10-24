@@ -50,7 +50,12 @@
 .av-cmp-none { position: absolute; inset: 0; display: grid; place-items: center; font-size: .72rem; font-style: italic; color: var(--av-ink-3); white-space: nowrap; overflow: hidden; }
 .av-cmp-dot { position: absolute; left: var(--x); top: var(--y); width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px; border-radius: 50%; background: color-mix(in srgb, var(--c) 50%, transparent); }
 /* An observation is small to draw but not to point at: its hover area reaches a few pixels past it. */
-.av-cmp-dot::after { content: ""; position: absolute; inset: -4px; }
+.av-cmp-dot::after { content: ""; position: absolute; inset: -3px; }
+.av-cmp-track .av-cmp-med { z-index: 2; } .av-cmp-track .av-cmp-dot { z-index: 4; }
+/* The mean's point lets the pointer through to a rank, median or observation drawn under it; the track around it
+   shows the mean's own card everywhere else. */
+.av-cmp-track .av-pt { pointer-events: none; }
+.av-cmp-track .av-pt { z-index: 3; }
 .av-cmp-dot:hover { background: var(--c); }
 .av-cmp-mini--axis { padding: 0; }
 .av-cmp-mini--axis .av-ticks { height: 1.2rem; }
@@ -91,16 +96,17 @@
 .av-cmp-panel figcaption { margin-bottom: 4px; }
 .av-cmp-panel-group { display: block; font: 600 .62rem/1.3 var(--av-font-text); letter-spacing: .08em; text-transform: uppercase; color: var(--av-ink-3); }
 .av-cmp-panel-name { font-weight: 600; font-size: .86rem; overflow-wrap: anywhere; }
-.av-cmp-mini { display: grid; grid-template-columns: auto minmax(0, 5.5rem) minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 3px 0; }
+/* Every row of a panel, its axis row included, has the same column widths, so the axis lines up with the tracks. */
+.av-cmp-mini { display: grid; grid-template-columns: 14px minmax(0, 5.5rem) minmax(0, 1fr) 4.6rem; gap: 8px; align-items: center; padding: 3px 0; }
 .av-cmp-mini-name { min-width: 0; font-size: .76rem; line-height: 1.3; color: var(--av-ink-2); overflow-wrap: break-word; }
 /* In a narrow panel each name takes its own line above its track, so no name is broken to fit beside it. */
 .av-cmp-panel { container: av-cmp-panel / inline-size; }
 @container av-cmp-panel (max-width: 22rem) {
-  .av-cmp-mini { grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "g n n" "t t v"; row-gap: 2px; }
+  .av-cmp-mini { grid-template-columns: 14px minmax(0, 1fr) 4.6rem; grid-template-areas: "g n n" "t t v"; row-gap: 2px; }
   .av-cmp-mini > :nth-child(1) { grid-area: g; } .av-cmp-mini > :nth-child(2) { grid-area: n; }
   .av-cmp-mini > :nth-child(3) { grid-area: t; } .av-cmp-mini > :nth-child(4) { grid-area: v; }
 }
-.av-cmp-mini-v { display: inline-flex; align-items: center; justify-content: flex-end; gap: 4px; min-width: 3.4rem; font: 600 .74rem var(--av-font-mono); color: var(--av-ink); }
+.av-cmp-mini-v { display: inline-flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; min-width: 0; overflow-wrap: anywhere; font: 600 .74rem var(--av-font-mono); color: var(--av-ink); }
 .av-cmp-mini-inv .av-mark { transform: scale(.8); }
 
 /* ----------------------------------------------------------------- differences */
