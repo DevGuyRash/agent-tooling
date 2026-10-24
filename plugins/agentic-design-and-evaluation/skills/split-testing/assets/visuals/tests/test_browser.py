@@ -514,6 +514,8 @@ class BrowserRenderTest(unittest.TestCase):
         return singleton, survivors
 
     def browser_pids(self, profile: Path, *, but: int) -> list[int]:
+        if not shutil.which("ps"):
+            return []
         rows = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "args="], capture_output=True, text=True).stdout.splitlines()
         return [pid for pid in (int(row.split(None, 1)[0]) for row in rows if str(profile) in row) if pid not in (but, os.getpid())]
 
