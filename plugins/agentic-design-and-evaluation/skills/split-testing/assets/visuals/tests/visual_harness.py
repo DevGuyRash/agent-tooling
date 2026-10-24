@@ -147,13 +147,13 @@ def sweep_fetcher_leftovers() -> None:
         with contextlib.suppress(OSError):
             if any(start <= (mtime := folder.stat().st_mtime) <= end for start, end in _WINDOWS):
                 made[folder] = mtime
-    _WINDOWS.clear()
     if made:
         time.sleep(max(0.0, max(made.values()) + FETCHER_GRACE - time.time()))
     for folder in made:
         with contextlib.suppress(OSError):
             if folder.stat().st_mtime + FETCHER_GRACE <= time.time():
                 folder.rmdir()
+    _WINDOWS.clear()  # only now, so an interrupted sweep is repeated at exit
 
 
 atexit.register(sweep_fetcher_leftovers)

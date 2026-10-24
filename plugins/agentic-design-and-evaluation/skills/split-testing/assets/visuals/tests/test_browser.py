@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import shlex
 import signal
 import socket
 import subprocess
@@ -469,10 +470,11 @@ class BrowserRenderTest(unittest.TestCase):
         self.assertEqual(self.browser_processes(self.dir / "drive-profile"), [], "a browser process outlived the drive")
 
     @unittest.skipUnless(hasattr(signal, "SIGTERM") and os.name == "posix", "needs POSIX signals")
-    def stop_drive_midway(self, *, freeze_browser: bool = False) -> tuple[Path | None, Path]:
+    def stop_drive_midway(self, *, freeze_browser: bool = False) -> tuple[Path | None, list[int]]:
         """Start a drive that never finishes on its own, optionally freeze its
         browser so it answers nothing, not even Browser.close, then SIGTERM
-        the driver. Returns the browser's singleton folder and its profile."""
+        the driver. Returns the browser's singleton folder and the browser
+        processes the driver left running, which this then kills."""
         if not NODE:
             self.skipTest("node is not on PATH")
         page, profile = self.build("--trial", EXAMPLES / "fictional-trial.json"), self.dir / "drive-profile"
@@ -493,6 +495,7 @@ class BrowserRenderTest(unittest.TestCase):
                 except OSError:
                     time.sleep(0.1)
             time.sleep(1)  # the page is loading and the browser is busy
+            survivors: list[int] = []
             try:
                 if freeze_browser:
                     for pid in self.browser_pids(profile, but=process.pid):
@@ -503,11 +506,12 @@ class BrowserRenderTest(unittest.TestCase):
                 process.send_signal(signal.SIGTERM)
                 process.communicate(timeout=60)
             finally:
-                for pid in self.browser_pids(profile, but=process.pid):  # none, unless the driver failed to stop them
+                survivors = self.browser_pids(profile, but=process.pid)  # none, unless the driver failed to stop them
+                for pid in survivors:
                     with contextlib.suppress(OSError):
                         os.kill(pid, signal.SIGKILL)
         self.assertNotEqual(process.returncode, 0)
-        return singleton, profile
+        return singleton, survivors
 
     def browser_pids(self, profile: Path, *, but: int) -> list[int]:
         rows = subprocess.run(["ps", "-A", "-o", "pid=", "-o", "args="], capture_output=True, text=True).stdout.splitlines()
@@ -516,22 +520,22 @@ class BrowserRenderTest(unittest.TestCase):
     @unittest.skipUnless(hasattr(signal, "SIGTERM") and os.name == "posix", "needs POSIX signals")
     def test_a_driver_that_is_stopped_midway_closes_its_browser_first(self) -> None:
         before = fetcher_leftovers()
-        singleton, profile = self.stop_drive_midway()
+        singleton, survivors = self.stop_drive_midway()
         self.assertIsNotNone(singleton, "the browser never started")
         self.assertFalse(singleton.exists(), "the stopped driver's browser left its singleton folder behind")
         sweep_fetcher_leftovers()
         self.assertEqual(sorted(map(str, fetcher_leftovers() - before)), [], "the stopped driver left empty fetcher folders")
-        self.assertEqual(self.browser_processes(profile), [], "a browser process outlived the stopped driver")
+        self.assertEqual(survivors, [], "a browser process outlived the stopped driver")
 
     @unittest.skipUnless(hasattr(signal, "SIGSTOP") and os.name == "posix" and shutil.which("ps"), "needs POSIX signals and ps")
     def test_a_browser_that_will_not_close_is_killed_and_leaves_nothing_behind(self) -> None:
         before = fetcher_leftovers()
-        singleton, profile = self.stop_drive_midway(freeze_browser=True)
+        singleton, survivors = self.stop_drive_midway(freeze_browser=True)
         self.assertIsNotNone(singleton, "the browser never started")
         self.assertFalse(singleton.exists(), "the killed browser left its singleton folder behind")
         sweep_fetcher_leftovers()
         self.assertEqual(sorted(map(str, fetcher_leftovers() - before)), [], "the killed browser left empty fetcher folders")
-        self.assertEqual(self.browser_processes(profile), [], "a browser process outlived the kill")
+        self.assertEqual(survivors, [], "a browser process outlived the kill")
 
     def test_a_dump_that_never_finishes_is_killed_and_leaves_nothing_behind(self) -> None:
         page = self.dir / "never-loads.html"
@@ -1062,6 +1066,31 @@ class DriverStopTest(unittest.TestCase):
         self.assertIn("error", out)
         running = [line for line in subprocess.run(["ps", "-A", "-o", "args="], capture_output=True, text=True).stdout.splitlines() if marker in line]
         self.assertEqual(running, [], "a process the launcher started outlived the driver")
+
+    def test_only_the_singleton_folder_this_launch_made_is_removed(self) -> None:
+        """A browser that never answers is stopped without Browser.close, so the
+        driver removes the singleton folder its profile's link names: only one
+        this launch made and the link names by an absolute path."""
+        with Scratch() as scratch:
+            for case in ("own", "earlier", "relative"):
+                profile, folder = scratch / f"profile-{case}", scratch / f"com.example.Test.{case}"
+                profile.mkdir()
+                target = os.path.relpath(folder / "SingletonSocket", profile) if case == "relative" else str(folder / "SingletonSocket")
+                make = f"mkdir {shlex.quote(str(folder))} && touch {shlex.quote(str(folder))}/SingletonSocket {shlex.quote(str(folder))}/SingletonCookie && ln -s {shlex.quote(target)} \"$p/SingletonSocket\"\n"
+                if case == "earlier":  # another browser's, there before this launch
+                    subprocess.run(["sh", "-c", make.replace("$p", str(profile))], check=True)
+                    make = ""
+                # A stand-in for a browser that makes its singleton folder and a
+                # DevTools port nothing answers on, then exits.
+                launcher = scratch / f"launcher-{case}"
+                launcher.write_text("#!/bin/sh\nfor a; do case \"$a\" in --user-data-dir=*) p=\"${a#--user-data-dir=}\";; esac; done\n" + make + "printf '1\\n/devtools/browser/none\\n' > \"$p/DevToolsActivePort\"\n", encoding="utf-8")
+                launcher.chmod(0o755)
+                result = subprocess.run([NODE, str(DRIVER), "--browser", str(launcher), "--profile", str(profile), "--url", "about:blank"], capture_output=True, text=True, timeout=90, cwd=profile)
+                out = json.loads(result.stdout.strip().splitlines()[-1])
+                if "skip" in out:
+                    self.skipTest(out["skip"])
+                self.assertNotEqual(out["stopped"], "closed", case)
+                self.assertEqual(folder.exists(), case != "own", f"the {case} singleton folder was {'kept' if case == 'own' else 'removed'}")
 
 
 @unittest.skipUnless(hasattr(os, "getuid") and hasattr(os, "symlink"), "the cleanup recognises folders by owner and links, which needs POSIX")
