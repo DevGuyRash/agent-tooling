@@ -165,12 +165,15 @@ return out;
 # than one column ("split"), a paragraph whose lines pass 95 of its own characters ("long"), a row of blocks whose last
 # row leaves most of its container empty ("stranded"), and a list of entries kept in one column although it has room for
 # two ("narrowList"), and text set in columns that stands taller than it would in one column at the reading measure
-# ("tall"); "counted" shows the checks had something to measure.
+# ("tall"), a nested group of alternatives that does not take its list's row ("squeezed"), and a chart's axis title
+# narrowed off its plot ("offCenter"); "counted" shows the checks had something to measure.
 LAYOUT = """
 const chOf = el => { const p = document.createElement("span"); p.textContent = "0000000000"; p.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap"; el.appendChild(p); const w = p.getBoundingClientRect().width / 10; p.remove(); return w; };
 const shown = el => el.getClientRects().length > 0 && el.getBoundingClientRect().width > 0;
 const name = el => `${el.className}: ${el.textContent.trim().slice(0, 50)}`;
-const out = { split: [], long: [], stranded: [], narrowList: [], tall: [], counted: { text: 0, rows: 0, lists: 0 } };
+const out = { split: [], long: [], stranded: [], narrowList: [], tall: [], squeezed: [], offCenter: [], counted: { text: 0, rows: 0, lists: 0, groups: 0, axes: 0 } };
+for (const g of document.querySelectorAll(".av-alt-group")) { if (!shown(g)) continue; out.counted.groups++; if (g.getBoundingClientRect().width < g.parentElement.clientWidth * 0.95) out.squeezed.push(name(g)); }
+for (const a of document.querySelectorAll(".av-axis-title")) { if (!shown(a)) continue; out.counted.axes++; if (getComputedStyle(a).maxWidth !== "none") out.offCenter.push(name(a)); }
 for (const el of document.querySelectorAll(".av-flow")) {
   if (!shown(el) || getComputedStyle(el).columnWidth === "auto") continue;
   const set = el.getBoundingClientRect().height; el.style.columnWidth = "auto"; el.style.maxWidth = "var(--av-measure)";
@@ -179,7 +182,7 @@ for (const el of document.querySelectorAll(".av-flow")) {
 }
 for (const el of document.querySelectorAll(".av-flow > p, .av-story-list > div"))
   if (shown(el) && getComputedStyle(el).display !== "inline" && el.getClientRects().length > 1) out.split.push(name(el));
-for (const el of document.querySelectorAll("p, blockquote, figcaption")) {
+for (const el of document.querySelectorAll("p, blockquote, figcaption, figcaption > *")) {
   if (!shown(el) || getComputedStyle(el).display === "inline") continue;
   out.counted.text++;
   const ch = chOf(el), range = document.createRange(); range.selectNodeContents(el);
@@ -1058,12 +1061,23 @@ return { split, flowing, page: Math.round(document.querySelector(".av-sections")
         for width in (1750, 1920):
             out = self.drive(page, width=width, script=LAYOUT)["result"]
             with self.subTest(width=width):
-                self.assertTrue(all(out["counted"].values()), f"nothing to measure: {out['counted']}")
+                self.assertTrue(all(out["counted"][k] for k in ("text", "rows", "lists", "axes")), f"nothing to measure: {out['counted']}")
                 self.assertEqual(out["split"], [], "a paragraph or entry is split between columns")
                 self.assertEqual(out["long"], [], "running text's lines pass a readable length")
                 self.assertEqual(out["stranded"], [], "a row of blocks leaves a block alone in a narrow track")
                 self.assertEqual(out["narrowList"], [], "a list of entries stays in one column with room for two")
                 self.assertEqual(out["tall"], [], "text set in columns stands taller than in one readable column")
+                self.assertEqual(out["squeezed"], [], "a group of alternatives does not take its row")
+                self.assertEqual(out["offCenter"], [], "a chart's axis title is narrowed off its plot")
+        # Directions with alternatives inside them: each nested group takes its list's row beside ungrouped alternatives.
+        directions = EXAMPLES / "comparisons"
+        page = self.build("--data", directions / "research-directions.json", "--narrative", directions / "research-directions-narrative.json")
+        for width in (1750, 1920):
+            out = self.drive(page, width=width, script=LAYOUT)["result"]
+            with self.subTest(page="research-directions", width=width):
+                self.assertGreater(out["counted"]["groups"], 0, "no nested group of alternatives to measure")
+                for key in ("split", "long", "stranded", "narrowList", "tall", "squeezed", "offCenter"):
+                    self.assertEqual(out[key], [], key)
 
     def test_phone_width_keeps_row_heads_in_their_cells_and_every_value_readable(self) -> None:
         # A check required in only some cases carries a chip such as "in 10 of 20 cases" in its pooled row head. At 320 px
