@@ -899,9 +899,15 @@ return out;
         # The owner, on a wide monitor: "why is the text forced into a column like this globally? THere's way more room on
         # my own screen horizontally". Running text keeps a readable measure at ordinary widths (the story's 75ch, the
         # summary's 62ch) and widens on wide screens, inside a wider page; the story's scope box sets "This report covers"
-        # and "It does not cover" side by side at one width, where the second used to sit alone in a narrow track.
+        # and "It does not cover" side by side at one width, where the second used to sit alone in a narrow track. Later:
+        # "For paragraphs, why are they split like this when it's one block of text and not multiple? on larger screens".
+        # Text of several paragraphs sets them side by side on a wide screen, each whole; a single paragraph keeps one
+        # column at the widened measure.
         narrative = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
-        narrative.setdefault("readings", {})["setup"] = " ".join(["The setup section shows each arm's settings and the texts compared, so a reader can see what differs before any result."] * 5)
+        sentence = "The setup section shows each arm's settings and the texts compared, so a reader can see what differs before any result."
+        narrative.setdefault("readings", {})["setup"] = " ".join([sentence] * 3) + "\n\n" + " ".join([sentence] * 2)
+        # Paragraphs of unequal length, so columns balanced by height alone would break the longer one.
+        narrative["story"]["background"] = [" ".join(narrative["story"]["background"]), narrative["story"]["background"][1][:240]]
         path = self.dir / "long-reading.json"
         path.write_text(json.dumps(narrative), encoding="utf-8")
         page = self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", path)
@@ -923,7 +929,11 @@ const flow = el => { const r = document.createRange(); r.selectNodeContents(el);
 const reading = document.querySelector("#setup .av-section-reading");
 // A block set in columns is readable when each column is; any other block, when its cap and drawn width are.
 const flows = el => getComputedStyle(el).columnWidth !== "auto";
-return { page: Math.round(document.querySelector(".av-sections").getBoundingClientRect().width), story: cap(story), storyShown: shown(story), storyFlow: flow(story), summary: cap(summary), summaryFlow: flow(summary), scope,
+// A paragraph drawn in more than one column has one box per column it reaches.
+// (An inline paragraph has one box per line instead, so only block paragraphs are counted.)
+const split = [...document.querySelectorAll(".av-flow > p")].filter(p => getComputedStyle(p).display !== "inline" && p.getClientRects().length > 1).map(p => p.textContent.slice(0, 60));
+const flowing = [...document.querySelectorAll(".av-flow > p")].filter(p => getComputedStyle(p).display !== "inline").length;
+return { split, flowing, page: Math.round(document.querySelector(".av-sections").getBoundingClientRect().width), story: cap(story), storyShown: shown(story), storyFlow: flow(story), summary: cap(summary), summaryFlow: flow(summary), scope,
   readCaps: reads.map(el => flows(el) ? flow(el).column : cap(el)), readShown: reads.map(el => flows(el) ? flow(el).column : shown(el)), readingFlow: reading && flow(reading) };
 """
         ordinary = self.drive(page, width=1024, script=script)["result"]
@@ -933,12 +943,16 @@ return { page: Math.round(document.querySelector(".av-sections").getBoundingClie
         self.assertEqual(1, ordinary["readingFlow"]["n"], "a section's reading is split into columns at an ordinary width")
         wide = self.drive(page, width=1920, script=script)["result"]
         self.assertGreaterEqual(wide["page"], 1400, "the page stays narrow on a wide screen")
-        # Long running text uses the row on a wide screen by flowing into columns, each a readable width.
-        for name in ("storyFlow", "readingFlow"):
-            with self.subTest(block=name):
-                self.assertGreaterEqual(wide[name]["n"], 2, "long text stays in one narrow column on a wide screen")
-                self.assertLessEqual(wide[name]["column"], 95, "a column grows past a readable length")
-                self.assertGreaterEqual(wide[name]["share"], 0.85, "long text leaves most of its row empty on a wide screen")
+        # Long running text of several paragraphs uses the row on a wide screen by flowing into columns, each a readable
+        # width, with every paragraph whole in one column. A reading box, whose text runs on after its label, keeps one
+        # readable column instead.
+        self.assertGreaterEqual(wide["storyFlow"]["n"], 2, "long text stays in one narrow column on a wide screen")
+        self.assertLessEqual(wide["storyFlow"]["column"], 95, "a column grows past a readable length")
+        self.assertGreaterEqual(wide["storyFlow"]["share"], 0.85, "long text leaves most of its row empty on a wide screen")
+        self.assertGreater(wide["flowing"], 0, "no paragraph flows in columns to check")
+        self.assertEqual(wide["readingFlow"]["n"], 1, "a reading box's text is split into columns on a wide screen")
+        self.assertLessEqual(wide["readingFlow"]["column"], 95, "a reading box's lines grow past a readable length")
+        self.assertEqual(wide["split"], [], "a paragraph is split between columns on a wide screen")
         self.assertGreaterEqual(wide["summary"], 76, "the summary stays in a narrow column on a wide screen")
         self.assertLessEqual(wide["summary"], 92.6, "the summary's lines grow past a readable length")
         self.assertGreaterEqual(wide["storyShown"], 85, "the story's text is drawn narrow on a wide screen whatever its cap says")
@@ -967,6 +981,12 @@ return { page: Math.round(document.querySelector(".av-sections").getBoundingClie
             for name in ("storyFlow", "readingFlow", "summaryFlow"):
                 with self.subTest(width=width, block=name):
                     self.assertLessEqual(between[name]["column"], 95, "a line runs past a readable length where columns do not fit")
+        # That summary is one paragraph, so on a wide screen it stays one column at the widened measure, never split.
+        single = self.drive(long_summary, width=1920, script=script)["result"]
+        self.assertEqual(single["split"], [], "a paragraph is split between columns on a wide screen")
+        self.assertEqual(single["summaryFlow"]["n"], 1, "a single paragraph is split into columns on a wide screen")
+        self.assertGreaterEqual(single["summaryFlow"]["column"], 76, "a single paragraph is drawn narrow on a wide screen")
+        self.assertLessEqual(single["summaryFlow"]["column"], 95, "a single paragraph's lines grow past a readable length")
 
     def test_phone_width_keeps_row_heads_in_their_cells_and_every_value_readable(self) -> None:
         # A check required in only some cases carries a chip such as "in 10 of 20 cases" in its pooled row head. At 320 px

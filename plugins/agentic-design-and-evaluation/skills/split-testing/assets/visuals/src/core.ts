@@ -289,8 +289,10 @@ export function outcomeBadge(outcome: Outcome, label?: string): string {
 
 /** Inline-limited text: paragraphs from blank lines, `code`, and **strong**. All
  * other characters are escaped, so supplied text can never become markup. */
-// Running text this long flows into columns where its container is wide (styles: .av-flow): short text stays one line of
-// thought, and text too long to fit one screen even in columns stays one column, so no one reads down and back up again.
+// Running text of two or more paragraphs this long flows into columns where its container is wide (styles: .av-flow),
+// each paragraph whole: short text stays one line of thought, a single paragraph keeps one column at the reading measure
+// rather than breaking mid-sentence into the next, and text too long to fit one screen even in columns stays one column,
+// so no one reads down and back up again.
 const FLOW_MIN = 320, FLOW_MAX = 2400;
 
 export function prose(text: string | string[] | null | undefined, className = "av-prose"): string {
@@ -298,7 +300,7 @@ export function prose(text: string | string[] | null | undefined, className = "a
   const parts = (Array.isArray(text) ? text : String(text).split(PARAGRAPH_BREAK)).map(s => stripText(String(s))).filter(Boolean);
   if (!parts.length) return "";
   const length = parts.reduce((n, p) => n + p.length, 0);
-  const flow = length >= FLOW_MIN && length <= FLOW_MAX ? " av-flow" : "";
+  const flow = parts.length > 1 && length >= FLOW_MIN && length <= FLOW_MAX ? " av-flow" : "";
   return `<div class="${className}${flow}">${parts.map(p => `<p>${inline(p)}</p>`).join("")}</div>`;
 }
 
