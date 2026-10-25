@@ -26,6 +26,7 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 .97r
    container capped in a larger font (a caption around its smaller description) gives it longer lines. The cap is the widest a container sets on purpose (the
    measure and 12ch, at most 92ch), so it never undercuts one; a rule of its own may set another. */
 :where(p, blockquote, figcaption, figcaption > *) { max-width: min(calc(var(--av-measure) + 12ch), 92ch); }
+:where(.av-axis-title) { max-width: none; } /* a chart's label, centered on its plot, not running text */
 
 /* Blocks of reading set side by side share each row: a row's blocks grow to fill it, so a block left alone on the last
    row takes the row instead of one narrow track beside empty space. Each container names its blocks' least width in
