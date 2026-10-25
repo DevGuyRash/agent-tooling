@@ -161,6 +161,56 @@ for (const k of ["cut", "broken", "noAxis", "noCard"]) out[k] = [...new Set(out[
 return out;
 """
 # A mark's card: shown or not, and what it says.
+# How a page sets its reading on a wide screen, measured from what is drawn: a block paragraph or list entry drawn in more
+# than one column ("split"), a paragraph whose lines pass 95 of its own characters ("long"), a row of blocks whose last
+# row leaves most of its container empty ("stranded"), and a list of entries kept in one column although it has room for
+# two ("narrowList"), and text set in columns that stands taller than it would in one column at the reading measure
+# ("tall"); "counted" shows the checks had something to measure.
+LAYOUT = """
+const chOf = el => { const p = document.createElement("span"); p.textContent = "0000000000"; p.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap"; el.appendChild(p); const w = p.getBoundingClientRect().width / 10; p.remove(); return w; };
+const shown = el => el.getClientRects().length > 0 && el.getBoundingClientRect().width > 0;
+const name = el => `${el.className}: ${el.textContent.trim().slice(0, 50)}`;
+const out = { split: [], long: [], stranded: [], narrowList: [], tall: [], counted: { text: 0, rows: 0, lists: 0 } };
+for (const el of document.querySelectorAll(".av-flow")) {
+  if (!shown(el) || getComputedStyle(el).columnWidth === "auto") continue;
+  const set = el.getBoundingClientRect().height; el.style.columnWidth = "auto"; el.style.maxWidth = "var(--av-measure)";
+  const one = el.getBoundingClientRect().height; el.style.columnWidth = el.style.maxWidth = "";
+  if (set > one * 1.02) out.tall.push(`${Math.round(set)} over ${Math.round(one)}px ${name(el)}`);
+}
+for (const el of document.querySelectorAll(".av-flow > p, .av-story-list > div"))
+  if (shown(el) && getComputedStyle(el).display !== "inline" && el.getClientRects().length > 1) out.split.push(name(el));
+for (const el of document.querySelectorAll("p")) {
+  if (!shown(el) || getComputedStyle(el).display === "inline") continue;
+  out.counted.text++;
+  const ch = chOf(el), range = document.createRange(); range.selectNodeContents(el);
+  // A drawn line is the run of text boxes sharing a top; boxes farther apart than two characters sit in other columns.
+  const lines = new Map();
+  for (const q of range.getClientRects()) if (q.width) { const k = Math.round(q.top / 2); (lines.get(k) || lines.set(k, []).get(k)).push([q.left, q.right]); }
+  let widest = 0;
+  for (const spans of lines.values()) {
+    spans.sort((a, b) => a[0] - b[0]); let [a, b] = spans[0];
+    for (const [l, r] of spans.slice(1)) { if (l <= b + 2 * ch) b = Math.max(b, r); else { widest = Math.max(widest, b - a); [a, b] = [l, r]; } }
+    widest = Math.max(widest, b - a);
+  }
+  if (widest / ch > 95) out.long.push(`${Math.round(widest / ch)}ch ${name(el)}`);
+}
+for (const box of document.querySelectorAll(".av-story, .av-story-scope, .av-verdict-lists, .av-inv, .av-quotes, .av-cs-cols, .av-rx-list, .av-mu, .av-rc-cols, .av-alt-list, .av-mention-list")) {
+  const kids = [...box.children].filter(shown); if (!shown(box) || kids.length < 2) continue;
+  out.counted.rows++;
+  const last = Math.max(...kids.map(k => Math.round(k.getBoundingClientRect().top)));
+  const row = kids.filter(k => Math.abs(Math.round(k.getBoundingClientRect().top) - last) <= 2);
+  const span = Math.max(...row.map(k => k.getBoundingClientRect().right)) - Math.min(...row.map(k => k.getBoundingClientRect().left));
+  if (span < box.clientWidth * 0.9) out.stranded.push(`${Math.round(span)} of ${box.clientWidth}px ${name(box)}`);
+}
+const rem = parseFloat(getComputedStyle(document.documentElement).fontSize);
+for (const list of document.querySelectorAll(".av-story-list")) {
+  const entries = [...list.children].filter(shown); if (!shown(list) || entries.length < 2) continue;
+  out.counted.lists++;
+  if (list.clientWidth >= 2 * 26 * rem + 36 && new Set(entries.map(e => Math.round(e.getBoundingClientRect().left))).size < 2) out.narrowList.push(name(list));
+}
+return out;
+"""
+
 CARD = """
 const tip = () => { const t = document.querySelector(".av-tip"); return { shown: t.hasAttribute("data-show"), over: t.querySelector(".av-tip-over")?.textContent || "", title: t.querySelector(".av-tip-title")?.textContent || "", rows: [...t.querySelectorAll(".av-tip-rows dt")].map(d => d.textContent), mark: !!t.querySelector(".av-tip-head .av-glyph") }; };
 const point = (el, type, pointerType = "mouse") => { el.scrollIntoView({ block: "center", behavior: "instant" }); el.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerType })); };
@@ -906,8 +956,9 @@ return out;
         narrative = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
         sentence = "The setup section shows each arm's settings and the texts compared, so a reader can see what differs before any result."
         narrative.setdefault("readings", {})["setup"] = " ".join([sentence] * 3) + "\n\n" + " ".join([sentence] * 2)
-        # Paragraphs of unequal length, so columns balanced by height alone would break the longer one.
-        narrative["story"]["background"] = [" ".join(narrative["story"]["background"]), narrative["story"]["background"][1][:240]]
+        # Unequal paragraphs, even enough to set side by side, that columns balanced by height alone would break.
+        told = "A team writes short replies for people with an assistant model, and each reply is judged against its source."
+        narrative["story"]["background"] = [" ".join([told] * 6), " ".join([told] * 6), " ".join([told] * 2)]
         path = self.dir / "long-reading.json"
         path.write_text(json.dumps(narrative), encoding="utf-8")
         page = self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", path)
@@ -987,6 +1038,32 @@ return { split, flowing, page: Math.round(document.querySelector(".av-sections")
         self.assertEqual(single["summaryFlow"]["n"], 1, "a single paragraph is split into columns on a wide screen")
         self.assertGreaterEqual(single["summaryFlow"]["column"], 76, "a single paragraph is drawn narrow on a wide screen")
         self.assertLessEqual(single["summaryFlow"]["column"], 95, "a single paragraph's lines grow past a readable length")
+
+    def test_wide_screens_keep_paragraphs_and_entries_whole_and_fill_their_rows(self) -> None:
+        # The owner, on a wide screen: "For paragraphs, why are they split like this when it's one block of text and not
+        # multiple?"; of a glossary set as one narrow column beside an empty row, "are sections like this really good
+        # design?"; and "I want whatever causes it in the library fixed for all places it would exist." At the owner's
+        # width and wider, no paragraph or entry is drawn in two columns, no running text's lines pass a readable length,
+        # no row of blocks leaves a block alone in a narrow track, and a list of entries uses its row.
+        narrative = json.loads((EXAMPLES / "fictional-narrative.json").read_text(encoding="utf-8"))
+        sentence = "Each reply was judged against the source it cites, and a reply that cites nothing fails."
+        # Three paragraphs (about six lines, six and two), even enough to set side by side, that columns filled by height
+        # alone would break: the first column takes the first paragraph and two lines of the second, as on the owner's page.
+        narrative["story"]["background"] = [" ".join([sentence] * 6), " ".join([sentence] * 6), " ".join([sentence] * 2)]
+        narrative["summary"] = " ".join([sentence] * 9) + "\n\n" + sentence  # one paragraph outweighs the other: one column
+        narrative["story"]["glossary"] = [{"term": f"Term {i}", "meaning": sentence} for i in range(1, 8)]
+        path = self.dir / "layout-narrative.json"
+        path.write_text(json.dumps(narrative), encoding="utf-8")
+        page = self.build("--trial", EXAMPLES / "fictional-trial.json", "--narrative", path)
+        for width in (1750, 1920):
+            out = self.drive(page, width=width, script=LAYOUT)["result"]
+            with self.subTest(width=width):
+                self.assertTrue(all(out["counted"].values()), f"nothing to measure: {out['counted']}")
+                self.assertEqual(out["split"], [], "a paragraph or entry is split between columns")
+                self.assertEqual(out["long"], [], "running text's lines pass a readable length")
+                self.assertEqual(out["stranded"], [], "a row of blocks leaves a block alone in a narrow track")
+                self.assertEqual(out["narrowList"], [], "a list of entries stays in one column with room for two")
+                self.assertEqual(out["tall"], [], "text set in columns stands taller than in one readable column")
 
     def test_phone_width_keeps_row_heads_in_their_cells_and_every_value_readable(self) -> None:
         # A check required in only some cases carries a chip such as "in 10 of 20 cases" in its pooled row head. At 320 px
