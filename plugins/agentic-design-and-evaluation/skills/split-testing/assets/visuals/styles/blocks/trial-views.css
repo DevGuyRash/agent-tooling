@@ -16,7 +16,7 @@
 .av-verdict-alert a { white-space: nowrap; font-weight: 600; }
 .av-mentions { margin-top: 22px; }
 .av-mention-key { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px !important; font-size: .8rem; }
-.av-mention-list { list-style: none; padding: 0; margin: 10px 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15.5rem), 1fr)); gap: 8px; }
+.av-mention-list { list-style: none; padding: 0; margin: 10px 0 0; --av-fill: 15.5rem; gap: 8px; }
 .av-mention { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--av-line); border-radius: 8px; background: var(--av-surface); min-width: 0; }
 .av-mention-name { font-weight: 600; font-size: .88rem; overflow-wrap: break-word; }
 .av-mention-name code { font-weight: 500; font-size: .74rem; color: var(--av-ink-3); }
@@ -124,7 +124,7 @@
 .av-duel-split { font: 600 .68rem var(--av-font-mono); color: var(--st-warn, var(--av-warn)); white-space: nowrap; }
 
 /* ----------------------------------------------------------------- invalid */
-.av-inv { grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); }
+.av-inv { --av-fill: 22rem; }
 .av-inv-group:only-child { max-width: 52rem; }
 .av-inv-gloss { font-size: .88rem; color: var(--av-ink); }
 .av-inv-remedy { font-size: .82rem; color: var(--av-ink-2); }
@@ -156,7 +156,7 @@
      less); a word that cannot break still gets its room. */
   .av-heatmap .av-ck-col-name { width: max(var(--ck-hard), min(44cqw, 9rem, var(--ck-full))); }
   .av-heatmap thead th .av-arm-label { overflow-wrap: break-word; hyphens: auto; }
-  .av-mention-list { grid-template-columns: 1fr; }
+  .av-mention-list { --av-fill: 100%; }
 }
 @media print {
   .av-rule-text { max-height: none; overflow: visible; }

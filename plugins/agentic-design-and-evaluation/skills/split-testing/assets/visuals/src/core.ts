@@ -289,16 +289,21 @@ export function outcomeBadge(outcome: Outcome, label?: string): string {
 
 /** Inline-limited text: paragraphs from blank lines, `code`, and **strong**. All
  * other characters are escaped, so supplied text can never become markup. */
-// Running text this long flows into columns where its container is wide (styles: .av-flow): short text stays one line of
-// thought, and text too long to fit one screen even in columns stays one column, so no one reads down and back up again.
-const FLOW_MIN = 320, FLOW_MAX = 2400;
+// Running text of two or more paragraphs this long flows into columns where its container is wide (styles: .av-flow), each paragraph whole, and
+// only where whole paragraphs make two columns of nearly even height: FLOW_EVEN is the taller column's share of the text
+// at which two 58ch columns are no taller than one 92ch column. One paragraph, or one that outweighs the rest, keeps one
+// column at the reading measure; short text stays one line of thought; and text too long to fit one screen even in
+// columns stays one column, so no one reads down and back up again.
+const FLOW_MIN = 320, FLOW_MAX = 2400, FLOW_EVEN = 0.6;
 
 export function prose(text: string | string[] | null | undefined, className = "av-prose"): string {
   if (text === null || text === undefined) return "";
   const parts = (Array.isArray(text) ? text : String(text).split(PARAGRAPH_BREAK)).map(s => stripText(String(s))).filter(Boolean);
   if (!parts.length) return "";
   const length = parts.reduce((n, p) => n + p.length, 0);
-  const flow = length >= FLOW_MIN && length <= FLOW_MAX ? " av-flow" : "";
+  let before = 0, taller = 1; // the taller of the two columns whole paragraphs can make, as a share of the text
+  for (const p of parts) { before += p.length; taller = Math.min(taller, Math.max(before, length - before) / length); }
+  const flow = parts.length > 1 && taller <= FLOW_EVEN && length >= FLOW_MIN && length <= FLOW_MAX ? " av-flow" : "";
   return `<div class="${className}${flow}">${parts.map(p => `<p>${inline(p)}</p>`).join("")}</div>`;
 }
 

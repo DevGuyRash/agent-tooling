@@ -22,6 +22,18 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 .97r
 .av-report a { color: var(--av-accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .av-report code, .av-report pre, .av-num, .av-frac, .av-rate, .av-ci-text { font-family: var(--av-font-mono); font-variant-numeric: tabular-nums; }
 .av-report code { font-size: .86em; background: var(--av-sunken); border-radius: 4px; padding: .08em .35em; overflow-wrap: anywhere; }
+/* Running text (paragraphs, quotations, captions) keeps a readable line in its own font, so neither a wide row nor a
+   container capped in a larger font (a caption around its smaller description) gives it longer lines. The cap is the widest a container sets on purpose (the
+   measure and 12ch, at most 92ch), so it never undercuts one; a rule of its own may set another. */
+:where(p, blockquote, figcaption, figcaption > *) { max-width: min(calc(var(--av-measure) + 12ch), 92ch); }
+:where(.av-axis-title) { max-width: none; } /* a chart's label, centered on its plot, not running text */
+
+/* Blocks of reading set side by side share each row: a row's blocks grow to fill it, so a block left alone on the last
+   row takes the row instead of one narrow track beside empty space. Each container names its blocks' least width in
+   --av-fill. Tiles and small multiples, which are compared at one size, keep their grids. */
+:is(.av-story, .av-story-scope, .av-verdict-lists, .av-inv, .av-quotes, .av-cs-cols, .av-rx-list, .av-mu, .av-rc-cols, .av-alt-list, .av-mention-list) { display: flex; flex-wrap: wrap; }
+:is(.av-story, .av-story-scope, .av-verdict-lists, .av-inv, .av-quotes, .av-cs-cols, .av-rx-list, .av-mu, .av-rc-cols, .av-alt-list, .av-mention-list) > * { flex: 1 1 min(100%, var(--av-fill)); min-width: 0; }
+
 /* The ring follows each control's own shape (outlines track border-radius). */
 .av-report :focus-visible { outline: 2px solid var(--av-focus); outline-offset: 2px; }
 .av-report [tabindex="-1"]:focus:not(:focus-visible), .av-section-title[tabindex="-1"]:focus { outline: none; }
@@ -225,7 +237,7 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 .97r
 .av-verdict-headline { font: 500 clamp(1.45rem, 2.8vw, 2.05rem)/1.22 var(--av-font-display); letter-spacing: -.01em; text-wrap: pretty; max-width: 34ch; }
 .av-verdict-headline strong { font-weight: 700; }
 .av-verdict-detail { margin-top: 14px; color: var(--av-ink-2); max-width: min(calc(var(--av-measure) - 6ch), 92ch); }
-.av-verdict-lists { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr)); gap: 18px 26px; margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--av-line); }
+.av-verdict-lists { --av-fill: 16rem; gap: 18px 26px; margin-top: 26px; padding-top: 22px; border-top: 1px solid var(--av-line); }
 .av-verdict-list h4 { font: 600 .7rem/1.3 var(--av-font-text); letter-spacing: .12em; text-transform: uppercase; color: var(--av-ink-3); margin-bottom: 8px; }
 .av-verdict-list ul { list-style: none; padding: 0; margin: 0; display: grid; gap: 7px; font-size: .9rem; color: var(--av-ink-2); }
 .av-verdict-list li { position: relative; padding-left: 18px; }
@@ -394,7 +406,7 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 .97r
 
 /* ----------------------------------------------------------------- invalid */
 .av-allclear { display: flex; align-items: center; gap: 10px; color: var(--st-pass); font-weight: 600; }
-.av-inv { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 14px; }
+.av-inv { --av-fill: 300px; gap: 14px; }
 .av-inv-group { border: 1px solid var(--av-line); border-radius: 8px; padding: 14px 16px; background: var(--av-surface); display: flex; flex-direction: column; gap: 10px; }
 .av-inv-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
 .av-inv-reason { font-size: .82rem !important; font-weight: 600; }
@@ -558,7 +570,7 @@ button.av-ledger-more { display: none; }
 .av-svg-series:has(.av-svg-hit:hover) .av-svg-line { stroke-width: 3.5; }
 
 /* Excerpts */
-.av-quotes { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+.av-quotes { --av-fill: 320px; gap: 16px; }
 .av-quote { --c: var(--av-line-strong); background: var(--av-raised); border: 1px solid var(--av-line); border-top: 3px solid var(--c); border-radius: var(--av-radius); padding: 18px 20px; display: flex; flex-direction: column; gap: 12px; }
 .av-quote blockquote { font: 400 1rem/1.55 var(--av-font-display); color: var(--av-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
 .av-quote figcaption { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; font-size: .78rem; color: var(--av-ink-3); }
@@ -900,7 +912,7 @@ button.av-ledger-more { display: none; }
 .av-cs-diff ul { margin: 0; padding-left: 1.1em; display: grid; gap: 5px; }
 .av-cs-diff q { color: var(--av-ink-2); font-style: italic; }
 .av-cs-diff-why { margin-top: 8px !important; font-size: .76rem; color: var(--av-ink-3); }
-.av-cs-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 12px 22px; margin-top: 10px; }
+.av-cs-cols { --av-fill: 15rem; gap: 12px 22px; margin-top: 10px; }
 .av-cs-col { min-width: 0; }
 .av-cs-col-label { font: 600 .74rem/1.3 var(--av-font-text); color: var(--av-ink); padding-bottom: 6px; margin-bottom: 8px !important; border-bottom: 1px solid var(--av-line); }
 .av-cs-vs { display: grid; grid-template-columns: minmax(8rem, 12rem) repeat(var(--m), minmax(13rem, 1fr)); min-width: min-content; }
@@ -1116,7 +1128,7 @@ a.av-btn { text-decoration: none; color: inherit; }
 .av-rx-theme-head .av-dec-seg b { font-size: .8rem; }
 .av-rx-story { color: var(--av-ink-2); font-size: .92rem; }
 /* Cards share each row evenly and line up across groups; a group's lone card fills its row. */
-.av-rx-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
+.av-rx-list { --av-fill: 22rem; gap: 14px; margin: 0; padding: 0; list-style: none; }
 .av-rx-card { display: flex; }
 .av-rx-card[hidden] { display: none; }
 .av-rx-card > article { display: flex; flex-direction: column; gap: 10px; width: 100%; min-width: 0; padding: 16px 16px 14px; border-radius: 12px; background: var(--av-raised); border: 1px solid var(--av-line); border-top: 4px solid var(--v); box-shadow: var(--av-shadow); }
@@ -1256,7 +1268,7 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-tl-link { font-size: .8rem; color: var(--av-ink-3); }
 
 /* Suggested pairs ------------------------------------------------------------ */
-.av-mu { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
+.av-mu { --av-fill: 30rem; gap: 14px; margin: 0; padding: 0; list-style: none; }
 .av-mu-card { display: grid; gap: 10px; align-content: start; padding: 14px 16px; border-radius: 12px; background: var(--av-raised); border: 1px solid var(--av-line); box-shadow: var(--av-shadow); }
 .av-mu-card > .av-btn { justify-self: start; }
 .av-mu-kind { font: 600 .68rem/1.3 var(--av-font-text); letter-spacing: .1em; text-transform: uppercase; color: var(--av-ink-3); }
@@ -1300,7 +1312,7 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-rc-full { margin-top: 22px; padding: 12px 16px; border-radius: 12px; border: 1px solid var(--av-line); background: var(--av-surface); }
 .av-rc-full[open] > summary { margin-bottom: 12px; }
 /* Two columns only while each has room for a report's views; otherwise one under the other. */
-.av-rc-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 34rem), 1fr)); gap: 18px; }
+.av-rc-cols { --av-fill: 34rem; gap: 18px; }
 .av-rc-cols .av-verdict-grid { grid-template-columns: minmax(0, 1fr); }
 
 /* Reader ----------------------------------------------------------------------- */
@@ -1324,7 +1336,8 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
   .av-rc-row, .av-rc-scale { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .av-rc-over { grid-column: auto; }
   .av-rc-scale > span:last-child { display: none; }
-  .av-rc-sides, .av-rc-cols { grid-template-columns: minmax(0, 1fr); }
+  .av-rc-sides { grid-template-columns: minmax(0, 1fr); }
+  .av-rc-cols { --av-fill: 100%; }
 }
 @container av-cx (max-width: 36rem) {
   .av-dec-tiles { grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); }
@@ -1819,8 +1832,8 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
 .av-jv-scroll--tall thead th { position: sticky; top: 0; background: var(--av-raised); z-index: 1; }
 
 /* ----------------------------------------------------------------- alternatives */
-.av-alt-list { list-style: none; margin: 18px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); gap: 10px; }
-.av-alt-group { grid-column: 1 / -1; min-width: 0; }
+.av-alt-list { list-style: none; margin: 18px 0 0; padding: 0; --av-fill: 15rem; gap: 10px; }
+.av-alt-group { flex-basis: 100%; min-width: 0; }
 .av-alt-group > .av-alt-list { margin: 8px 0 6px 5px; padding-left: 14px; border-left: 2px solid var(--av-line-strong); }
 .av-alt-group-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; }
 .av-alt-group-name { font-weight: 650; font-size: .95rem; overflow-wrap: anywhere; }
@@ -2282,23 +2295,25 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
 /* styles/blocks/story.css */
 /* The story that opens a report, and the reading that goes with every view (src/reading.ts). */
 
-.av-story { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr)); gap: 22px 36px; align-items: start; }
+.av-story { --av-fill: 24rem; gap: 22px 36px; align-items: start; }
 .av-story-part { display: grid; gap: 8px; min-width: 0; container: av-story / inline-size; }
-.av-story > .av-story-part:first-child { grid-column: 1 / -1; }
+.av-story > .av-story-part:first-child, .av-story > .av-story-scope { flex-basis: 100%; }
 .av-story-h { font: 600 .72rem/1.3 var(--av-font-text); letter-spacing: .12em; text-transform: uppercase; color: var(--av-ink-3); }
 .av-story-prose { font-size: .95rem; line-height: 1.6; color: var(--av-ink); max-width: min(calc(var(--av-measure) + 7ch), 92ch); }
 .av-story-prose p + p { margin-top: .55em; }
 .av-story > .av-story-part:first-child .av-story-prose { font-size: 1.02rem; }
 .av-story-intent { margin: 0; padding: 10px 16px; border-left: 3px solid var(--av-accent); background: var(--av-accent-soft); border-radius: 0 10px 10px 0; }
 .av-story-questions { margin: 0; padding-left: 1.3em; display: grid; gap: 6px; font-size: .95rem; line-height: 1.5; }
-.av-story-list { margin: 0; display: grid; gap: 10px; }
-.av-story-list > div { display: grid; grid-template-columns: fit-content(12rem) minmax(0, 1fr); gap: 4px 16px; padding-bottom: 10px; border-bottom: 1px solid var(--av-line); }
-.av-story-list > div:last-child { border-bottom: 0; padding-bottom: 0; }
-.av-story-list dt { font-weight: 600; font-size: .88rem; min-width: 0; overflow-wrap: anywhere; }
-.av-story-list dd { margin: 0; min-width: 0; }
+/* Entries (terms, alternatives, cases) flow into columns where their part is wide, each entry whole; an entry sets its
+   term beside its meaning only while the meaning keeps a readable width, and stacks them otherwise. */
+.av-story-list { margin: 0; column-width: 26rem; column-gap: 36px; }
+.av-story-list > div { display: flex; flex-wrap: wrap; gap: 4px 16px; break-inside: avoid; padding-bottom: 10px; margin-bottom: 10px; border-bottom: 1px solid var(--av-line); }
+.av-story-list > div:last-child { border-bottom: 0; padding-bottom: 0; margin-bottom: 0; }
+.av-story-list dt { flex: 0 1 auto; max-width: 12rem; font-weight: 600; font-size: .88rem; min-width: 0; overflow-wrap: anywhere; }
+.av-story-list dd { flex: 1 1 22rem; margin: 0; min-width: 0; }
 .av-story-list dd .av-story-prose { font-size: .9rem; }
 .av-story-case { font-weight: 600; }
-.av-story-scope { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr)); gap: 14px 28px; padding: 14px 18px; border-radius: 12px; background: var(--av-surface); border: 1px solid var(--av-line); }
+.av-story-scope { --av-fill: 20rem; gap: 14px 28px; padding: 14px 18px; border-radius: 12px; background: var(--av-surface); border: 1px solid var(--av-line); }
 
 .av-read { display: grid; gap: 6px; margin: 0 0 14px; padding: 10px 14px; border-radius: 10px; background: var(--av-surface); border: 1px solid var(--av-line); font-size: .86rem; line-height: 1.5; color: var(--av-ink-2); max-width: 100%; }
 .av-read-tag { display: inline-block; margin-right: 8px; font: 700 .62rem/1.6 var(--av-font-text); letter-spacing: .12em; text-transform: uppercase; color: var(--av-accent); vertical-align: 1px; }
@@ -2318,24 +2333,23 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
 .av-section-reading .av-read-prose p { display: inline; }
 .av-section-reading .av-read-prose p + p { display: block; margin-top: .5em; }
 
-/* A term beside its meaning only while the meaning keeps a readable width. */
-@container av-story (max-width: 34rem) {
-  .av-story-list > div { grid-template-columns: minmax(0, 1fr); }
-}
 @media print {
   .av-read-how { display: block; }
 }
 
-/* Long running text (prose() marks it av-flow) fills a wide row by flowing into columns of a readable width, two or more
-   where its section has room; a narrower section keeps its single measure. A reading box or theme head holding such text
-   spans its row with it. The class is doubled to outrank each block's own measure. */
+/* Long running text of several paragraphs (prose() marks it av-flow) fills a wide row by flowing into columns of a
+   readable width, two or more where its section has room, and never splits a paragraph between them; a narrower section
+   keeps its single measure. A theme head holding such text spans its row with it. A reading box keeps its measure: its
+   text runs inline after its label, and inline text cannot be kept whole across columns. The class is doubled to outrank
+   each block's own measure. */
 .av-section, .av-masthead-inner { container: av-page / inline-size; }
 @container av-page (min-width: 72rem) {
   /* The cap gives way only where two 58ch columns, their gap and the block's own padding and border (up to 3rem) fit
      (the second term is negative below that width and huge above it), so a block too narrow for two columns keeps a
      readable line, not one the row's whole width. */
-  .av-flow.av-flow, .av-section-reading:has(> .av-flow) { max-width: min(100%, max(var(--av-measure), (100% - 116ch - 5.5rem) * 10000000)); column-width: 58ch; column-gap: 2.5rem; }
+  .av-flow.av-flow { max-width: min(100%, max(var(--av-measure), (100% - 116ch - 5.5rem) * 10000000)); column-width: 58ch; column-gap: 2.5rem; }
   .av-rx-theme-head:has(.av-flow) { max-width: none; }
+  .av-flow > p { break-inside: avoid; }
 }
 
 
@@ -2358,7 +2372,7 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
 .av-verdict-alert a { white-space: nowrap; font-weight: 600; }
 .av-mentions { margin-top: 22px; }
 .av-mention-key { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px !important; font-size: .8rem; }
-.av-mention-list { list-style: none; padding: 0; margin: 10px 0 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15.5rem), 1fr)); gap: 8px; }
+.av-mention-list { list-style: none; padding: 0; margin: 10px 0 0; --av-fill: 15.5rem; gap: 8px; }
 .av-mention { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--av-line); border-radius: 8px; background: var(--av-surface); min-width: 0; }
 .av-mention-name { font-weight: 600; font-size: .88rem; overflow-wrap: break-word; }
 .av-mention-name code { font-weight: 500; font-size: .74rem; color: var(--av-ink-3); }
@@ -2466,7 +2480,7 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
 .av-duel-split { font: 600 .68rem var(--av-font-mono); color: var(--st-warn, var(--av-warn)); white-space: nowrap; }
 
 /* ----------------------------------------------------------------- invalid */
-.av-inv { grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); }
+.av-inv { --av-fill: 22rem; }
 .av-inv-group:only-child { max-width: 52rem; }
 .av-inv-gloss { font-size: .88rem; color: var(--av-ink); }
 .av-inv-remedy { font-size: .82rem; color: var(--av-ink-2); }
@@ -2498,7 +2512,7 @@ button.av-fx-cite:hover { color: var(--av-accent) !important; }
      less); a word that cannot break still gets its room. */
   .av-heatmap .av-ck-col-name { width: max(var(--ck-hard), min(44cqw, 9rem, var(--ck-full))); }
   .av-heatmap thead th .av-arm-label { overflow-wrap: break-word; hyphens: auto; }
-  .av-mention-list { grid-template-columns: 1fr; }
+  .av-mention-list { --av-fill: 100%; }
 }
 @media print {
   .av-rule-text { max-height: none; overflow: visible; }

@@ -107,7 +107,7 @@ a.av-btn { text-decoration: none; color: inherit; }
 .av-rx-theme-head .av-dec-seg b { font-size: .8rem; }
 .av-rx-story { color: var(--av-ink-2); font-size: .92rem; }
 /* Cards share each row evenly and line up across groups; a group's lone card fills its row. */
-.av-rx-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
+.av-rx-list { --av-fill: 22rem; gap: 14px; margin: 0; padding: 0; list-style: none; }
 .av-rx-card { display: flex; }
 .av-rx-card[hidden] { display: none; }
 .av-rx-card > article { display: flex; flex-direction: column; gap: 10px; width: 100%; min-width: 0; padding: 16px 16px 14px; border-radius: 12px; background: var(--av-raised); border: 1px solid var(--av-line); border-top: 4px solid var(--v); box-shadow: var(--av-shadow); }
@@ -247,7 +247,7 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-tl-link { font-size: .8rem; color: var(--av-ink-3); }
 
 /* Suggested pairs ------------------------------------------------------------ */
-.av-mu { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 30rem), 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
+.av-mu { --av-fill: 30rem; gap: 14px; margin: 0; padding: 0; list-style: none; }
 .av-mu-card { display: grid; gap: 10px; align-content: start; padding: 14px 16px; border-radius: 12px; background: var(--av-raised); border: 1px solid var(--av-line); box-shadow: var(--av-shadow); }
 .av-mu-card > .av-btn { justify-self: start; }
 .av-mu-kind { font: 600 .68rem/1.3 var(--av-font-text); letter-spacing: .1em; text-transform: uppercase; color: var(--av-ink-3); }
@@ -291,7 +291,7 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
 .av-rc-full { margin-top: 22px; padding: 12px 16px; border-radius: 12px; border: 1px solid var(--av-line); background: var(--av-surface); }
 .av-rc-full[open] > summary { margin-bottom: 12px; }
 /* Two columns only while each has room for a report's views; otherwise one under the other. */
-.av-rc-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 34rem), 1fr)); gap: 18px; }
+.av-rc-cols { --av-fill: 34rem; gap: 18px; }
 .av-rc-cols .av-verdict-grid { grid-template-columns: minmax(0, 1fr); }
 
 /* Reader ----------------------------------------------------------------------- */
@@ -315,7 +315,8 @@ th[aria-sort="descending"] .av-rx-sort-mark::after { content: "↓"; opacity: 1;
   .av-rc-row, .av-rc-scale { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .av-rc-over { grid-column: auto; }
   .av-rc-scale > span:last-child { display: none; }
-  .av-rc-sides, .av-rc-cols { grid-template-columns: minmax(0, 1fr); }
+  .av-rc-sides { grid-template-columns: minmax(0, 1fr); }
+  .av-rc-cols { --av-fill: 100%; }
 }
 @container av-cx (max-width: 36rem) {
   .av-dec-tiles { grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr)); }

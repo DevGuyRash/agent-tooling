@@ -614,6 +614,29 @@ return [...document.querySelectorAll(".av-rx-list")].filter(l => l.getBoundingCl
         self.assertLessEqual(abs(width_a - width_b), 2, "two report cards in a row get different widths")
         self.assertLessEqual(max(cap for g in groups for cap in g["headlineCaps"]), 92.6, "a card's headline has no readable cap")
 
+    def test_wide_screens_keep_the_collections_text_whole_and_fill_its_rows(self) -> None:
+        # The owner's collection on a wide screen split a theme's one-paragraph story across three columns and set its
+        # glossary as one narrow column beside an empty row (see test_browser's wide-screen layout test for the owner's
+        # words). The collection's story, theme heads and report cards keep their text whole and readable and their rows
+        # filled at the owner's width and wider.
+        sentence = "Each report holds its question, its rule, its decision and every run down to its checks."
+        story = {"background": [" ".join([sentence] * 6), " ".join([sentence] * 6), " ".join([sentence] * 2)], "intent": "Show a collection to a reader new to it.",
+                 "questions": ["Does the collection read as one story?"], "covers": "Three reports.", "notCovered": "Anything real.",
+                 "glossary": [{"term": f"Term {i}", "meaning": sentence} for i in range(1, 8)]}
+        themes = [{"id": "trials", "label": "Trials", "summary": " ".join([sentence] * 5)}, {"id": "choices", "label": "Choices", "summary": "One everyday choice."}]
+        page = self.build("--collection", write_collection(self.dir, costs=True, story=story, themes=themes))  # costs: the cost-versus-gain chart and its axis titles
+        for width in (1750, 1920):
+            out = self.drive(page, width=width, script=TB.LAYOUT)["result"]
+            with self.subTest(width=width):
+                self.assertTrue(all(out["counted"][k] for k in ("text", "rows", "lists", "axes")), f"nothing to measure: {out['counted']}")
+                self.assertEqual(out["split"], [], "a paragraph or entry is split between columns")
+                self.assertEqual(out["long"], [], "running text's lines pass a readable length")
+                self.assertEqual(out["stranded"], [], "a row of blocks leaves a block alone in a narrow track")
+                self.assertEqual(out["narrowList"], [], "a list of entries stays in one column with room for two")
+                self.assertEqual(out["tall"], [], "text set in columns stands taller than in one readable column")
+                self.assertEqual(out["squeezed"], [], "a group of alternatives does not take its row")
+                self.assertEqual(out["offCenter"], [], "a chart's axis title is narrowed off its plot")
+
     def test_phone_width_never_scrolls_the_collection_sideways(self) -> None:
         page = self.build("--collection", write_collection(self.dir))
         script = """

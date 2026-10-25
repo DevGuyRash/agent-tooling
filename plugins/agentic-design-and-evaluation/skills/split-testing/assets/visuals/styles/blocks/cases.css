@@ -170,7 +170,7 @@
 .av-cs-diff ul { margin: 0; padding-left: 1.1em; display: grid; gap: 5px; }
 .av-cs-diff q { color: var(--av-ink-2); font-style: italic; }
 .av-cs-diff-why { margin-top: 8px !important; font-size: .76rem; color: var(--av-ink-3); }
-.av-cs-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr)); gap: 12px 22px; margin-top: 10px; }
+.av-cs-cols { --av-fill: 15rem; gap: 12px 22px; margin-top: 10px; }
 .av-cs-col { min-width: 0; }
 .av-cs-col-label { font: 600 .74rem/1.3 var(--av-font-text); color: var(--av-ink); padding-bottom: 6px; margin-bottom: 8px !important; border-bottom: 1px solid var(--av-line); }
 .av-cs-vs { display: grid; grid-template-columns: minmax(8rem, 12rem) repeat(var(--m), minmax(13rem, 1fr)); min-width: min-content; }
