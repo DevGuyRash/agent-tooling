@@ -179,7 +179,7 @@ for (const el of document.querySelectorAll(".av-flow")) {
 }
 for (const el of document.querySelectorAll(".av-flow > p, .av-story-list > div"))
   if (shown(el) && getComputedStyle(el).display !== "inline" && el.getClientRects().length > 1) out.split.push(name(el));
-for (const el of document.querySelectorAll("p")) {
+for (const el of document.querySelectorAll("p, blockquote, figcaption")) {
   if (!shown(el) || getComputedStyle(el).display === "inline") continue;
   out.counted.text++;
   const ch = chOf(el), range = document.createRange(); range.selectNodeContents(el);

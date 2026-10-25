@@ -156,7 +156,7 @@
      less); a word that cannot break still gets its room. */
   .av-heatmap .av-ck-col-name { width: max(var(--ck-hard), min(44cqw, 9rem, var(--ck-full))); }
   .av-heatmap thead th .av-arm-label { overflow-wrap: break-word; hyphens: auto; }
-  .av-mention-list { grid-template-columns: 1fr; }
+  .av-mention-list { --av-fill: 100%; }
 }
 @media print {
   .av-rule-text { max-height: none; overflow: visible; }

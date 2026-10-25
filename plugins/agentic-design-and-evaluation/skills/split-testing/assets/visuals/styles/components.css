@@ -15,9 +15,10 @@ body { margin: 0; background: var(--av-bg); color: var(--av-ink); font: 400 .97r
 .av-report a { color: var(--av-accent); text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .av-report code, .av-report pre, .av-num, .av-frac, .av-rate, .av-ci-text { font-family: var(--av-font-mono); font-variant-numeric: tabular-nums; }
 .av-report code { font-size: .86em; background: var(--av-sunken); border-radius: 4px; padding: .08em .35em; overflow-wrap: anywhere; }
-/* Every paragraph keeps a readable line in its own font, so neither a wide row nor a container capped in a larger font
-   gives it longer lines; a rule of its own may set another cap. */
-:where(p) { max-width: var(--av-measure); }
+/* Running text (paragraphs, quotations, captions) keeps a readable line in its own font, so neither a wide row nor a
+   container capped in a larger font (a caption around its smaller description) gives it longer lines. The cap is the widest a container sets on purpose (the
+   measure and 12ch, at most 92ch), so it never undercuts one; a rule of its own may set another. */
+:where(p, blockquote, figcaption, figcaption > *) { max-width: min(calc(var(--av-measure) + 12ch), 92ch); }
 
 /* Blocks of reading set side by side share each row: a row's blocks grow to fill it, so a block left alone on the last
    row takes the row instead of one narrow track beside empty space. Each container names its blocks' least width in
