@@ -1,0 +1,30 @@
+{
+  "name": "pzmap",
+  "version": "1.0.0",
+  "description": "Create, import, restyle, update, and troubleshoot custom PZmap marker collections with coordinates, floors, native icons, groups, notes, and shareable setups. Use for pzmap.org or a compatible deployed viewer; verify that viewer's actual import and rendering behavior.",
+  "author": {
+    "name": "Agent Tooling Contributors"
+  },
+  "license": "MIT",
+  "keywords": [
+    "pzmap",
+    "project-zomboid",
+    "maps",
+    "markers",
+    "waypoints",
+    "icons"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "PZmap",
+    "shortDescription": "Build and verify custom PZmap marker setups",
+    "longDescription": "Create, import, restyle, update, and troubleshoot custom PZmap marker collections with coordinates, floors, native icons, groups, notes, and shareable setups. Use for pzmap.org or a compatible deployed viewer; verify that viewer's actual import and rendering behavior.",
+    "developerName": "Agent Tooling Contributors",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "Use $pzmap to create or update a custom PZmap setup with suitable native icons and verified, reversible imports."
+  }
+}

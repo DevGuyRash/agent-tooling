@@ -52,6 +52,12 @@
       "source": "./plugins/visualization",
       "description": "Visualize anything creatively and faithfully",
       "version": "0.2.1"
+    },
+    {
+      "name": "pzmap",
+      "source": "./plugins/pzmap",
+      "description": "Build and verify custom PZmap marker setups",
+      "version": "1.0.0"
     }
   ]
 }
