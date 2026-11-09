@@ -6,7 +6,7 @@ compatibility: Requires access to the target viewer or its exports. Live accepta
 
 # PZmap
 
-Create the setup the user asks for in the actual target viewer. Keep the reusable method independent of the user's locations, server, map build, categories, and browser. Discover capabilities for each deployment; the site owns its native format, icon catalogue, coordinate interpretation, and persistence behavior.
+Create the requested setup in the actual target viewer. Discover its native format, icon catalogue, coordinate interpretation, and persistence behavior for the selected map and browser.
 
 ## Establish the target and protect the baseline
 
@@ -22,7 +22,7 @@ Read [discovery and transfer](references/discovery-and-transfer.md) when importi
 
 Find the target's actual create/edit, import/export/share, icon-picker, group/filter, and persistence capabilities. Build a small disposable example exercising the requested distinctions: multiple markers, distinct icons, notes, and floors or groups where relevant. Compare native exports or active data after one-field edits. Confirm both what is serialized and what the renderer uses.
 
-Use the viewer's native UI, exporter/encoder, or import API when it meets the request. A share-code prefix or one decoded example is insufficient to establish a multi-marker contract. Validate any converter against the target's decoder and then its actual import path. Where browser access is absent, deliver a clearly identified prepared artifact and the precise acceptance step that remains; do not substitute invented button instructions.
+Use the viewer's native UI, exporter/encoder, or import API when it meets the request. Establish the multi-marker format with native examples and validate any converter through the target's decoder and import path. Derive interface instructions from controls observed in that viewer. When browser access is unavailable, label the artifact as prepared and untested in the viewer, and identify the access or user-mediated acceptance step needed to continue.
 
 ## Design the collection and its appearance
 
@@ -32,7 +32,7 @@ Discover the symbols and style controls PZmap actually offers and select semanti
 
 Map each marker to an explicit style. Copy only verified appearance fields when using a native sample as a template. Preserve identity, coordinates, floors, labels, notes, and unrelated metadata. Keep unsupported metadata in a companion record and report the loss before import. Verify group/filter behavior rather than assuming a title prefix creates a group.
 
-Keep an expected inventory by category, group, floor, and distinct identity. Unknown floor is not ground floor. A building entrance can be a separate, explicitly labeled marker from an underground destination. Use the target's observed coordinate transform, including map offsets, instead of moving a valid point to make it visible.
+Keep an expected inventory by category, group, floor, and distinct identity. Represent unknown floors explicitly. A building entrance can be a separate, explicitly labeled marker from an underground destination. Preserve world coordinates and apply the target's verified coordinate transform, including map offsets.
 
 ## Apply and verify
 
@@ -44,4 +44,4 @@ Test the actual multi-marker import and representative native icons in a disposa
 
 After applying, reconcile the expected inventory with stored records, inspect representative markers for every distinct icon and floor behavior, test search and filters, reload, and check persisted state. Verify a generated share link in a separate context. A marker in JSON, a parsed code, an accepted import, a rendered symbol, and a persisted record are separate observations.
 
-Deliver the setup or artifact, short instructions matching the verified interface, an icon/category legend, the backup/rollback route, and any unsupported fields. State exactly which acceptance checks ran. Keep instance-specific coordinates, source fingerprints, browser details, timestamps, and test results in that delivery or the task's working records, not in this reusable skill.
+Deliver the setup or artifact, short instructions matching the verified interface, an icon/category legend, the backup/rollback route, and any unsupported fields. State exactly which acceptance checks ran. Keep instance-specific coordinates, source fingerprints, browser details, timestamps, and test results in that delivery or the task's private working records.

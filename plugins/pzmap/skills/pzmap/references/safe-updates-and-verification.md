@@ -14,13 +14,13 @@ Prepare the full mutation plan before writing. Show the collection, number of af
 
 Keep the baseline and intended result outside the active store while applying. If the storage surface supports atomic transactions, use them. Otherwise use a recoverable staged operation and detect partial completion. Recheck the scoped baseline immediately before writing so edits from another tab are not overwritten.
 
-A fallback helper checks the observed schema and origin before it reaches its write path. An unexpected layout, quota error, stale baseline, or inaccessible store stops the mutation and identifies the affected step. It neither guesses another storage key nor reports partial writes as success.
+A fallback helper checks the observed schema and origin before it reaches its write path. An unexpected layout, quota error, stale baseline, or inaccessible store stops the mutation and identifies the affected step. Reconcile partial writes against the baseline before resuming at the verified store.
 
-Verify stored results immediately. A rollback removes or restores only the operation's own changes. Restore an old field only when its current value still equals what the operation wrote; otherwise preserve the intervening edit and report the conflict. A broad storage reset is not a rollback.
+Verify stored results immediately. A rollback removes or restores only the operation's own changes. Restore an old field only when its current value still equals what the operation wrote; otherwise preserve the intervening edit and report the conflict. Keep unrelated records and settings intact.
 
 ## Acceptance evidence
 
-Check against the expected collection, not just a successful return value:
+Check the requested operation against the expected collection at each boundary it crosses:
 
 | Boundary | Evidence |
 | --- | --- |
@@ -34,7 +34,7 @@ Check against the expected collection, not just a successful return value:
 | Rerun | Reapplying makes no duplicate points and preserves unrelated and individually edited markers. |
 | Recovery | Backup can restore an isolated test change; partial failure and concurrent edits do not discard user data. |
 
-Use a disposable browser profile for destructive and malformed-input tests. Include varied categories and floors, missing/unsupported symbols, duplicate imports, existing personal markers, Unicode, large collections, and at least one negative case that the validation must reject. Bound decoding and record sizes; map labels and descriptions render as plain data.
+Use a disposable browser profile for destructive and malformed-input tests. Cover the categories, floors, fields, collection size, existing records, and rerun behavior the operation handles. Include at least one malformed case that its validation rejects. Bound decoding and record sizes; render labels and descriptions as plain data.
 
 An offline unit test or export inspection does not prove a live import, and a screenshot does not prove persistence. Record test scope and unavailable boundaries in the task delivery. Comparative agent trials assess the instructions themselves; browser acceptance checks assess the setup the agent produced.
 
@@ -42,6 +42,6 @@ An offline unit test or export inspection does not prove a live import, and a sc
 
 Provide one primary artifact or launch path suited to the user's browser, with only the steps actually verified. Explain whether opening it changes markers immediately, requests confirmation, or merely previews data. Include an icon/category legend, collection scope, supported map selection, field losses, and the backup/undo method.
 
-Keep a lossless source collection and a readable fallback with coordinates and floors. Mark overlapping subset files so users do not mistake them for extra records that all need importing. A link that exceeds the delivery channel's limits is not a working single-click import.
+Keep a lossless source collection and a readable fallback with coordinates and floors. Identify which files are alternatives or overlapping subsets and which form one complete collection. Verify the primary artifact fits the delivery channel's limits.
 
-Useful final wording distinguishes “prepared”, “accepted by the live importer”, “rendered”, “persisted after reload”, and “shared-context verified”. Name any missing evidence without upgrading it to success. Verification receipts, timestamps, hashes, and per-user setup data belong in the task's artifacts or private working records; they are not maintained plugin instructions.
+Useful final wording distinguishes “prepared”, “accepted by the live importer”, “rendered”, “persisted after reload”, and “shared-context verified”. Name any missing evidence without upgrading it to success. Keep verification receipts, timestamps, hashes, and per-user setup data in the task's artifacts or private working records.
