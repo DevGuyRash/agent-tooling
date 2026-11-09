@@ -1,0 +1,37 @@
+name: PZmap plugin
+
+on:
+  pull_request:
+    paths:
+      - 'plugins/pzmap/**'
+      - '.agents/plugins/marketplace.json'
+      - '.claude-plugin/marketplace.json'
+      - 'scripts/plugin_port.py'
+      - '.github/workflows/pzmap.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/pzmap/**'
+      - '.agents/plugins/marketplace.json'
+      - '.claude-plugin/marketplace.json'
+      - 'scripts/plugin_port.py'
+      - '.github/workflows/pzmap.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Package and both-host roundtrips
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+      - run: python3 -m pip install 'PyYAML>=6,<7'
+      - name: Validate package, catalogues, and conversion fidelity
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s plugins/pzmap/tests -p 'test_*.py' -v
+      - name: Exercise converter regression tests
+        run: PYTHONDONTWRITEBYTECODE=1 python3 -m unittest scripts.tests.test_plugin_port scripts.tests.test_agent_install

@@ -102,6 +102,19 @@
       },
       "category": "Productivity",
       "description": "Visualize anything creatively and faithfully"
+    },
+    {
+      "name": "pzmap",
+      "source": {
+        "source": "local",
+        "path": "./plugins/pzmap"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity",
+      "description": "Build and verify custom PZmap marker setups"
     }
   ]
 }

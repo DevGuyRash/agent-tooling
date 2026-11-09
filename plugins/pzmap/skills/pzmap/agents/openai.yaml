@@ -1,0 +1,6 @@
+interface:
+  display_name: "PZmap"
+  short_description: "Build and verify custom PZmap marker setups"
+  default_prompt: "Use $pzmap to create or update a custom PZmap setup with suitable native icons and verified, reversible imports."
+policy:
+  allow_implicit_invocation: true
