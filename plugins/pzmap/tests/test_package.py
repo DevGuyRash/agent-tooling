@@ -17,6 +17,16 @@ SKILL = PLUGIN / "skills" / "pzmap"
 CONVERTER = REPO / "scripts" / "plugin_port.py"
 
 
+def payload_contract(path: Path):
+    """Compare YAML values and instruction text, not YAML line wrapping."""
+    if path.name == "SKILL.md":
+        _, metadata, body = path.read_text(encoding="utf-8").split("---", 2)
+        return yaml.safe_load(metadata), body.strip("\n")
+    if path.suffix in {".yaml", ".yml"}:
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+    return path.read_bytes()
+
+
 class PackageTests(unittest.TestCase):
     def test_manifests_agree(self):
         codex = json.loads((PLUGIN / ".codex-plugin/plugin.json").read_text())
@@ -76,6 +86,21 @@ class PackageTests(unittest.TestCase):
             actual = source["path"] if isinstance(source, dict) else source
             self.assertEqual(actual, "./plugins/pzmap")
 
+
+    def test_payload_check_ignores_yaml_layout_but_detects_changed_meaning(self):
+        with tempfile.TemporaryDirectory(prefix="pzmap-payload-") as tmp:
+            first = Path(tmp) / "a" / "SKILL.md"
+            second = Path(tmp) / "b" / "SKILL.md"
+            first.parent.mkdir()
+            second.parent.mkdir()
+            first.write_text("---\nname: example\ndescription: Two words\n---\n\n# Example\nKeep the original notes.\n", encoding="utf-8")
+            second.write_text("---\nname: example\ndescription: >-\n  Two words\n---\n\n# Example\nKeep the original notes.\n", encoding="utf-8")
+            self.assertEqual(payload_contract(first), payload_contract(second))
+            second.write_text(second.read_text().replace("original notes", "new notes"), encoding="utf-8")
+            self.assertNotEqual(payload_contract(first), payload_contract(second))
+            second.write_text(first.read_text().replace("Two words", "Other meaning"), encoding="utf-8")
+            self.assertNotEqual(payload_contract(first), payload_contract(second))
+
     @unittest.skipUnless(CONVERTER.is_file(), "Repository converter is not mounted")
     def test_both_host_roundtrips_and_payload_fidelity(self):
         for host in ("codex", "claude"):
@@ -93,7 +118,7 @@ class PackageTests(unittest.TestCase):
                 for original in SKILL.rglob("*"):
                     if original.is_file():
                         copy = converted / original.relative_to(PLUGIN)
-                        self.assertEqual(original.read_bytes(), copy.read_bytes(), str(original))
+                        self.assertEqual(payload_contract(original), payload_contract(copy), str(original))
 
 
 if __name__ == "__main__":

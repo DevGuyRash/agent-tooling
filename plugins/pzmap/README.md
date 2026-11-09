@@ -36,7 +36,7 @@ The user's request authorizes the requested setup, not unrelated storage changes
 From the repository root:
 
 ```sh
-python3 -m unittest discover -s plugins/pzmap/tests -p 'test_*.py'
+python3 -B -m unittest discover -s plugins/pzmap/tests -p 'test_*.py'
 python3 scripts/plugin_port.py roundtrip plugins/pzmap --to codex --tmp .local/tmp/pzmap-codex
 python3 scripts/plugin_port.py roundtrip plugins/pzmap --to claude --tmp .local/tmp/pzmap-claude
 python3 scripts/plugin_port.py validate .local/tmp/pzmap-codex/pzmap-codex --host codex
