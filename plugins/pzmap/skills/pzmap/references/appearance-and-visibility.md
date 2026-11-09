@@ -34,8 +34,8 @@ Compare these layers in order:
 4. **Visibility:** Check marker/group toggles, selected floor, map/build selection, spoiler or visited state, zoom thresholds, clustering, viewport, and other filters.
 5. **Renderer:** Confirm the selected native symbol resolves, its style is supported, and its position is not obscured by another marker or map geometry.
 
-Clear a visibility restriction or repair the rendering at its source. Reimport only when the stored record is genuinely absent and identity reconciliation confirms adding it is appropriate. Nearby markers or a symbol that resembles another category do not establish that data is missing.
+Clear a visibility restriction or repair the rendering at its source. Reimport only when the stored record is genuinely absent and identity reconciliation confirms adding it is appropriate. Use stored identities and fields to distinguish absent records from misleading symbols or overlapping markers.
 
-Preserve the true floor. Where the user needs an easily discoverable surface anchor for a lower-floor destination, add a separately identified and clearly labeled entrance marker with the user's agreement. Do not silently relabel the underground destination as ground level.
+Preserve the true floor. Where the user needs an easily discoverable surface anchor for a lower-floor destination, add a separately identified and clearly labeled entrance marker with the user's agreement. Keep the underground destination on its actual floor.
 
 Finish by checking counts by category and floor, visually inspecting every distinct style, and testing the search terms the user is likely to use. Diagnose a floor or filter problem separately from an unsupported icon.
