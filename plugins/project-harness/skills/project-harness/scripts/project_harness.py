@@ -2449,13 +2449,32 @@ def load_state(repo: Path) -> tuple[dict[str, Any], list[str]]:
     if not path.exists():
         return {}, []
     try:
-        return json.loads(path.read_text(encoding="utf-8")), []
-    except Exception:
+        state = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(state, dict):
+            raise ValueError("state must be an object")
+        if "selected" in state and not isinstance(state["selected"], dict):
+            raise ValueError("state selected field must be an object")
+        return state, []
+    except ValueError:
+        # Preserve every rejected state, including any earlier recovery copy.
+        # Access/I/O failures are not evidence of corrupt data: let them fail
+        # before rendering or writing managed files instead of moving state.
         backup = path.with_name(path.name + ".corrupt")
-        if backup.exists():
+        suffix = 0
+        while True:
+            try:
+                with backup.open("xb"):
+                    pass
+                break
+            except FileExistsError:
+                suffix += 1
+                backup = path.with_name(f"{path.name}.corrupt.{suffix}")
+        try:
+            path.replace(backup)
+        except BaseException:
             backup.unlink()
-        path.replace(backup)
-        return {}, [f"existing state file was unreadable and was moved to {backup.name}"]
+            raise
+        return {}, [f"existing state file was invalid and was moved to {backup.name}"]
 
 
 def write_state(repo: Path, detected: dict[str, Any], selected: dict[str, Any], generated: dict[str, Any], warnings: list[str]) -> tuple[Path, list[str]]:
