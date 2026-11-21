@@ -143,6 +143,7 @@ Common commands:
 - `just verify` — run the fast local verification surface (`fmt-check`, `lint`, `test`)
 - `just ci` — fetch Rust dependencies and run repository, artifact and launcher checks without changing hook configuration or tracked distribution payloads
 - `scripts/install-all` / `just install-all` — reconcile selected catalog entries by version and source digest without touching already-current plugins
+- `scripts/agent_plugins.py` / `just agent-plugins` — set up or update a workstation's plugins from any marketplace, as a declarative manifest selects them
 - `just dist-host` — build and stage host-platform packaged binaries into plugin-local skill `dist/` trees
 - `just verify-packaging` — check task receipts and delivered outputs without mutation
 - `just verify-skill-launchers` — smoke-test plugin-local skill launchers against the staged binaries
@@ -194,6 +195,21 @@ just install-all --exclude 'software-development'
 ```
 
 Use `scripts/install-all --help` for source, scope, host, filter, force, and dry-run options. A source mismatch fails before mutation unless `--replace-marketplace` is explicit; replacement invalidates the matching receipt identity and rematerializes selected plugins while limiting Claude removal to the selected `--claude-scope`. `--force` explicitly reinstalls every selected plugin and permits a downgrade. The script shares syscfg's agent-plugin lifecycle lock, does not replace or unset `CODEX_HOME`, and prints a restart warning only after replacing a plugin root.
+
+### Reconcile plugins from a manifest
+
+`scripts/agent_plugins.py` keeps a workstation's plugins in line with a declarative manifest that lists marketplaces from any publisher. `install-all` above bootstraps this repository's own catalog. A configuration repository owns the manifest and runs this updater, so the plugin lifecycle logic lives here once.
+
+```bash
+scripts/agent_plugins.py --manifest ~/.config/agent-plugins.json --dry-run
+scripts/agent_plugins.py --manifest PATH --update --result-protocol
+```
+
+The manifest (`schema_version` 5) names each marketplace's provenance and, per client (`codex`, `claude-code`, `cursor`), its platforms, its registration (`source` with optional `ref` and `sparse_paths`, or `existing` for an app-provided one) and its selection (`all`, or `include` with required `plugins` and listed-only `available_plugins`, each optionally gated by `--profile`). Policies name externally managed plugins and marketplaces, which are never touched, and turn on projection of Codex plugin agents.
+
+Setup registers missing marketplaces and installs missing selections through the native `codex` and `claude` commands. It never uninstalls. `--update` refreshes the marketplaces of installed plugins and updates them, manual installations included, without installing new catalog members. After every run the native inventory is checked again: a removed plugin, a changed enabled choice or an update that installed something new is a failure, and native error text is reported verbatim. Cursor has no install command, so selected Cursor plugins are fetched with Git and copied into `~/.cursor/plugins/local/<name>/` with receipts; copies with local edits are reported and never overwritten. `--dry-run` reports the operations, `--verify-only` fails unless the selections are present, and `--result-protocol` emits the `UPDATE_ALL_ITEM`/`UPDATE_ALL_RESULT` records an Update All task reads.
+
+Claude Code installs an npm-hosted plugin by resolving its registry tarball and running `npm pack` on that URL, which npm 12 refuses under its default `allow-remote=none`. For Claude's child processes only, the updater hands that exact registry tarball URL to npm as the `name@version` it was resolved from, so npm's remote policy can stay closed. Every other npm call passes through unchanged. The updater shares the `install-all` lifecycle lock and needs Python 3.11 or newer with PyYAML.
 
 ### `agentic-design-and-evaluation` migration
 

@@ -1024,7 +1024,9 @@ def tree_entries(root: Path) -> list[tuple[str, Path, os.stat_result | None]]:
     total = 0
     while pending:
         directory, prefix = pending.pop()
-        for item in os.scandir(directory):
+        with os.scandir(directory) as listing:
+            items = list(listing)
+        for item in items:
             relative = f"{prefix}/{item.name}" if prefix else item.name
             relative.encode("utf-8")
             metadata = item.stat(follow_symlinks=False)
