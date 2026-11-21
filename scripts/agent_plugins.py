@@ -27,6 +27,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Callable, Iterable, Iterator, Mapping, Sequence
 
@@ -51,6 +52,7 @@ CURSOR_LEDGER = ".syscfg-local-plugins.json"
 CURSOR_STAGE = ".syscfg-stage-"
 CURSOR_LEDGER_STAGE = ".syscfg-ledger-"
 CURSOR_KEPT = ".syscfg-kept-"
+DISPLACED = ".previous"
 CURSOR_MAX_ENTRIES = 16_384
 CURSOR_MAX_BYTES = 256 * 1024 * 1024
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
@@ -481,10 +483,60 @@ def operand(value: str) -> str:
     return value
 
 
+CREDENTIALS = (
+    (re.compile(r"(?<=://)[^/\s@]+@"), "***@"),
+    (re.compile(r"\b(?:gh[pousr]_|github_pat_|npm_|glpat-|xox[abpr]-)[A-Za-z0-9_-]{12,}"), "***"),
+    (re.compile(r"(?i)\b(authorization|bearer|token|password)([=: ]+)\S+"), r"\1\2***"),
+)
+
+
+def redact(text: str) -> str:
+    for pattern, replacement in CREDENTIALS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
 def failure_detail(completed: subprocess.CompletedProcess) -> str:
+    """The native client's own error text, the actionable part of a failure, without credentials."""
     text = (completed.stderr or "").strip() or (completed.stdout or "").strip()
     text = " ".join("".join(c if c.isprintable() else " " for c in text).split())
-    return text[-600:]
+    return redact(text)[-600:]
+
+
+def _kill_group(process: subprocess.Popen) -> None:
+    with contextlib.suppress(OSError):
+        if os.name == "nt":
+            process.kill()
+        else:
+            os.killpg(process.pid, signal.SIGKILL)
+    with contextlib.suppress(subprocess.TimeoutExpired, OSError, ValueError):
+        process.communicate(timeout=5)
+
+
+def bounded_run(argv: Sequence[str], *, environment: Mapping[str, str], cwd: Path | None, timeout: int,
+                stop: Callable[[], None]) -> subprocess.CompletedProcess:
+    """Run one command in its own process group; a timeout or cancellation ends the whole group."""
+    options: dict = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+    try:
+        process = subprocess.Popen(list(argv), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                   encoding="utf-8", errors="replace", env=dict(environment), cwd=cwd, **options)
+    except OSError as exc:
+        raise PluginError(f"cannot run {Path(argv[0]).name}: {exc}") from exc
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            stdout, stderr = process.communicate(timeout=0.25)
+            return subprocess.CompletedProcess(list(argv), process.returncode, stdout, stderr)
+        except subprocess.TimeoutExpired:
+            pass
+        try:
+            stop()
+        except Cancelled:
+            _kill_group(process)
+            raise
+        if time.monotonic() > deadline:
+            _kill_group(process)
+            raise PluginError(f"`{' '.join(Path(argv[0]).name if i == 0 else a for i, a in enumerate(argv[:4]))}` timed out after {timeout}s")
 
 
 class NativeClient:
@@ -495,14 +547,7 @@ class NativeClient:
 
     def capture(self, arguments: Sequence[str], timeout: int) -> str:
         self.stop()
-        argv = [str(self.executable), *arguments]
-        try:
-            completed = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8",
-                                       errors="replace", env=dict(self.environment), cwd=self.cwd, timeout=timeout, check=False)
-        except subprocess.TimeoutExpired as exc:
-            raise PluginError(f"`{' '.join(arguments[:3])}` timed out after {timeout}s") from exc
-        except OSError as exc:
-            raise PluginError(f"cannot run {self.executable.name}: {exc}") from exc
+        completed = bounded_run([str(self.executable), *arguments], environment=self.environment, cwd=self.cwd, timeout=timeout, stop=self.stop)
         self.stop()
         if completed.returncode:
             detail = failure_detail(completed)
@@ -527,7 +572,7 @@ class NativeClient:
             if not isinstance(result, dict):
                 raise PluginError("native plugin command result must be an object")
             if result.get("errors") not in (None, []):
-                raise PluginError(f"native plugin command reported errors: {json.dumps(result['errors'])[:400]}")
+                raise PluginError(f"native plugin command reported errors: {redact(json.dumps(result['errors']))[:400]}")
 
     def installed(self, manifest: Manifest) -> dict[str, Installed]:
         arguments = ["plugin", "list", "--json"] + (["--disable", "remote_plugin"] if self.client == "codex" else [])
@@ -797,8 +842,7 @@ def _run_native(manifest: Manifest, native: NativeClient, options: Options, repo
 
 # --------------------------------------------------------------------------- Claude npm acquisition
 
-NPM_SHIM = r'''#!{python}
-"""Hand Claude Code's registry tarball fetch to npm as the equivalent registry spec."""
+NPM_SHIM = r'''"""Hand Claude Code's registry tarball fetch to npm as the equivalent registry spec."""
 import os, re, shutil, subprocess, sys
 here = os.path.dirname(os.path.abspath(__file__))
 path = os.pathsep.join(p for p in os.environ.get("PATH", "").split(os.pathsep) if p and os.path.abspath(p) != here)
@@ -832,8 +876,11 @@ def claude_npm_environment(environment: Mapping[str, str]) -> Iterator[dict[str,
         yield dict(environment)
         return
     with tempfile.TemporaryDirectory(prefix="agent-plugins-npm-") as raw:
+        program = Path(raw) / "npm.py"
+        program.write_text(NPM_SHIM, encoding="utf-8")
         shim = Path(raw) / "npm"
-        shim.write_text(NPM_SHIM.replace("{python}", sys.executable), encoding="utf-8")
+        quote = lambda value: "'" + str(value).replace("'", "'\\''") + "'"
+        shim.write_text(f"#!/bin/sh\nexec {quote(sys.executable)} -I {quote(program)} \"$@\"\n", encoding="utf-8")
         shim.chmod(0o700)
         result = dict(environment)
         result["PATH"] = raw + os.pathsep + environment.get("PATH", os.defpath)
@@ -1028,7 +1075,10 @@ def tree_entries(root: Path) -> list[tuple[str, Path, os.stat_result | None]]:
             items = list(listing)
         for item in items:
             relative = f"{prefix}/{item.name}" if prefix else item.name
-            relative.encode("utf-8")
+            try:
+                relative.encode("utf-8")
+            except UnicodeError as exc:
+                raise PluginError("plugin payload names must be UTF-8") from exc
             metadata = item.stat(follow_symlinks=False)
             if stat.S_ISLNK(metadata.st_mode):
                 raise PluginError("plugin payload contains a symbolic link")
@@ -1076,6 +1126,50 @@ def copy_tree(source: Path, destination: Path) -> None:
             target.chmod(0o755 if metadata.st_mode & 0o111 else 0o644)
 
 
+def _renameat2(source: Path, target: Path, flag: int) -> bool:
+    """Linux renameat2(2); False when the platform or filesystem lacks it, so the caller falls back."""
+    if not sys.platform.startswith("linux"):
+        return False
+    import ctypes
+    libc = ctypes.CDLL(None, use_errno=True)
+    function = getattr(libc, "renameat2", None)
+    if function is None:
+        return False
+    at_fdcwd = -100
+    if function(at_fdcwd, os.fsencode(source), at_fdcwd, os.fsencode(target), flag) == 0:
+        return True
+    error = ctypes.get_errno()
+    if error in (22, 38, 95):  # EINVAL, ENOSYS, EOPNOTSUPP: unsupported here
+        return False
+    raise OSError(error, os.strerror(error), str(target))
+
+
+def rename_noreplace(source: Path, target: Path) -> None:
+    if _renameat2(source, target, 1):  # RENAME_NOREPLACE
+        return
+    if target.exists() or target.is_symlink():
+        raise FileExistsError(17, "an entry appeared at the target", str(target))
+    os.rename(source, target)
+
+
+def exchange(staged: Path, target: Path, displaced: Path) -> Path:
+    """Swap staged into target; return where the previous target now is.
+
+    Linux exchanges atomically. Elsewhere the previous copy moves aside first and is put
+    back if the second move fails; an interruption between the two moves is repaired by
+    the next run, which restores the displaced copy before clearing staging.
+    """
+    if _renameat2(staged, target, 2):  # RENAME_EXCHANGE
+        return staged
+    os.rename(target, displaced)
+    try:
+        os.rename(staged, target)
+    except OSError:
+        os.rename(displaced, target)
+        raise
+    return displaced
+
+
 class CursorClient:
     def __init__(self, home: Path, git: Path | None, environment: Mapping[str, str], stop: Callable[[], None]):
         self.home, self.git_command, self.environment, self.stop = home, git, environment, stop
@@ -1101,8 +1195,12 @@ class CursorClient:
         for name, receipt in [*ledger["plugins"].items(), *ledger["pending"].items()]:
             parts = qualified(receipt.get("plugin", "")) if isinstance(receipt, dict) else None
             if not isinstance(receipt, dict) or set(receipt) != fields or parts is None or parts[0] != name \
-                    or not identifier(parts[1]) or not COMMIT.fullmatch(str(receipt["commit"])) \
-                    or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(receipt["digest"])):
+                    or not identifier(name) or not identifier(parts[1]) or not COMMIT.fullmatch(str(receipt["commit"])) \
+                    or not re.fullmatch(r"sha256:[0-9a-f]{64}", str(receipt["digest"])) \
+                    or not isinstance(receipt["source"], str) or not isinstance(receipt["marketplace_id"], str) \
+                    or not (receipt["ref"] is None or isinstance(receipt["ref"], str)) \
+                    or not (receipt["version"] is None or isinstance(receipt["version"], str)) \
+                    or not isinstance(receipt["sparse_paths"], list) or any(not isinstance(item, str) for item in receipt["sparse_paths"]):
                 raise PluginError("invalid Cursor plugin receipt")
             _relative(receipt["path"])
         return ledger, raw
@@ -1130,6 +1228,11 @@ class CursorClient:
             return
         for entry in self.plugins.iterdir():
             if entry.name.startswith(CURSOR_STAGE) and entry.is_dir() and not entry.is_symlink():
+                # An interrupted fallback replacement leaves the previous copy here; put it back first.
+                for displaced in entry.glob("*" + DISPLACED):
+                    target = self.local_root / displaced.name.removesuffix(DISPLACED)
+                    if displaced.is_dir() and not displaced.is_symlink() and not target.exists() and not target.is_symlink():
+                        os.rename(displaced, target)
                 shutil.rmtree(entry)
             elif entry.name.startswith(CURSOR_LEDGER_STAGE) and entry.is_file() and not entry.is_symlink():
                 entry.unlink()
@@ -1165,10 +1268,11 @@ class CursorClient:
             raise PluginError("Git is required to fetch Cursor marketplaces")
         self.stop()
         try:
-            completed = subprocess.run([str(self.git_command), *arguments], stdin=subprocess.DEVNULL, capture_output=True, text=True,
-                                       env=dict(self.environment), timeout=timeout, check=False)
-        except subprocess.TimeoutExpired as exc:
-            raise PluginError(f"Git {step} timed out") from exc
+            completed = bounded_run([str(self.git_command), *arguments], environment=self.environment, cwd=None, timeout=timeout, stop=self.stop)
+        except Cancelled:
+            raise
+        except PluginError as exc:
+            raise PluginError(f"Git {step}: {exc}") from exc
         if completed.returncode:
             detail = failure_detail(completed)
             raise PluginError(f"Git {step} failed" + (f": {detail}" if detail else ""))
@@ -1499,16 +1603,13 @@ class CursorRun:
                 raise
             try:
                 if replacing is None:
-                    os.rename(staged, target)
+                    rename_noreplace(staged, target)
                 else:
-                    displaced = stage / f"{name}.previous"
-                    os.rename(target, displaced)
-                    os.rename(staged, target)
+                    displaced = exchange(staged, target, stage / f"{name}{DISPLACED}")
                     if self._digest_or_none(displaced) != replacing["digest"]:
                         # The replaced copy changed after the check: put it back and keep the new copy staged.
                         try:
-                            os.rename(target, staged)
-                            os.rename(displaced, target)
+                            exchange(displaced, target, stage / f"{name}.incoming")
                         except OSError as exc:
                             keep_stage = True
                             kept = stage.with_name(f"{CURSOR_KEPT}{name}-{stage.name.removeprefix(CURSOR_STAGE)}")
@@ -1673,6 +1774,23 @@ def emit(report: Report, args: argparse.Namespace) -> None:
     out.write("UPDATE_ALL_RESULT " + json.dumps({"outcome": report.outcome(args.dry_run), "detail": detail}, separators=(",", ":")) + "\n")
 
 
+def native_environment(public_git: Path | None, home: Path) -> dict[str, str]:
+    """The native clients' environment: the caller's, with the selected public Git routed first.
+
+    With a public Git, inherited Git settings, tokens and credential helpers are dropped so
+    marketplace fetches cannot use private credentials; SSH and the clients' own sign-in remain.
+    """
+    environment = {**os.environ, "HOME": str(home)}
+    if public_git is None:
+        return environment
+    environment = {key: value for key, value in environment.items() if not key.upper().startswith("GIT_")
+                   and key.upper() not in {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"}}
+    environment["PATH"] = str(public_git.parent) + os.pathsep + environment.get("PATH", os.defpath)
+    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0",
+                       GIT_CONFIG_COUNT="1", GIT_CONFIG_KEY_0="credential.helper", GIT_CONFIG_VALUE_0="")
+    return environment
+
+
 def execute(args: argparse.Namespace, stopped: Callable[[], bool]) -> Report:
     def stop() -> None:
         if stopped():
@@ -1687,36 +1805,51 @@ def execute(args: argparse.Namespace, stopped: Callable[[], bool]) -> Report:
         raise PluginError(f"plugin selection manifest is unavailable: {exc}") from exc
     platform = platform_name()
     profiles = frozenset(args.profile)
-    git = install_all.resolve_public_git(args.public_git_command)
+    public_git = install_all.resolve_public_git(args.public_git_command) if args.public_git_command else None
     report = Report()
     lock = contextlib.nullcontext() if args.dry_run or args.verify_only else coordination_lock(root)
-    with lock, install_all.public_git_environment(git) as base:
-        base = {**base, "HOME": str(home)}
-
+    with lock:
         def admission() -> None:
             stop()
             require_settled(root)
 
         for client in args.client:
-            stop()
+            if stopped():
+                report.failures.append("plugin task cancelled")  # what already ran stays reported
+                report.verified = False
+                break
             options = Options(client, platform, profiles, args.update, args.dry_run, args.verify_only, args.timeout_seconds)
             if client == "cursor":
                 if not cursor_present(home, os.environ):
                     (report.deferred if args.defer_missing_client else report.failures).append("cursor: missing client")
                     report.verified = False
                     continue
-                report.append(run_cursor(manifest, CursorClient(home / ".cursor", git, base, stop), options, admission))
+                found = public_git or (Path(git) if (git := shutil.which("git")) else None)
+                if found is None:
+                    report.failures.append("cursor: Git is required to fetch Cursor marketplaces; pass --public-git-command")
+                    report.verified = False
+                    continue
+                # Cursor fetches are ours: no user Git configuration, credentials, SSH agent or prompts.
+                with install_all.public_git_environment(found.resolve()) as isolated:
+                    cursor = CursorClient(home / ".cursor", found, {**isolated, "HOME": str(home)}, stop)
+                    report.append(run_cursor(manifest, cursor, options, admission))
                 continue
             command = shutil.which(NATIVE_COMMAND[client], path=os.environ.get("PATH"))
             if command is None:
                 (report.deferred if args.defer_missing_client else report.failures).append(f"{client}: missing client")
                 report.verified = False
                 continue
+            base = native_environment(public_git, home)
             with (claude_npm_environment(base) if client == "claude-code" else contextlib.nullcontext(base)) as environment:
                 native = NativeClient(client, Path(command), environment, home, stop)
                 result = run_native(manifest, native, options, admission)
                 report.append(result)
                 if client == "codex" and result.succeeded():
+                    if os.name == "nt":
+                        if manifest.project_agents:
+                            report.deferred.append("Codex agent projection requires a POSIX host")
+                            report.verified = False
+                        continue
                     codex_home = Path(os.environ.get("CODEX_HOME") or home / ".codex")
                     report.append(run_agents(manifest, native, options, codex_home, admission))
     return report

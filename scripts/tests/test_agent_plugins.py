@@ -7,7 +7,9 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from scripts import agent_plugins
@@ -390,6 +392,91 @@ class UnitTests(unittest.TestCase):
                     self.assertEqual(npm("pack", "--", untouched), f"pack -- {untouched}")
                 self.assertEqual(npm("view", "--json", "--", "rea-agents@6.10.1"), "view --json -- rea-agents@6.10.1")
 
+
+class FailureContainmentTests(unittest.TestCase):
+    def test_interrupted_fallback_replacement_restores_the_previous_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            home = Path(raw) / ".cursor"
+            stage = home / "plugins" / (agent_plugins.CURSOR_STAGE + "x")
+            (stage / ("alpha" + agent_plugins.DISPLACED)).mkdir(parents=True)
+            (stage / ("alpha" + agent_plugins.DISPLACED) / "kept.txt").write_text("old\n")
+            (home / "plugins/local").mkdir()
+            agent_plugins.CursorClient(home, None, {}, lambda: None).clear_residue()
+            self.assertEqual((home / "plugins/local/alpha/kept.txt").read_text(), "old\n")
+            self.assertFalse(stage.exists())
+
+    def test_failed_second_move_puts_the_previous_copy_back(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            (root / "target").mkdir()
+            (root / "target/old").write_text("old")
+            missing = root / "absent-staged"
+            with unittest.mock.patch.object(agent_plugins, "_renameat2", return_value=False):
+                with self.assertRaises(OSError):
+                    agent_plugins.exchange(missing, root / "target", root / "displaced")
+            self.assertEqual((root / "target/old").read_text(), "old")
+
+    def test_exchange_swaps_both_trees(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            for name in ("staged", "target"):
+                (root / name).mkdir()
+                (root / name / "who").write_text(name)
+            displaced = agent_plugins.exchange(root / "staged", root / "target", root / "displaced")
+            self.assertEqual((root / "target/who").read_text(), "staged")
+            self.assertEqual((displaced / "who").read_text(), "target")
+
+    def test_timeout_ends_the_whole_process_group(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            pid_file = Path(raw) / "child"
+            script = f"sleep 30 & echo $! > {pid_file}; wait"
+            with self.assertRaisesRegex(agent_plugins.PluginError, "timed out"):
+                agent_plugins.bounded_run(["/bin/sh", "-c", script], environment=dict(os.environ), cwd=None, timeout=1, stop=lambda: None)
+            child = int(pid_file.read_text())
+            for _ in range(50):
+                try:
+                    os.kill(child, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.1)
+            else:
+                self.fail("the grandchild survived the timeout")
+
+    def test_cancellation_between_clients_keeps_what_already_ran(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            fixture = Fixture(root)
+            fixture.manifest.write_text(json.dumps(manifest(codex=CODEX_SPEC, **{"claude-code": CLAUDE_SPEC})))
+            args = agent_plugins.parse_args(["--manifest", str(fixture.manifest), "--home", str(fixture.home), "--dry-run",
+                                             "--client", "codex", "--client", "claude-code"])
+            calls = []
+            done = agent_plugins.Report(actions=[agent_plugins.Action("codex", "install-plugin", "alpha@tools", True)], changed=True)
+            with unittest.mock.patch.object(agent_plugins, "run_native", side_effect=lambda *a: calls.append(a) or done), \
+                    unittest.mock.patch.object(agent_plugins.shutil, "which", return_value="/bin/true"), \
+                    unittest.mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(root / "state-home")}):
+                report = agent_plugins.execute(args, lambda: bool(calls))
+            self.assertEqual(len(calls), 1)
+            self.assertEqual([a.resource for a in report.actions], ["alpha@tools"])
+            self.assertTrue(report.changed)
+            self.assertEqual(report.failures, ["plugin task cancelled"])
+
+    def test_failure_text_keeps_the_cause_without_credentials(self) -> None:
+        completed = subprocess.CompletedProcess([], 1, "", "fatal: https://user:ghp_abcdefghijklmnopqrstuvwxyz@github.com/x.git: code EALLOWREMOTE\n")
+        detail = agent_plugins.failure_detail(completed)
+        self.assertIn("EALLOWREMOTE", detail)
+        self.assertNotIn("ghp_", detail)
+        self.assertNotIn("user:", detail)
+
+    def test_native_clients_keep_the_caller_environment_unless_a_public_git_is_selected(self) -> None:
+        with unittest.mock.patch.dict(os.environ, {"GIT_DIR": "/x", "GH_TOKEN": "t", "SSH_AUTH_SOCK": "/agent"}):
+            plain = agent_plugins.native_environment(None, Path("/home/u"))
+            self.assertEqual((plain["GIT_DIR"], plain["GH_TOKEN"], plain["HOME"]), ("/x", "t", "/home/u"))
+            routed = agent_plugins.native_environment(Path("/opt/git/bin/git"), Path("/home/u"))
+            self.assertNotIn("GIT_DIR", routed)
+            self.assertNotIn("GH_TOKEN", routed)
+            self.assertEqual(routed["SSH_AUTH_SOCK"], "/agent")
+            self.assertTrue(routed["PATH"].startswith("/opt/git/bin" + os.pathsep))
+            self.assertEqual((routed["GIT_CONFIG_KEY_0"], routed["GIT_CONFIG_VALUE_0"]), ("credential.helper", ""))
 
 if __name__ == "__main__":
     unittest.main()
