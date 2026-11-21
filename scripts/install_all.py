@@ -468,7 +468,7 @@ def claude_registry_data(raw: bytes) -> dict:
 
 def replace_claude_document(path: Path, expected: bytes | None, data: dict, mode: int,
                            label: str) -> None:
-    # The lifecycle lock coordinates this installer and syscfg. Detect an
+    # The lifecycle lock coordinates this installer and the plugin updater. Detect an
     # intervening writer as well; never resolve a conflict by overwriting it.
     current = path.read_bytes() if path.exists() else None
     if current != expected:
@@ -752,10 +752,15 @@ def write_receipt(path: Path, payload: object) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def lifecycle_lock_path(home: Path | None = None) -> Path:
+    """One lock for every agent-tooling command that mutates installed plugin state."""
+    state = os.environ.get("XDG_STATE_HOME") or (home or Path.home()) / ".local/state"
+    return Path(state) / "agent-tooling" / "agent-plugins.lock"
+
+
 @contextlib.contextmanager
 def lifecycle_lock() -> Iterator[None]:
-    syscfg_root = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state")) / "syscfg" / "reconcilers"
-    path = syscfg_root / "agent-plugins.json.lock"
+    path = lifecycle_lock_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a+b") as handle:
         try:

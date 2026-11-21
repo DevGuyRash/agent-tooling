@@ -46,12 +46,11 @@ PROVENANCE = ("owner", "vendor-official", "platform-official")
 READ_TIMEOUT = 30
 OUTPUT_LIMIT = 8 * 1024 * 1024
 METADATA_LIMIT = 1024 * 1024
-# Historical names: existing hosts already hold state under them.
-AGENT_INTENT = ".syscfg-agent-projections.json"
-CURSOR_LEDGER = ".syscfg-local-plugins.json"
-CURSOR_STAGE = ".syscfg-stage-"
-CURSOR_LEDGER_STAGE = ".syscfg-ledger-"
-CURSOR_KEPT = ".syscfg-kept-"
+AGENT_INTENT = ".agent-plugins-projections.json"
+CURSOR_LEDGER = ".agent-plugins-local.json"
+CURSOR_STAGE = ".agent-plugins-stage-"
+CURSOR_LEDGER_STAGE = ".agent-plugins-ledger-"
+CURSOR_KEPT = ".agent-plugins-kept-"
 DISPLACED = ".previous"
 CURSOR_MAX_ENTRIES = 16_384
 CURSOR_MAX_BYTES = 256 * 1024 * 1024
@@ -1700,21 +1699,11 @@ def parse_args(argv: Sequence[str] | None) -> argparse.Namespace:
     return args
 
 
-def state_root(home: Path) -> Path:
-    return Path(os.environ.get("XDG_STATE_HOME") or home / ".local/state") / "syscfg" / "reconcilers"
-
-
-def require_settled(root: Path) -> None:
-    for suffix in (".syscfg-pending.json", ".syscfg-next"):
-        if (root / f".agent-plugins.json{suffix}").exists():
-            raise PluginError("pending native plugin recovery material requires settlement before this run")
-
-
 @contextlib.contextmanager
-def coordination_lock(root: Path) -> Iterator[None]:
+def coordination_lock(home: Path) -> Iterator[None]:
     """The lock install-all also takes, so the two never mutate plugin state at once."""
-    root.mkdir(parents=True, exist_ok=True)
-    path = root / "agent-plugins.json.lock"
+    path = install_all.lifecycle_lock_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_symlink() or (path.exists() and not path.is_file()):
         raise PluginError("plugin coordination path is not a regular file")
     with path.open("a+b") as handle:
@@ -1797,8 +1786,6 @@ def execute(args: argparse.Namespace, stopped: Callable[[], bool]) -> Report:
             raise Cancelled("plugin task cancelled")
 
     home = args.home
-    root = state_root(home)
-    require_settled(root)
     try:
         manifest = parse_manifest(args.manifest.read_bytes())
     except OSError as exc:
@@ -1807,11 +1794,10 @@ def execute(args: argparse.Namespace, stopped: Callable[[], bool]) -> Report:
     profiles = frozenset(args.profile)
     public_git = install_all.resolve_public_git(args.public_git_command) if args.public_git_command else None
     report = Report()
-    lock = contextlib.nullcontext() if args.dry_run or args.verify_only else coordination_lock(root)
+    lock = contextlib.nullcontext() if args.dry_run or args.verify_only else coordination_lock(home)
     with lock:
         def admission() -> None:
             stop()
-            require_settled(root)
 
         for client in args.client:
             if stopped():
