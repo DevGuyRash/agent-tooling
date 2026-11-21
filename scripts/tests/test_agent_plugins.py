@@ -12,7 +12,7 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from scripts import agent_plugins
+from scripts import agent_plugins, install_all
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 ENGINE = REPO_ROOT / "scripts" / "agent_plugins.py"
@@ -459,6 +459,20 @@ class FailureContainmentTests(unittest.TestCase):
             self.assertEqual([a.resource for a in report.actions], ["alpha@tools"])
             self.assertTrue(report.changed)
             self.assertEqual(report.failures, ["plugin task cancelled"])
+
+    def test_updater_and_install_all_take_one_agent_tooling_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as raw, \
+                unittest.mock.patch.dict(os.environ, {"XDG_STATE_HOME": str(Path(raw) / "state")}):
+            expected = Path(raw) / "state/agent-tooling/agent-plugins.lock"
+            self.assertEqual(install_all.lifecycle_lock_path(Path(raw) / "home"), expected)
+            with install_all.lifecycle_lock():
+                with self.assertRaisesRegex(agent_plugins.PluginError, "another agent-plugin operation"):
+                    with agent_plugins.coordination_lock(Path(raw) / "home"):
+                        pass
+            with agent_plugins.coordination_lock(Path(raw) / "home"):
+                with self.assertRaisesRegex(install_all.InstallError, "another agent-plugin lifecycle operation"):
+                    with install_all.lifecycle_lock():
+                        pass
 
     def test_failure_text_keeps_the_cause_without_credentials(self) -> None:
         completed = subprocess.CompletedProcess([], 1, "", "fatal: https://user:ghp_abcdefghijklmnopqrstuvwxyz@github.com/x.git: code EALLOWREMOTE\n")

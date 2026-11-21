@@ -194,7 +194,7 @@ The `just` recipe forwards the same flags:
 just install-all --exclude 'software-development'
 ```
 
-Use `scripts/install-all --help` for source, scope, host, filter, force, and dry-run options. A source mismatch fails before mutation unless `--replace-marketplace` is explicit; replacement invalidates the matching receipt identity and rematerializes selected plugins while limiting Claude removal to the selected `--claude-scope`. `--force` explicitly reinstalls every selected plugin and permits a downgrade. The script shares syscfg's agent-plugin lifecycle lock, does not replace or unset `CODEX_HOME`, and prints a restart warning only after replacing a plugin root.
+Use `scripts/install-all --help` for source, scope, host, filter, force, and dry-run options. A source mismatch fails before mutation unless `--replace-marketplace` is explicit; replacement invalidates the matching receipt identity and rematerializes selected plugins while limiting Claude removal to the selected `--claude-scope`. `--force` explicitly reinstalls every selected plugin and permits a downgrade. The script shares the plugin updater's lifecycle lock at `$XDG_STATE_HOME/agent-tooling/agent-plugins.lock`, does not replace or unset `CODEX_HOME`, and prints a restart warning only after replacing a plugin root.
 
 ### Reconcile plugins from a manifest
 
