@@ -426,6 +426,54 @@ class FailureContainmentTests(unittest.TestCase):
             self.assertEqual((root / "target/who").read_text(), "staged")
             self.assertEqual((displaced / "who").read_text(), "target")
 
+    class FlakyNative:
+        def __init__(self, failures: list[str]):
+            self.failures, self.calls = list(failures), 0
+
+        def execute(self, task, timeout) -> None:
+            self.calls += 1
+            if self.failures:
+                raise agent_plugins.PluginError(self.failures.pop(0))
+
+        def stop(self) -> None:
+            pass
+
+    def apply(self, native, operation: str = "refresh-marketplace"):
+        options = agent_plugins.Options("codex", "linux", frozenset(), True, False, False, 60)
+        report = agent_plugins.Report()
+        task = agent_plugins.Task(operation, "tools", ("plugin", "marketplace", "upgrade", "tools", "--json"))
+        with unittest.mock.patch.object(agent_plugins, "RETRY_DELAYS", (0, 0)):
+            agent_plugins.apply_task(native, options, task, report, lambda: None)
+        return report
+
+    def test_a_timed_out_marketplace_refresh_is_retried_until_it_succeeds(self) -> None:
+        native = self.FlakyNative(["exit 1: Failed to upgrade marketplace `tools`: git clone marketplace source timed out after 30s",
+                                   "exit 128: fatal: unable to access 'https://github.com/owner/tools.git/': Could not resolve host: github.com"])
+        report = self.apply(native)
+        self.assertEqual(native.calls, 3)
+        self.assertTrue(report.actions[0].applied)
+
+    def test_a_plugin_update_gives_up_after_the_last_retry(self) -> None:
+        native = self.FlakyNative(["exit 1: early EOF"] * 3)
+        with self.assertRaisesRegex(agent_plugins.PluginError, "update-plugin tools failed: exit 1: early EOF"):
+            self.apply(native, "update-plugin")
+        self.assertEqual(native.calls, 3)
+
+    def test_deterministic_failures_and_non_idempotent_operations_are_not_retried(self) -> None:
+        for operation, failure in (("refresh-marketplace", "exit 1: marketplace `tools` is not configured"),
+                                   ("install-plugin", "exit 1: git clone timed out after 30s"),
+                                   ("add-marketplace", "exit 1: Could not resolve host: github.com")):
+            native = self.FlakyNative([failure])
+            with self.assertRaises(agent_plugins.PluginError):
+                self.apply(native, operation)
+            self.assertEqual(native.calls, 1, operation)
+
+    def test_cancellation_during_a_retry_pause_stops_immediately(self) -> None:
+        def cancelled() -> None:
+            raise agent_plugins.Cancelled("cancelled")
+        with self.assertRaises(agent_plugins.Cancelled):
+            agent_plugins.pause(60, cancelled)
+
     def test_timeout_ends_the_whole_process_group(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             pid_file = Path(raw) / "child"

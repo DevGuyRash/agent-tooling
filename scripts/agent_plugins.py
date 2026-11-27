@@ -57,6 +57,16 @@ CURSOR_MAX_BYTES = 256 * 1024 * 1024
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
 COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 EXTERNAL_UPGRADE = "native marketplace upgrade would also affect an external plugin"
+# Refreshing a marketplace or updating an installed plugin converges to the same
+# state when repeated, so a network-shaped failure is retried after a pause.
+RETRYABLE_OPERATIONS = frozenset({"refresh-marketplace", "update-plugin"})
+RETRY_DELAYS = (5, 20)
+TRANSIENT_FAILURE = re.compile(
+    r"timed out|could not resolve host|failed to connect|connection (?:reset|refused|timed out|closed)"
+    r"|early eof|rpc failed|unexpected disconnect|temporary failure|network is unreachable"
+    r"|\b(?:tls|ssl)\b|\bhttp(?:/[\d.]+)? 5\d\d\b|\b50[234]\b",
+    re.IGNORECASE,
+)
 
 
 class PluginError(RuntimeError):
@@ -765,13 +775,31 @@ def apply_task(native: NativeClient, options: Options, task: Task, report: Repor
     if options.dry_run:
         return
     admission()
-    try:
-        native.execute(task, options.timeout)
-    except Cancelled:
-        raise
-    except PluginError as exc:
-        raise PluginError(f"{task.operation} {task.resource} failed: {exc}") from exc
+    delays = RETRY_DELAYS if task.operation in RETRYABLE_OPERATIONS else ()
+    for attempt in range(len(delays) + 1):
+        try:
+            native.execute(task, options.timeout)
+            break
+        except Cancelled:
+            raise
+        except PluginError as exc:
+            if attempt == len(delays) or not TRANSIENT_FAILURE.search(str(exc)):
+                raise PluginError(f"{task.operation} {task.resource} failed: {exc}") from exc
+            print(f"{options.client} {task.operation} {task.resource}: transient failure, retrying "
+                  f"(attempt {attempt + 2} of {len(delays) + 1})", file=sys.stderr)
+            pause(delays[attempt], native.stop)
     action.applied = True
+
+
+def pause(seconds: float, stop: Callable[[], None]) -> None:
+    """Wait between retries; cancellation raises from `stop` immediately."""
+    deadline = time.monotonic() + seconds
+    while True:
+        stop()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return
+        time.sleep(min(0.25, remaining))
 
 
 def run_native(manifest: Manifest, native: NativeClient, options: Options, admission: Callable[[], None]) -> Report:
