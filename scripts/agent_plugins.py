@@ -730,6 +730,11 @@ def update_tasks(manifest: Manifest, client: str, installed: Mapping[str, Instal
         if parts is None or parts[1] != entry.marketplace:
             raise PluginError(f"installed plugin marketplace disagrees with its identity: {plugin}")
         if client == "claude-code":
+            if entry.marketplace not in observed:
+                # App-provided plugins such as Claude Code's `builtin` set come
+                # from a marketplace the native inventory does not list, so the
+                # CLI can neither refresh nor update them; the app owns them.
+                continue
             if entry.scope not in (None, "user"):
                 deferred.append(f"{plugin}: outside user scope")
                 continue
