@@ -209,6 +209,20 @@ class NativeClientTests(unittest.TestCase):
         self.assertIn('UPDATE_ALL_ITEM {"subject":"claude-code / alpha@tools","action":"update-plugin","outcome":"passed","before":null,"after":null}', lines)
         self.assertEqual(lines[-1], 'UPDATE_ALL_RESULT {"outcome":"updated","detail":"3 native plugin update command(s) completed; 0 item(s) deferred; 0 failure(s)"}')
 
+    def test_update_leaves_app_provided_plugins_from_unlisted_marketplaces_alone(self) -> None:
+        self.f.update_state("claude", marketplaces={"tools": "owner/tools"},
+                            installed={"alpha@tools": {"version": "0.9.0", "enabled": True},
+                                       "helper@builtin": {"version": "unknown", "enabled": True}},
+                            catalog={"tools": {"alpha": "1.0.0"}})
+        result = self.f.run("--client", "claude-code", "--update", "--format", "json")
+        report = self.report(result)
+        self.assertEqual(result.returncode, 0, report)
+        self.assertEqual([(a["operation"], a["resource"]) for a in report["actions"]],
+                         [("refresh-marketplace", "tools"), ("update-plugin", "alpha@tools")])
+        self.assertEqual(report["deferred"], [])
+        self.assertFalse(any("builtin" in " ".join(call) for call in self.f.calls()), "app-provided plugins stay untouched")
+        self.assertEqual(self.f.read_state("claude")["installed"]["helper@builtin"]["enabled"], True)
+
     def test_update_that_enables_a_disabled_plugin_is_a_failure(self) -> None:
         self.f.update_state("claude", marketplaces={"tools": "owner/tools"}, update_enables=True,
                             installed={"gamma@tools": {"version": "0.1.0", "enabled": False}})
